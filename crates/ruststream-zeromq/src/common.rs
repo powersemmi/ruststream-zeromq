@@ -1,0 +1,145 @@
+//! Machinery shared by the three socket patterns.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+use tokio::sync::OnceCell;
+use zeromq::prelude::*;
+use zeromq::{Socket, ZmqError as WireError};
+
+use crate::endpoint::{Role, ZmqEndpoint};
+use crate::error::{ZmqError, box_err};
+
+/// How long a send retries while the ZMTP handshake settles: the implementation returns the
+/// message immediately when no peer is attached yet, which is routine right after `connect`.
+pub(crate) const SEND_RETRY_WINDOW: Duration = Duration::from_secs(5);
+pub(crate) const SEND_RETRY_STEP: Duration = Duration::from_millis(50);
+
+/// Shared lifecycle state: the endpoint, the address a local subscription resolved by
+/// binding (which is what a same-process publisher dials for the loopback arrangement), and
+/// the closed flag aliased handles trip over.
+#[derive(Debug)]
+pub(crate) struct Lifecycle {
+    pub(crate) endpoint: ZmqEndpoint,
+    pub(crate) resolved: OnceCell<String>,
+    pub(crate) closed: AtomicBool,
+}
+
+impl Lifecycle {
+    pub(crate) fn new(endpoint: ZmqEndpoint) -> Self {
+        Self {
+            endpoint,
+            resolved: OnceCell::new(),
+            closed: AtomicBool::new(false),
+        }
+    }
+
+    pub(crate) fn ensure_open(&self) -> Result<(), ZmqError> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(ZmqError::NotConnected);
+        }
+        Ok(())
+    }
+
+    /// Attaches a receiving socket per the endpoint's role, recording the resolved address on
+    /// bind so a same-process publisher can dial it.
+    pub(crate) async fn attach_receiver<S: Socket>(&self, socket: &mut S) -> Result<(), ZmqError> {
+        match self.endpoint.role {
+            Role::Bind => {
+                let resolved =
+                    socket
+                        .bind(self.endpoint.address())
+                        .await
+                        .map_err(|e| ZmqError::Endpoint {
+                            endpoint: self.endpoint.address().to_owned(),
+                            source: box_err(e),
+                        })?;
+                let _ = self.resolved.set(resolved.to_string());
+            }
+            Role::Connect => {
+                socket
+                    .connect(self.endpoint.address())
+                    .await
+                    .map_err(|e| ZmqError::Endpoint {
+                        endpoint: self.endpoint.address().to_owned(),
+                        source: box_err(e),
+                    })?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The address a sending socket should use: the endpoint itself when dialing out, or the
+    /// locally bound address for the loopback arrangement (a subscription in this process
+    /// bound the listener).
+    pub(crate) fn sender_address(&self) -> Result<(String, Role), ZmqError> {
+        match self.endpoint.role {
+            Role::Connect => Ok((self.endpoint.address().to_owned(), Role::Connect)),
+            Role::Bind => self.resolved.get().map_or_else(
+                || Ok((self.endpoint.address().to_owned(), Role::Bind)),
+                |resolved| Ok((resolved.clone(), Role::Connect)),
+            ),
+        }
+    }
+
+    /// Attaches a sending socket per [`sender_address`](Self::sender_address).
+    pub(crate) async fn attach_sender<S: Socket>(&self, socket: &mut S) -> Result<(), ZmqError> {
+        let (address, role) = self.sender_address()?;
+        let outcome = match role {
+            Role::Bind => socket.bind(&address).await.map(|_| ()),
+            Role::Connect => socket.connect(&address).await,
+        };
+        outcome.map_err(|e| ZmqError::Endpoint {
+            endpoint: address,
+            source: box_err(e),
+        })
+    }
+}
+
+/// Sends with a bounded retry while the handshake settles; `ReturnToSender` hands the message
+/// back, so nothing is lost by retrying.
+pub(crate) async fn send_with_retry<S: SocketSend>(
+    socket: &mut S,
+    name: &str,
+    message: zeromq::ZmqMessage,
+) -> Result<(), ZmqError> {
+    let mut pending = message;
+    let deadline = tokio::time::Instant::now() + SEND_RETRY_WINDOW;
+    loop {
+        match socket.send(pending).await {
+            Ok(()) => return Ok(()),
+            Err(WireError::ReturnToSender { message, .. }) => {
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(ZmqError::Send {
+                        name: name.to_owned(),
+                        reason: "no connected peer".to_owned(),
+                    });
+                }
+                pending = message;
+                tokio::time::sleep(SEND_RETRY_STEP).await;
+            }
+            Err(err) => {
+                return Err(ZmqError::Send {
+                    name: name.to_owned(),
+                    reason: err.to_string(),
+                });
+            }
+        }
+    }
+}
+
+/// A subscriber handle over a driver task: the socket lives in the task (every operation
+/// takes `&mut self`), and dropping the handle aborts it, which is the only reliable teardown
+/// - a receive on a peerless socket pends forever by design of the implementation.
+pub(crate) struct DriverHandle {
+    pub(crate) task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for DriverHandle {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+pub(crate) type SharedLifecycle = Arc<Lifecycle>;

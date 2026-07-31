@@ -18,6 +18,8 @@ allow = [
     # unicode-ident is (MIT OR Apache-2.0) AND Unicode-3.0; the Unicode license
     # only covers the embedded character tables and is permissive.
     "Unicode-3.0",
+    # win_uds (the implementation's Windows IPC shim) is public-domain Unlicense.
+    "Unlicense",
 ]
 
 [bans]
