@@ -1,0 +1,17 @@
+[package]
+name = "ruststream-zeromq"
+description = "ZeroMQ transport implementation of the RustStream broker contract, for bridging to non-Rust peers."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme = "../../README.md"
+keywords = ["zeromq", "zmq", "messaging", "broker", "faststream"]
+categories = ["asynchronous", "network-programming"]
+
+[lints]
+workspace = true
+
+[dependencies]
