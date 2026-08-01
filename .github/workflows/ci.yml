@@ -61,6 +61,8 @@ jobs:
       - name: cargo check (all features)
         run: cargo check --workspace --all-targets --all-features
 
+      # The full suite - conformance, lifecycle, request/reply, and the wire-layout contract -
+      # runs on loopback sockets; there is no external broker, which is the point of the crate.
       - name: cargo test
         run: cargo test --workspace --all-features
 

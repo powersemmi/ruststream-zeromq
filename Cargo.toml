@@ -13,6 +13,15 @@ authors = ["RustStream contributors"]
 [workspace.dependencies]
 ruststream-zeromq = { path = "crates/ruststream-zeromq" }
 
+ruststream = { version = ">=0.6.0, <0.7.0", default-features = false }
+
+zeromq = { version = "0.6", default-features = false, features = ["tokio-runtime", "all-transport"] }
+bytes = "1"
+futures = "0.3"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tracing = "0.1"
+
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 unreachable_pub = "deny"
