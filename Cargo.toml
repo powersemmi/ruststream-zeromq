@@ -13,7 +13,7 @@ authors = ["RustStream contributors"]
 [workspace.dependencies]
 ruststream-zeromq = { path = "crates/ruststream-zeromq" }
 
-ruststream = { version = "0.6.0", default-features = false }
+ruststream = { version = ">=0.6.0, <0.7.0", default-features = false }
 
 zeromq = { version = "0.6", default-features = false, features = ["tokio-runtime", "all-transport"] }
 bytes = "1"
