@@ -13,10 +13,7 @@ authors = ["RustStream contributors"]
 [workspace.dependencies]
 ruststream-zeromq = { path = "crates/ruststream-zeromq" }
 
-# The path component rides the sibling checkout until ruststream 0.6.0 is published on
-# crates.io (the same bootstrap ruststream-nats used before 0.5); the version range is what
-# a packaged release resolves against.
-ruststream = { version = ">=0.6.0, <0.7.0", path = "../ruststream", default-features = false }
+ruststream = { version = "0.6.0", default-features = false }
 
 zeromq = { version = "0.6", default-features = false, features = ["tokio-runtime", "all-transport"] }
 bytes = "1"

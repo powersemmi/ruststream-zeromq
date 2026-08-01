@@ -18,7 +18,7 @@
 
 ## Patterns
 
-Three socket patterns cover three messaging shapes, the way the Redis crate covers streams, lists and pub/sub:
+Three socket patterns cover three messaging shapes:
 
 - **`ZmqQueue`** - PUSH/PULL: competing consumers, round-robin.
 - **`ZmqFanout`** - PUB/SUB: broadcast, prefix filtering by name.
@@ -88,7 +88,7 @@ fn app() -> impl App {
 
 ## Status
 
-Implemented. This crate is the contract's stress test - the first broker with neither a server nor acknowledgement - and its whole suite (conformance routing, the lifecycle ladder, the request/reply capability, and the wire-layout check driven by a raw foreign-style peer) runs on loopback sockets in CI, no external broker required. Not yet published to crates.io: the release rides the `ruststream` 0.6 line. Design and scope are tracked in [powersemmi/ruststream#192](https://github.com/powersemmi/ruststream/issues/192).
+Implemented, on the `ruststream` 0.6 line. The whole suite (conformance routing, the lifecycle ladder, the request/reply capability, and the wire-layout check driven by a raw foreign-style peer) runs on loopback sockets in CI, no external broker required. The crate itself is not on crates.io yet. Design and scope are tracked in [powersemmi/ruststream#192](https://github.com/powersemmi/ruststream/issues/192).
 
 ## Test it
 
