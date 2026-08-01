@@ -29,9 +29,9 @@ Because there is no server, the role is explicit - which side listens is a deplo
 ```rust
 use ruststream_zeromq::ZmqEndpoint;
 
-let listener = ZmqEndpoint::bind("tcp://*:5555");     // this process listens
-let dialer = ZmqEndpoint::connect("tcp://ml:5555");   // this process dials out
-let local = ZmqEndpoint::bind("ipc:///tmp/orders");   // same host, no network stack
+let listener = ZmqEndpoint::bind("tcp://0.0.0.0:5555");   // this process listens
+let dialer = ZmqEndpoint::connect("tcp://ml:5555");       // this process dials out
+let local = ZmqEndpoint::bind("ipc:///tmp/orders");       // same host, no network stack
 ```
 
 An ephemeral bind (`tcp://127.0.0.1:0`) resolves at subscribe; `bound_address()` reports it, and a same-process publisher dials it automatically (the loopback arrangement).
@@ -80,7 +80,7 @@ async fn handle(job: &Job) -> HandlerResult {
 #[ruststream::app]
 fn app() -> impl App {
     RustStream::new(AppInfo::new("worker", "0.1.0"))
-        .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://*:5555")), |b| {
+        .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
             b.include(handle);
         })
 }

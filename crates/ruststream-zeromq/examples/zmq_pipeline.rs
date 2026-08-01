@@ -1,7 +1,11 @@
 //! A worker stage of a PUSH/PULL pipeline: upstream pushes work, this service pulls it.
 //!
-//! Run the producer side separately (any libzmq peer works), or use `zmq_bridge_peer.py`
-//! from the repository as the non-Rust side.
+//! The producer runs separately: any peer that speaks the crate's frame layout (name,
+//! headers, payload) can push into this socket, Rust or not.
+//!
+//! ```text
+//! cargo run --example zmq_pipeline -- run
+//! ```
 
 use ruststream::runtime::{App, AppInfo, HandlerResult, RustStream};
 use ruststream::subscriber;
@@ -22,7 +26,7 @@ async fn handle(job: &Job) -> HandlerResult {
 #[ruststream::app]
 fn app() -> impl App {
     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
-        ZmqQueue::new(ZmqEndpoint::bind("tcp://*:5555")),
+        ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
         |b| {
             b.include(handle);
         },

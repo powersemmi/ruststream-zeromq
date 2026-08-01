@@ -54,7 +54,7 @@ fn hex_decode(text: &str) -> Option<Vec<u8>> {
 /// ```
 /// use ruststream_zeromq::{ZmqEndpoint, ZmqRpc};
 ///
-/// let responder = ZmqRpc::new(ZmqEndpoint::bind("tcp://*:5557"));
+/// let responder = ZmqRpc::new(ZmqEndpoint::bind("tcp://0.0.0.0:5557"));
 /// let requester = ZmqRpc::new(ZmqEndpoint::connect("tcp://ml:5557"));
 /// # let _ = (responder, requester);
 /// ```

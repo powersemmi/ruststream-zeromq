@@ -18,7 +18,7 @@ pub(crate) enum Role {
 /// ```
 /// use ruststream_zeromq::ZmqEndpoint;
 ///
-/// let listener = ZmqEndpoint::bind("tcp://*:5555");
+/// let listener = ZmqEndpoint::bind("tcp://0.0.0.0:5555");
 /// let dialer = ZmqEndpoint::connect("tcp://ml:5555");
 /// let local = ZmqEndpoint::bind("ipc:///tmp/orders");
 /// # let _ = (listener, dialer, local);
@@ -74,7 +74,7 @@ mod tests {
     fn unsupported_transports_are_rejected_before_io() {
         assert!(ZmqEndpoint::bind("inproc://x").validate().is_err());
         assert!(ZmqEndpoint::connect("udp://x:1").validate().is_err());
-        assert!(ZmqEndpoint::bind("tcp://*:5555").validate().is_ok());
+        assert!(ZmqEndpoint::bind("tcp://0.0.0.0:5555").validate().is_ok());
         assert!(ZmqEndpoint::bind("ipc:///tmp/x").validate().is_ok());
     }
 }

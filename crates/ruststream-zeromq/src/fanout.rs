@@ -28,7 +28,7 @@ use crate::wire;
 /// ```
 /// use ruststream_zeromq::{ZmqEndpoint, ZmqFanout};
 ///
-/// let publisher_side = ZmqFanout::new(ZmqEndpoint::bind("tcp://*:5556"));
+/// let publisher_side = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556"));
 /// let subscriber_side = ZmqFanout::new(ZmqEndpoint::connect("tcp://events:5556"));
 /// # let _ = (publisher_side, subscriber_side);
 /// ```

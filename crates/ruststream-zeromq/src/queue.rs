@@ -24,7 +24,7 @@ use crate::wire;
 /// ```
 /// use ruststream_zeromq::{ZmqEndpoint, ZmqQueue};
 ///
-/// let consumer = ZmqQueue::new(ZmqEndpoint::bind("tcp://*:5555"));
+/// let consumer = ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555"));
 /// let producer = ZmqQueue::new(ZmqEndpoint::connect("tcp://worker:5555"));
 /// # let _ = (consumer, producer);
 /// ```
