@@ -86,7 +86,7 @@ fn app() -> impl App {
 
 ## Status
 
-Implemented, on the `ruststream` 0.6 line. The whole suite (conformance routing, the lifecycle ladder, the request/reply capability, and the wire-layout check driven by a raw foreign-style peer) runs on loopback sockets in CI, no external broker required. The crate itself is not on crates.io yet. Design and scope are tracked in [powersemmi/ruststream#192](https://github.com/powersemmi/ruststream/issues/192).
+Implemented, on the `ruststream` 0.6 line. The whole suite (conformance routing, the lifecycle ladder, the request/reply capability, and the wire-layout check driven by a raw foreign-style peer) runs on loopback sockets in CI, no external broker required. Published on crates.io as `ruststream-zeromq = "0.6"`. Design and scope are tracked in [powersemmi/ruststream#192](https://github.com/powersemmi/ruststream/issues/192).
 
 ## Test it
 
