@@ -14,7 +14,7 @@
 
 ---
 
-`ruststream-zeromq` implements the RustStream broker contract over the pure-Rust [`zeromq`](https://crates.io/crates/zeromq) implementation (TCP and IPC transports). Unlike every other broker crate, there is no server in the middle - which is precisely why it exists: a Rust service can join a ZeroMQ topology an existing Python worker or C++ daemon already speaks, without dropping out of the framework.
+`ruststream-zeromq` implements the RustStream broker contract over the pure-Rust [`zeromq`](https://crates.io/crates/zeromq) implementation (TCP and IPC transports). Unlike the other RustStream broker crates, there is no server in the middle: a Rust service can join a ZeroMQ topology an existing Python worker or C++ daemon already speaks, without dropping out of the framework.
 
 ## Patterns
 
@@ -48,14 +48,12 @@ frame 2: payload   encoded by the framework's codec
 
 A Python peer sends `socket.send_multipart([b"orders", b"content-type: application/json", payload])`. A two-frame message from a minimal peer reads as headerless. The layout is stable across versions.
 
-## Honest scope
-
-Stated here rather than discovered:
+## Scope and limits
 
 - Delivery is **at most once** and there is no durability; acknowledgement is reported as `AckError::Unsupported`, never emulated.
 - A subscriber that connects after a publisher has started **misses what was sent before it arrived** (the slow joiner), and a fan-out message with no matching subscriber is dropped silently.
 - The implementation exposes **no high-water-mark configuration**: a slow reader exerts raw TCP back-pressure on senders.
-- There is **no encryption layer**: trusted networks, or an existing tunnel.
+- There is **no encryption layer**: use it on trusted networks, or inside an existing tunnel.
 - No consumer groups, no dead-lettering, no retry policies, no transactions.
 
 ## Write a service

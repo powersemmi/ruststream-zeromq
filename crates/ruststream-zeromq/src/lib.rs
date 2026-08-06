@@ -1,9 +1,9 @@
 //! `ZeroMQ` transport implementation of the `RustStream` broker contract, for bridging to
 //! non-Rust peers.
 //!
-//! Unlike every other broker crate, this one has no server in the middle: which side listens
-//! is a deployment decision, stated explicitly on the [`ZmqEndpoint`]. Three socket patterns
-//! cover three messaging shapes, over the pure-Rust
+//! Unlike the other `RustStream` broker crates, this one has no server in the middle: which
+//! side listens is a deployment decision, stated explicitly on the [`ZmqEndpoint`]. Three
+//! socket patterns cover three messaging shapes, over the pure-Rust
 //! [`zeromq`](https://docs.rs/zeromq) implementation (TCP and IPC transports):
 //!
 //! - [`ZmqQueue`] - PUSH/PULL: competing consumers, round-robin.
@@ -16,13 +16,12 @@
 //! payload. A Python peer sends
 //! `socket.send_multipart([b"orders", b"", payload])`.
 //!
-//! Honest scope, stated here rather than discovered: delivery is at most once and there is
-//! no durability, so acknowledgement is reported as unsupported rather than emulated; a
-//! subscriber that connects after a publisher has started misses what was sent before it
-//! arrived; the implementation has no encryption layer, so it is for trusted networks or for
-//! use inside an existing tunnel; and it exposes no high-water-mark configuration - a slow
-//! reader exerts raw TCP back-pressure on senders, except the fan-out pattern, which drops
-//! unmatched messages by design.
+//! Scope and limits: delivery is at most once and there is no durability, so acknowledgement
+//! is reported as unsupported rather than emulated; a subscriber that connects after a
+//! publisher has started misses what was sent before it arrived; the implementation has no
+//! encryption layer, so it is for trusted networks or for use inside an existing tunnel; and
+//! it exposes no high-water-mark configuration - a slow reader exerts raw TCP back-pressure
+//! on senders, except in the fan-out pattern, which drops unmatched messages.
 
 #![forbid(unsafe_code)]
 
