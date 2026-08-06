@@ -56,6 +56,15 @@ A Python peer sends `socket.send_multipart([b"orders", b"content-type: applicati
 - There is **no encryption layer**: use it on trusted networks, or inside an existing tunnel.
 - No consumer groups, no dead-lettering, no retry policies, no transactions.
 
+## Install
+
+```toml
+[dependencies]
+ruststream = { version = "0.6", features = ["macros", "json"] }
+ruststream-zeromq = "0.6"
+serde = { version = "1", features = ["derive"] }
+```
+
 ## Write a service
 
 ```rust
@@ -86,7 +95,7 @@ fn app() -> impl App {
 
 ## Status
 
-Implemented, on the `ruststream` 0.6 line. The whole suite (conformance routing, the lifecycle ladder, the request/reply capability, and the wire-layout check driven by a raw foreign-style peer) runs on loopback sockets in CI, no external broker required. Published on crates.io as `ruststream-zeromq = "0.6"`. Design and scope are tracked in [powersemmi/ruststream#192](https://github.com/powersemmi/ruststream/issues/192).
+Implemented and published on crates.io, tracking the `ruststream` 0.6 line. The whole suite (conformance routing, the lifecycle ladder, the request/reply capability, and the wire-layout check driven by a raw foreign-style peer) runs on loopback sockets in CI, no external broker required. The design issue is [powersemmi/ruststream#192](https://github.com/powersemmi/ruststream/issues/192).
 
 ## Test it
 
