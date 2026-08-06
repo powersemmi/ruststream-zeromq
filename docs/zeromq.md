@@ -13,6 +13,23 @@ ruststream-zeromq = "0.6"
 serde = { version = "1", features = ["derive"] }
 ```
 
+## Capabilities
+
+Which of the framework's optional capability traits this transport implements natively, and where
+acknowledgement lands:
+
+| Capability | Native | Reason |
+| --- | --- | --- |
+| `Subscribe` | Yes | All three connected forms open a subscription by name, and the name is the first frame on the wire. See [The three patterns](#the-three-patterns). |
+| Acknowledgement (`ack` / `nack`) | No | Both report `AckError::Unsupported`. Delivery is at most once: once a socket has handed a message over, no protocol frame exists to settle it, and there is no store to redeliver from, so emulating a result would report a guarantee the transport does not provide. |
+| `BatchSubscriber` | No | A socket yields one multipart message at a time; there is no batch receive. |
+| `TransactionalPublisher` | No | ZeroMQ has no transactions. |
+| `OwnedTransactions` | No | ZeroMQ has no transactions. |
+| `RequestReply` | Yes, on `ZmqRpc` | `ZmqRpcPublisher` implements it over DEALER/ROUTER: a request goes out on a DEALER socket and the answer is matched by the `correlation-id` header, or the call fails on timeout. `ZmqQueue` and `ZmqFanout` are one-way patterns with no return path, so their publishers do not implement it. See [Request and reply](#request-and-reply). |
+| `Partitioned` | No | There is no broker-side partitioning. PUSH/PULL round-robins across attached peers without consulting a key. |
+| `Seekable` / `Positioned` | No | The transport keeps no history. Nothing is stored, so there is no position to return to. |
+| `DescribeServer` | Yes | Each of the three brokers reports its endpoint address and the `zeromq` protocol, which is what the AsyncAPI schema records. |
+
 ## Scope
 
 Stated up front rather than discovered:

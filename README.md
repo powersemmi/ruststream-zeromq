@@ -6,10 +6,17 @@
 
 <p align="center">
   <a href="https://github.com/powersemmi/ruststream-zeromq/actions/workflows/ci.yml"><img src="https://github.com/powersemmi/ruststream-zeromq/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://crates.io/crates/ruststream-zeromq"><img src="https://img.shields.io/crates/v/ruststream-zeromq.svg" alt="crates.io"></a>
+  <a href="https://crates.io/crates/ruststream-zeromq"><img src="https://img.shields.io/crates/dr/ruststream-zeromq" alt="Recent downloads"></a>
+  <a href="https://docs.rs/ruststream-zeromq"><img src="https://img.shields.io/docsrs/ruststream-zeromq" alt="docs.rs"></a>
   <img src="https://img.shields.io/badge/MSRV-1.85-blue.svg" alt="MSRV 1.85">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License">
   <a href="https://t.me/ruststream_community"><img src="https://img.shields.io/badge/-Telegram-blue?logo=telegram&label=News" alt="Telegram news channel"></a>
   <a href="https://t.me/ruststream_communuty_ru_chat"><img src="https://img.shields.io/badge/-Telegram-blue?logo=telegram&label=RU" alt="Telegram RU chat"></a>
+</p>
+
+<p align="center">
+  <b><a href="https://powersemmi.github.io/ruststream-zeromq/">Documentation</a></b>
 </p>
 
 ---
@@ -56,6 +63,18 @@ A Python peer sends `socket.send_multipart([b"orders", b"content-type: applicati
 - There is **no encryption layer**: use it on trusted networks, or inside an existing tunnel.
 - No consumer groups, no dead-lettering, no retry policies, no transactions.
 
+## Install
+
+```toml
+[dependencies]
+ruststream = { version = "0.6", features = ["macros", "json"] }
+ruststream-zeromq = "0.6"
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+ruststream-zeromq = { version = "0.6", features = ["testing"] }
+```
+
 ## Write a service
 
 ```rust
@@ -84,13 +103,21 @@ fn app() -> impl App {
 }
 ```
 
-## Status
-
-Implemented, on the `ruststream` 0.6 line. The whole suite (conformance routing, the lifecycle ladder, the request/reply capability, and the wire-layout check driven by a raw foreign-style peer) runs on loopback sockets in CI, no external broker required. Published on crates.io as `ruststream-zeromq = "0.6"`. Design and scope are tracked in [powersemmi/ruststream#192](https://github.com/powersemmi/ruststream/issues/192).
-
 ## Test it
 
-The `testing` feature runs handlers against an in-process stand-in - no sockets, same routing. The socket-level behaviour is covered by the loopback suite: `just test` runs everything, no broker to start.
+The `testing` feature runs handlers against an in-process stand-in - no sockets, same routing, same ladder. Inject a message as a foreign peer would with `TestableBroker::inject`, then assert on what a handler published with the free `expect_published`:
+
+```rust
+use ruststream::{Broker, OutgoingMessage};
+use ruststream::testing::{TestableBroker, expect_published};
+use ruststream_zeromq::testing::ZmqTestBroker;
+
+let broker = ZmqTestBroker::new().connect().await?;
+broker.inject(OutgoingMessage::new("jobs", br#"{"id":1}"#));
+let results = expect_published(&broker, "results", 1, std::time::Duration::from_secs(1)).await;
+```
+
+Socket-level behaviour is covered by the loopback suite: `just test` runs everything, including the wire-layout check driven by a raw foreign-style peer, with no broker to start.
 
 ## Layout
 
