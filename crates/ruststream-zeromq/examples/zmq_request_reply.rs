@@ -35,6 +35,7 @@ struct Reply {
 /// travel from the delivery the handler is answering.
 struct ReplyToRequester;
 
+// --8<-- [start:transform]
 impl<C> PublishTransform<C> for ReplyToRequester {
     fn apply(&self, out: &mut Outgoing<'_>, cx: &PublishContext<'_, C>) {
         if let Some(reply_to) = cx.headers().reply_to() {
@@ -54,6 +55,7 @@ async fn greet(request: &Greeting) -> Reply {
         text: format!("hello {}", request.who),
     }
 }
+// --8<-- [end:transform]
 
 #[ruststream::app]
 fn app() -> impl App {
@@ -61,9 +63,12 @@ fn app() -> impl App {
     RustStream::new(AppInfo::new("greeter", "0.1.0")).with_broker(
         ZmqRpc::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")),
         |b| {
+            // --8<-- [start:responder]
             b.include(greet)
                 .publisher(TypedPublisher::new(ZmqRpcPublish).transform(ReplyToRequester));
+            // --8<-- [end:responder]
 
+            // --8<-- [start:request]
             b.after_startup(ZmqRpcPublish, async move |publisher| -> io::Result<()> {
                 let request = JsonCodec
                     .encode(&Greeting {
@@ -83,6 +88,7 @@ fn app() -> impl App {
                 println!("reply: {}", answer.text);
                 Ok(())
             });
+            // --8<-- [end:request]
         },
     )
 }

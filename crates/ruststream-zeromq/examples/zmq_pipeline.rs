@@ -7,6 +7,7 @@
 //! cargo run --example zmq_pipeline -- run
 //! ```
 
+// --8<-- [start:handler]
 use ruststream::runtime::{App, AppInfo, HandlerResult, RustStream};
 use ruststream::subscriber;
 use ruststream_zeromq::{ZmqEndpoint, ZmqQueue};
@@ -22,7 +23,9 @@ async fn handle(job: &Job) -> HandlerResult {
     println!("working on job {}", job.id);
     HandlerResult::Ack
 }
+// --8<-- [end:handler]
 
+// --8<-- [start:app]
 #[ruststream::app]
 fn app() -> impl App {
     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
@@ -32,3 +35,4 @@ fn app() -> impl App {
         },
     )
 }
+// --8<-- [end:app]
