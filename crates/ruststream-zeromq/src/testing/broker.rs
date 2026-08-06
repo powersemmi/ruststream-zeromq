@@ -153,9 +153,10 @@ impl Publisher for ZmqTestPublisher {
     }
 }
 
-/// The publish policy for [`ZmqTestPublisher`], mirroring the real brokers' policies
-/// ([`ZmqQueuePublish`](crate::ZmqQueuePublish), [`ZmqFanoutPublish`](crate::ZmqFanoutPublish),
-/// [`ZmqRpcPublish`](crate::ZmqRpcPublish)).
+/// The publish policy for [`ZmqTestPublisher`].
+///
+/// Mirrors the real brokers' policies ([`ZmqQueuePublish`](crate::ZmqQueuePublish),
+/// [`ZmqFanoutPublish`](crate::ZmqFanoutPublish), [`ZmqRpcPublish`](crate::ZmqRpcPublish)).
 ///
 /// # Examples
 ///
