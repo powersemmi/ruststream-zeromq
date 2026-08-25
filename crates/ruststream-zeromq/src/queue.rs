@@ -1,5 +1,6 @@
 //! [`ZmqQueue`]: the PUSH/PULL pattern - competing consumers, round-robin.
 
+use std::future::{Future, ready};
 use std::sync::Arc;
 
 use futures::Stream;
@@ -109,11 +110,11 @@ impl ConnectedBroker for ConnectedZmqQueue {
     type Error = ZmqError;
     type Closed = ();
 
-    async fn shutdown(self) -> Result<(), Self::Error> {
+    fn shutdown(self) -> impl Future<Output = Result<(), Self::Error>> {
         self.lifecycle
             .closed
             .store(true, std::sync::atomic::Ordering::Release);
-        Ok(())
+        ready(Ok(()))
     }
 }
 
@@ -252,8 +253,11 @@ pub struct ZmqQueuePublish;
 impl PublishPolicy<ConnectedZmqQueue> for ZmqQueuePublish {
     type Live = ZmqQueuePublisher;
 
-    async fn pair(self, connected: &ConnectedZmqQueue) -> Result<Self::Live, PairError> {
-        Ok(connected.publisher())
+    fn pair(
+        self,
+        connected: &ConnectedZmqQueue,
+    ) -> impl Future<Output = Result<Self::Live, PairError>> {
+        ready(Ok(connected.publisher()))
     }
 }
 

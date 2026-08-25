@@ -5,6 +5,7 @@
 //! the same ROUTER. The requester side uses the [`RequestReply`] capability: one DEALER per
 //! request, correlated by the `correlation-id` header.
 
+use std::future::{Future, ready};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -153,12 +154,12 @@ impl ConnectedBroker for ConnectedZmqRpc {
     type Error = ZmqError;
     type Closed = ();
 
-    async fn shutdown(self) -> Result<(), Self::Error> {
+    fn shutdown(self) -> impl Future<Output = Result<(), Self::Error>> {
         self.shared
             .lifecycle
             .closed
             .store(true, std::sync::atomic::Ordering::Release);
-        Ok(())
+        ready(Ok(()))
     }
 }
 
@@ -356,8 +357,11 @@ pub struct ZmqRpcPublish;
 impl PublishPolicy<ConnectedZmqRpc> for ZmqRpcPublish {
     type Live = ZmqRpcPublisher;
 
-    async fn pair(self, connected: &ConnectedZmqRpc) -> Result<Self::Live, PairError> {
-        Ok(connected.publisher())
+    fn pair(
+        self,
+        connected: &ConnectedZmqRpc,
+    ) -> impl Future<Output = Result<Self::Live, PairError>> {
+        ready(Ok(connected.publisher()))
     }
 }
 

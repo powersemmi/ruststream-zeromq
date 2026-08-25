@@ -1,5 +1,7 @@
 //! [`ZmqMessage`]: a delivered message.
 
+use std::future::{Future, ready};
+
 use bytes::Bytes;
 use ruststream::{AckError, Headers, IncomingMessage};
 
@@ -39,11 +41,11 @@ impl IncomingMessage for ZmqMessage {
         &self.headers
     }
 
-    async fn ack(self) -> Result<(), AckError> {
-        Err(AckError::Unsupported)
+    fn ack(self) -> impl Future<Output = Result<(), AckError>> {
+        ready(Err(AckError::Unsupported))
     }
 
-    async fn nack(self, _requeue: bool) -> Result<(), AckError> {
-        Err(AckError::Unsupported)
+    fn nack(self, _requeue: bool) -> impl Future<Output = Result<(), AckError>> {
+        ready(Err(AckError::Unsupported))
     }
 }
