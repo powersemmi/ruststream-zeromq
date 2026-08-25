@@ -4,6 +4,67 @@
 //! started misses what was sent before it arrived (the slow joiner), and a message published
 //! with no matching subscriber is dropped silently.
 
+/// The publish policy of this form, under the name every include site writes.
+///
+/// Every policy a form supports appears in its prelude under the prefix-free concept name, so
+/// switching a service between forms, or between brokers, leaves the composition root untouched:
+/// only the import at the top of the file changes. A concept name that is absent says the form
+/// lacks that policy, the same statement the capability manifest makes one layer up. PUB/SUB has
+/// exactly one policy, so `Publish` is the whole vocabulary here.
+///
+/// The broker-prefixed original stays at the crate root, for a mixed-form file that names both.
+pub use self::ZmqFanoutPublish as Publish;
+
+/// The imports a service on the PUB/SUB fan-out writes, in one glob.
+///
+/// Carries the framework's prelude, the shared [`ZmqEndpoint`], this form's descriptor
+/// [`ZmqFanout`], and its publish policy under the uniform name [`Publish`].
+///
+/// The capability manifest is empty: PUB/SUB is a one-way broadcast with no return path, no
+/// transactions, no batch receive, no broker-side partitioning and no history, so this form
+/// implements none of the framework's capability traits. That is a statement about the form, not a
+/// gap.
+///
+/// Globbing two form preludes into one file makes `Publish` ambiguous: the first use of the name
+/// is `E0659`, pointing at both globs. That file wants [`crate::prelude`] and qualified
+/// `fanout::Publish` instead.
+///
+/// # Examples
+///
+/// ```
+/// use ruststream_zeromq::fanout::prelude::*;
+/// use serde::Deserialize;
+///
+/// #[derive(Deserialize)]
+/// struct Event {
+///     id: u64,
+/// }
+///
+/// #[subscriber("events")]
+/// async fn handle(event: &Event) -> HandlerResult {
+///     let _ = event.id;
+///     HandlerResult::Ack
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     RustStream::new(AppInfo::new("watcher", "0.1.0")).with_broker(
+///         ZmqFanout::new(ZmqEndpoint::connect("tcp://ml:5556")),
+///         |b| {
+///             b.include(handle);
+///         },
+///     )
+/// }
+/// ```
+pub mod prelude {
+    pub use ruststream::prelude::*;
+
+    pub use crate::endpoint::ZmqEndpoint;
+
+    pub use super::{Publish, ZmqFanout};
+    // No capability manifest: this form implements none of the framework's capability traits.
+}
+
 use std::sync::Arc;
 
 use ruststream::{

@@ -1,38 +1,71 @@
-//! The imports a service on `ZeroMQ` writes every time, in one glob.
+//! The imports a mixed-form service on `ZeroMQ` writes, in one glob.
 //!
-//! `use ruststream_zeromq::prelude::*;` brings in the framework's own prelude and this
-//! transport's user-facing surface: the three socket patterns, the endpoint that says which side
-//! listens, and the publish policy each pattern pairs with. One import serves a service file.
+//! A service that runs on one form wants that form's own prelude
+//! ([`queue`](crate::queue::prelude), [`fanout`](crate::fanout::prelude),
+//! [`rpc`](crate::rpc::prelude)), where the policy is the bare name `Publish`. This one is for a
+//! file that names more than one form: it carries the framework's prelude, the shared
+//! [`ZmqEndpoint`], the union capability manifest, and the three form modules themselves, so the
+//! file qualifies through them - `queue::Publish`, `rpc::Publish`, `queue::ZmqQueue`.
+//!
+//! There is deliberately no bare `Publish` here. Three forms each have one, and at crate level the
+//! name would have to mean one of them; qualifying says which. Globbing two *form* preludes into
+//! one file instead of this one is the same question asked the other way, and the compiler answers
+//! it: the first use of `Publish` is `E0659`, pointing at both globs, which is the signal to switch
+//! to this prelude.
+//!
+//! `Publish` is a publish *policy*, the value an include site hands to a publisher. It is not the
+//! framework's `runtime::Publish`, which is the builder a publish call returns and which services
+//! never name.
 //!
 //! The framework's prelude keeps brokers out of itself, because which broker a service runs on is
-//! the one thing every service states for itself. Importing *this* prelude is that statement: the
-//! broker-specificity has moved into the crate path, so the framework glob rides along instead of
-//! being written a second line down.
+//! the one thing every service states for itself. Importing a prelude from *this* crate is that
+//! statement: the broker-specificity has moved into the crate path, so the framework glob rides
+//! along instead of being written a second line down.
 //!
-//! It is also a capability manifest: the glob carries exactly the framework capability traits this
-//! transport implements, which here is [`RequestReply`] and nothing else. A handler that bounds on
-//! one it did not get is a compile error naming the trait, rather than a method that is missing for
-//! reasons the reader has to go and look up. Because these are the framework's own items, a service
-//! that globs two broker preludes at once unifies on the same traits instead of colliding, and the
-//! compiler checks that rather than the reader.
+//! # The capability manifest
+//!
+//! The glob carries exactly the framework capability traits this transport implements, which
+//! across all three forms is [`RequestReply`] and nothing else. A handler that bounds on one it did
+//! not get is a compile error naming the trait, rather than a method that is missing for reasons
+//! the reader has to go and look up.
+//!
+//! This is the union, so it is the weaker statement of the two: `RequestReply` is here because
+//! *some* form has it. Only [`rpc::prelude`] carries it, and the queue and
+//! fan-out preludes carry an empty manifest, which is why a single-form service is better served by
+//! its form's prelude - the manifest is then a statement about the form it actually runs on.
+//!
+//! Because these are the framework's own items, a service that globs two broker preludes at once
+//! unifies on the same traits instead of colliding, and the compiler checks that rather than the
+//! reader.
 //!
 //! # Examples
 //!
 //! ```
 //! use ruststream_zeromq::prelude::*;
+//! use serde::{Deserialize, Serialize};
 //!
-//! #[subscriber("jobs")]
-//! async fn handle(job: &[u8]) -> HandlerResult {
-//!     let _ = job.len();
-//!     HandlerResult::Ack
+//! #[derive(Deserialize)]
+//! struct Job {
+//!     id: u64,
+//! }
+//!
+//! #[derive(Serialize)]
+//! struct Done {
+//!     id: u64,
+//! }
+//!
+//! #[subscriber("jobs", publish("results"))]
+//! async fn work(job: &Job) -> Done {
+//!     Done { id: job.id }
 //! }
 //!
 //! #[ruststream::app]
 //! fn app() -> impl App {
 //!     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
-//!         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
+//!         queue::ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
 //!         |b| {
-//!             b.include(handle);
+//!             b.include(work)
+//!                 .publisher(TypedPublisher::new(queue::Publish));
 //!         },
 //!     )
 //! }
@@ -40,17 +73,20 @@
 
 pub use ruststream::prelude::*;
 
-// The capability manifest: the framework capability traits this transport implements, and only
-// those. `ZmqRpcPublisher` implements `RequestReply` over DEALER/ROUTER; the transport has no
+// The union capability manifest: the framework capability traits some form of this transport
+// implements. `ZmqRpcPublisher` implements `RequestReply` over DEALER/ROUTER; the transport has no
 // transactions, no batch receive, no broker-side partitioning and no history, so
 // `TransactionalPublisher`, `OwnedTransactions`, `BatchSubscriber`, `Partitioned`, `Seekable` and
 // `Positioned` have no impl here and are absent by that fact, not by oversight.
 pub use ruststream::RequestReply;
 
+/// The endpoint is shared by all three forms, so it is named directly rather than qualified.
 pub use crate::endpoint::ZmqEndpoint;
-pub use crate::fanout::{ZmqFanout, ZmqFanoutPublish};
-pub use crate::queue::{ZmqQueue, ZmqQueuePublish};
-pub use crate::rpc::{ZmqRpc, ZmqRpcPublish};
+
+// The forms themselves, for qualified access. Everything form-specific is reached through one of
+// these - the descriptor (`queue::ZmqQueue`) and the policy (`queue::Publish`) alike - so there is
+// one rule in a mixed-form file rather than a rule and an exception.
+pub use crate::{fanout, queue, rpc};
 
 // Three things this crate exports are deliberately not here.
 //

@@ -62,9 +62,25 @@ A subscription is named, and the name is the first frame on the wire. For `ZmqFa
 also the subscription prefix the socket filters on, so a subscriber on `events` receives
 `events.created` as well.
 
-`ruststream_zeromq::prelude::*` is one import for a service file: it carries the framework's own
-prelude along with the three patterns, the endpoint and the publish policies. Naming this crate in
-the import path is how a service states which broker it runs on.
+Each pattern ships its own prelude, and that is the one import a service file needs:
+`ruststream_zeromq::queue::prelude::*`, `fanout::prelude::*` or `rpc::prelude::*`. It carries the
+framework's own prelude, the endpoint, the pattern's descriptor, and the pattern's publish policy
+under the prefix-free name `Publish`. Because every pattern names its policy the same way, moving a
+service between patterns, or to another broker entirely, changes the import line and nothing at the
+include site.
+
+The prelude is also a manifest, and it reads by absence. `rpc::prelude` carries `RequestReply`,
+because `ZmqRpcPublisher` implements it; the queue and fan-out preludes carry no capability trait at
+all, because those patterns are one-way. A handler that reaches for a capability its pattern does
+not have fails to compile with the trait named, rather than with a method that is missing for
+reasons the reader has to go and find. The same rule governs policies: a pattern with two of them
+would expose two concept names, and a name that is not there means the pattern does not have that
+policy.
+
+A file that names more than one pattern imports `ruststream_zeromq::prelude::*` instead, which
+carries the patterns as modules and is qualified at the point of use - `queue::Publish`,
+`rpc::Publish`. There is no bare `Publish` at crate level on purpose; globbing two pattern preludes
+together instead collides on that name, and the compiler says so.
 
 ```rust
 --8<-- "crates/ruststream-zeromq/examples/zmq_pipeline.rs:handler"

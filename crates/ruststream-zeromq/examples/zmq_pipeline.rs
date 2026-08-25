@@ -8,7 +8,7 @@
 //! ```
 
 // --8<-- [start:handler]
-use ruststream_zeromq::prelude::*;
+use ruststream_zeromq::queue::prelude::*;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]

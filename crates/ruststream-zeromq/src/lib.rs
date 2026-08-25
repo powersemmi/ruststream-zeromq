@@ -28,14 +28,17 @@
 mod common;
 mod endpoint;
 mod error;
-mod fanout;
 mod message;
 pub mod prelude;
-mod queue;
-mod rpc;
+mod wire;
+
+// The three forms are public modules, not just re-export sources: each carries its own prelude,
+// and a mixed-form service qualifies through the module (`queue::Publish`, `rpc::Publish`).
+pub mod fanout;
+pub mod queue;
+pub mod rpc;
 #[cfg(feature = "testing")]
 pub mod testing;
-mod wire;
 
 pub use endpoint::ZmqEndpoint;
 pub use error::ZmqError;

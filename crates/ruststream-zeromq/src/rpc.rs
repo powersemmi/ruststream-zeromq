@@ -5,6 +5,80 @@
 //! the same ROUTER. The requester side uses the [`RequestReply`] capability: one DEALER per
 //! request, correlated by the `correlation-id` header.
 
+/// The publish policy of this form, under the name every include site writes.
+///
+/// Every policy a form supports appears in its prelude under the prefix-free concept name, so
+/// switching a service between forms, or between brokers, leaves the composition root untouched:
+/// only the import at the top of the file changes. A concept name that is absent says the form
+/// lacks that policy, the same statement the capability manifest makes one layer up.
+/// DEALER/ROUTER has exactly one policy, so `Publish` is the whole vocabulary here; the reply path
+/// rides it, and the request path is the [`RequestReply`] capability on the live publisher.
+///
+/// The broker-prefixed original stays at the crate root, for a mixed-form file that names both.
+pub use self::ZmqRpcPublish as Publish;
+
+/// The imports a service on the DEALER/ROUTER exchange writes, in one glob.
+///
+/// Carries the framework's prelude, the shared [`ZmqEndpoint`], this form's descriptor
+/// [`ZmqRpc`], and its publish policy under the uniform name [`Publish`].
+///
+/// The capability manifest is [`RequestReply`] and nothing else: [`ZmqRpcPublisher`] implements it
+/// over DEALER/ROUTER, and this is the only form of the three that has it. The transport has no
+/// transactions, no batch receive, no broker-side partitioning and no history, so
+/// `TransactionalPublisher`, `OwnedTransactions`, `BatchSubscriber`, `Partitioned`, `Seekable` and
+/// `Positioned` have no impl here and are absent by that fact.
+///
+/// Globbing two form preludes into one file makes `Publish` ambiguous: the first use of the name
+/// is `E0659`, pointing at both globs. That file wants [`crate::prelude`] and qualified
+/// `rpc::Publish` instead.
+///
+/// # Examples
+///
+/// ```
+/// use ruststream_zeromq::rpc::prelude::*;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Deserialize)]
+/// struct Greeting {
+///     who: String,
+/// }
+///
+/// #[derive(Serialize)]
+/// struct Reply {
+///     text: String,
+/// }
+///
+/// #[subscriber("greeter", publish("reply"))]
+/// async fn greet(request: &Greeting) -> Reply {
+///     Reply {
+///         text: format!("hello {}", request.who),
+///     }
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     RustStream::new(AppInfo::new("greeter", "0.1.0")).with_broker(
+///         ZmqRpc::new(ZmqEndpoint::bind("tcp://0.0.0.0:5557")),
+///         |b| {
+///             b.include(greet).publisher(TypedPublisher::new(Publish));
+///         },
+///     )
+/// }
+/// ```
+pub mod prelude {
+    pub use ruststream::prelude::*;
+
+    pub use crate::endpoint::ZmqEndpoint;
+
+    pub use super::{Publish, ZmqRpc};
+
+    // The capability manifest of this form: `ZmqRpcPublisher` implements `RequestReply` over
+    // DEALER/ROUTER. It is deliberately absent from the queue and fan-out preludes, which are
+    // one-way patterns; a service that globs one of those and reaches for `request` gets a
+    // compile error naming the trait.
+    pub use ruststream::RequestReply;
+}
+
 use std::sync::Arc;
 use std::time::Duration;
 
