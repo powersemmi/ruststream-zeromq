@@ -1,29 +1,10 @@
 //! [`ZmqQueue`]: the PUSH/PULL pattern - competing consumers, round-robin.
 
-/// The publish policy of this form, under the name every include site writes.
-///
-/// Every policy a form supports appears in its prelude under the prefix-free concept name, so
-/// switching a service between forms, or between brokers, leaves the composition root untouched:
-/// only the import at the top of the file changes. A concept name that is absent says the form
-/// lacks that policy, the same statement the capability manifest makes one layer up. PUSH/PULL has
-/// exactly one policy, so `Publish` is the whole vocabulary here.
-///
-/// The broker-prefixed original stays at the crate root, for a mixed-form file that names both.
+/// The publish policy of this form, under the name an include site writes.
 pub use self::ZmqQueuePublish as Publish;
 
-/// The imports a service on the PUSH/PULL queue writes, in one glob.
-///
-/// Carries the framework's prelude, the shared [`ZmqEndpoint`], this form's descriptor
-/// [`ZmqQueue`], and its publish policy under the uniform name [`Publish`].
-///
-/// The capability manifest is empty: PUSH/PULL is a one-way pattern with no return path, no
-/// transactions, no batch receive, no broker-side partitioning and no history, so this form
-/// implements none of the framework's capability traits. That is a statement about the form, not a
-/// gap.
-///
-/// Globbing two form preludes into one file makes `Publish` ambiguous: the first use of the name
-/// is `E0659`, pointing at both globs. That file wants [`crate::prelude`] and qualified
-/// `queue::Publish` instead.
+/// The imports a service on the PUSH/PULL queue writes, in one glob: the framework's prelude, the
+/// shared [`ZmqEndpoint`], the descriptor [`ZmqQueue`], and its publish policy as [`Publish`].
 ///
 /// # Examples
 ///
@@ -62,7 +43,6 @@ pub mod prelude {
     pub use crate::endpoint::ZmqEndpoint;
 
     pub use super::{Publish, ZmqQueue};
-    // No capability manifest: this form implements none of the framework's capability traits.
 }
 
 use std::sync::Arc;

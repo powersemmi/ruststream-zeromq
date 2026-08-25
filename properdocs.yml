@@ -49,9 +49,7 @@ markdown_extensions:
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
   - toc:
       permalink: true
-      # The default slugifier drops every non-ASCII character, so a Russian or Chinese heading
-      # gets an empty id and the table of contents links to nothing. This one keeps the script
-      # and leaves ASCII headings with exactly the ids they already have.
+      # Keeps non-ASCII headings: the default slugifier gives them empty ids.
       slugify: !!python/object/apply:pymdownx.slugs.slugify
         kwds:
           case: lower
@@ -74,12 +72,7 @@ hooks:
 plugins:
   - search
   # Versioned docs are published with `mike` (see the Docs workflow and the version switcher).
-  # Each translation is a tree of its own under `docs/<locale>/`, mirroring the English paths.
-  # English stays at the docs root: a file outside a locale folder is the default language.
-  #
-  # English is normative; a page with no translation yet falls back to the English text inside
-  # the localized site rather than disappearing from it, which is what lets translations land
-  # page by page. Nothing is translated yet, so every localized page is that fallback today.
+  # Translations live under `docs/<locale>/`; English stays at the docs root as the default.
   - i18n:
       docs_structure: folder
       fallback_to_default: true

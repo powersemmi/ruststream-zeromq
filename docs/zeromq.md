@@ -65,22 +65,10 @@ also the subscription prefix the socket filters on, so a subscriber on `events` 
 Each pattern ships its own prelude, and that is the one import a service file needs:
 `ruststream_zeromq::queue::prelude::*`, `fanout::prelude::*` or `rpc::prelude::*`. It carries the
 framework's own prelude, the endpoint, the pattern's descriptor, and the pattern's publish policy
-under the prefix-free name `Publish`. Because every pattern names its policy the same way, moving a
-service between patterns, or to another broker entirely, changes the import line and nothing at the
-include site.
+under the name `Publish`; `rpc::prelude` also carries `RequestReply`.
 
-The prelude is also a manifest, and it reads by absence. `rpc::prelude` carries `RequestReply`,
-because `ZmqRpcPublisher` implements it; the queue and fan-out preludes carry no capability trait at
-all, because those patterns are one-way. A handler that reaches for a capability its pattern does
-not have fails to compile with the trait named, rather than with a method that is missing for
-reasons the reader has to go and find. The same rule governs policies: a pattern with two of them
-would expose two concept names, and a name that is not there means the pattern does not have that
-policy.
-
-A file that names more than one pattern imports `ruststream_zeromq::prelude::*` instead, which
-carries the patterns as modules and is qualified at the point of use - `queue::Publish`,
-`rpc::Publish`. There is no bare `Publish` at crate level on purpose; globbing two pattern preludes
-together instead collides on that name, and the compiler says so.
+A file that names more than one pattern imports `ruststream_zeromq::prelude::*` and qualifies:
+`queue::Publish`, `rpc::Publish`.
 
 ```rust
 --8<-- "crates/ruststream-zeromq/examples/zmq_pipeline.rs:handler"
@@ -167,17 +155,8 @@ deserializes from.
 
 Every publish runs through the framework's publish builder, whichever surface holds the publisher:
 `message(..)` for a value, `raw(..)` for bytes, with the destination, the headers and the codec
-resolved from the most specific level that names one. Nothing about that chain is transport
-specific here, so the framework's own publishing guide applies unchanged.
-
-A broker crate that has a per-message argument of its own grafts it onto that chain as a publisher
-adapter: a step taken on the publisher before the builder entry point, returning a small publisher
-that captures the argument and applies it to the outgoing message before delegating to the real
-one. This transport ships no such step, and the wire contract above is the reason. A ZeroMQ message
-is a name, a header frame and a payload, which is exactly what the builder already carries; there
-is no delivery mode, expiry, partition or routing key left over to pass per message. The one
-address that does vary per message, the reply address of a DEALER/ROUTER exchange, is a
-destination, so it travels in the destination position like any other.
+resolved from the most specific level that names one. This transport adds no step of its own to
+that chain, so the framework's own publishing guide applies unchanged.
 
 ## Request and reply
 
