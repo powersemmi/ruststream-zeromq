@@ -3,9 +3,10 @@ resolver = "3"
 members = ["crates/ruststream-zeromq"]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
-rust-version = "1.85"
+# Follows the core's floor: ruststream 0.7 raised it from 1.85.
+rust-version = "1.88"
 license = "Apache-2.0"
 repository = "https://github.com/powersemmi/ruststream-zeromq"
 authors = ["RustStream contributors"]
@@ -13,7 +14,7 @@ authors = ["RustStream contributors"]
 [workspace.dependencies]
 ruststream-zeromq = { path = "crates/ruststream-zeromq" }
 
-ruststream = { version = ">=0.6.0, <0.7.0", default-features = false }
+ruststream = { version = ">=0.7.0, <0.8.0", default-features = false }
 
 zeromq = { version = "0.6", default-features = false, features = ["tokio-runtime", "all-transport"] }
 bytes = "1"

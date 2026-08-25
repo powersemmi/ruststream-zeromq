@@ -8,8 +8,8 @@ concepts (writing subscribers, routing, codecs, middleware), see the
 [RustStream documentation](https://powersemmi.github.io/ruststream/).
 
 ```toml
-ruststream = { version = "0.6", features = ["macros"] }
-ruststream-zeromq = "0.6"
+ruststream = { version = "0.7", features = ["macros"] }
+ruststream-zeromq = "0.7"
 serde = { version = "1", features = ["derive"] }
 ```
 
@@ -142,6 +142,22 @@ frame that is not UTF-8 is a wire error rather than a lossy guess.
 Because the payload frame is whatever the framework's codec produced, the peer only has to agree on
 the codec: with the default JSON codec, `payload` is the JSON document a handler's input type
 deserializes from.
+
+## Publishing
+
+Every publish runs through the framework's publish builder, whichever surface holds the publisher:
+`message(..)` for a value, `raw(..)` for bytes, with the destination, the headers and the codec
+resolved from the most specific level that names one. Nothing about that chain is transport
+specific here, so the framework's own publishing guide applies unchanged.
+
+A broker crate that has a per-message argument of its own grafts it onto that chain as a publisher
+adapter: a step taken on the publisher before the builder entry point, returning a small publisher
+that captures the argument and applies it to the outgoing message before delegating to the real
+one. This transport ships no such step, and the wire contract above is the reason. A ZeroMQ message
+is a name, a header frame and a payload, which is exactly what the builder already carries; there
+is no delivery mode, expiry, partition or routing key left over to pass per message. The one
+address that does vary per message, the reply address of a DEALER/ROUTER exchange, is a
+destination, so it travels in the destination position like any other.
 
 ## Request and reply
 

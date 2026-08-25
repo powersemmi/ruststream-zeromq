@@ -67,12 +67,12 @@ A Python peer sends `socket.send_multipart([b"orders", b"content-type: applicati
 
 ```toml
 [dependencies]
-ruststream = { version = "0.6", features = ["macros", "json"] }
-ruststream-zeromq = "0.6"
+ruststream = { version = "0.7", features = ["macros", "json"] }
+ruststream-zeromq = "0.7"
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
-ruststream-zeromq = { version = "0.6", features = ["testing"] }
+ruststream-zeromq = { version = "0.7", features = ["testing"] }
 ```
 
 ## Write a service
