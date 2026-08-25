@@ -8,9 +8,7 @@
 //! ```
 
 // --8<-- [start:handler]
-use ruststream::runtime::{App, AppInfo, HandlerResult, RustStream};
-use ruststream::subscriber;
-use ruststream_zeromq::{ZmqEndpoint, ZmqQueue};
+use ruststream_zeromq::prelude::*;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]

@@ -78,9 +78,7 @@ ruststream-zeromq = { version = "0.7", features = ["testing"] }
 ## Write a service
 
 ```rust
-use ruststream::runtime::{App, AppInfo, HandlerResult, RustStream};
-use ruststream::subscriber;
-use ruststream_zeromq::{ZmqEndpoint, ZmqQueue};
+use ruststream_zeromq::prelude::*;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]

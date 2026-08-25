@@ -30,6 +30,7 @@ mod endpoint;
 mod error;
 mod fanout;
 mod message;
+pub mod prelude;
 mod queue;
 mod rpc;
 #[cfg(feature = "testing")]

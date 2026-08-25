@@ -62,6 +62,10 @@ A subscription is named, and the name is the first frame on the wire. For `ZmqFa
 also the subscription prefix the socket filters on, so a subscriber on `events` receives
 `events.created` as well.
 
+`ruststream_zeromq::prelude::*` is one import for a service file: it carries the framework's own
+prelude along with the three patterns, the endpoint and the publish policies. Naming this crate in
+the import path is how a service states which broker it runs on.
+
 ```rust
 --8<-- "crates/ruststream-zeromq/examples/zmq_pipeline.rs:handler"
 ```
