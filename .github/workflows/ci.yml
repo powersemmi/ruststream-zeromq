@@ -15,14 +15,16 @@ concurrency:
 
 jobs:
   rust:
-    name: Rust ${{ matrix.toolchain }}
+    name: Build and test (${{ matrix.toolchain }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        toolchain: [stable, msrv]
+        # The floor, what users build with, and the early warning. Releases in between add
+        # nothing: what fails on a later one fails on the floor too.
+        toolchain: [stable, beta, msrv]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -44,6 +46,15 @@ jobs:
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
           components: rustfmt, clippy
 
+      # Installing a toolchain does not select it: `rust-toolchain.toml` pins stable and outranks
+      # the rustup default the install action sets, so without this the beta and floor legs would
+      # both silently run stable and report a pass they never earned. RUSTUP_TOOLCHAIN outranks
+      # the file.
+      - name: Select the installed toolchain
+        env:
+          TOOLCHAIN: ${{ steps.toolchain.outputs.toolchain }}
+        run: echo "RUSTUP_TOOLCHAIN=$TOOLCHAIN" >> "$GITHUB_ENV"
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
@@ -53,30 +64,120 @@ jobs:
 
       - name: cargo clippy
         if: matrix.toolchain == 'stable'
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+      # Advisory, not a gate: surfaces a lint added by the next clippy release six weeks before
+      # it turns the build red.
+      - name: cargo clippy (beta, advisory)
+        if: matrix.toolchain == 'beta'
+        continue-on-error: true
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
       - name: cargo doc
         if: matrix.toolchain == 'stable'
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --workspace --all-features --no-deps
+        run: cargo doc --locked --workspace --all-features --no-deps
 
       - name: cargo check (no default features)
-        run: cargo check --workspace --no-default-features
+        run: cargo check --locked --workspace --no-default-features
 
       - name: cargo check (all features)
-        run: cargo check --workspace --all-targets --all-features
+        run: cargo check --locked --workspace --all-targets --all-features
 
       # The full suite - conformance, lifecycle, request/reply, and the wire-layout contract -
       # runs on loopback sockets; there is no external broker, which is the point of the crate.
+      # --no-fail-fast: a failing target must not hide failures in the targets behind it; the log
+      # then lists every red test, not just the first binary's.
       - name: cargo test
-        run: cargo test --workspace --all-features
+        run: cargo test --locked --workspace --all-features --no-fail-fast
+
+  features:
+    name: Each feature alone
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-hack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hack
+
+      # --no-dev-deps: the dev-dependency on `ruststream` turns on macros, json, testing and
+      # conformance, so with dev-deps in scope a library item that needs a feature gate compiles
+      # anyway and the missing gate never shows. It also rewrites the manifests in place, which is
+      # why this is the one job without --locked.
+      - name: cargo hack check (each feature)
+        run: cargo hack check --workspace --each-feature --no-dev-deps
+
+  minimal-versions:
+    name: Minimal versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # The same one-line source of truth the matrix leg above reads.
+      - name: Resolve the floor toolchain
+        id: msrv
+        run: |
+          toolchain="$(sed -n 's/^rust-version *= *"\(.*\)"/\1/p' Cargo.toml)"
+          test -n "$toolchain"
+          echo "toolchain=$toolchain" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install nightly (resolver only)
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install the floor toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.toolchain }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # The full flag rather than -Z direct-minimal-versions: the narrow one leaves the assembled
+      # graph unverified, and that is what a user builds. It costs the pinning list below.
+      - name: Resolve minimal versions
+        run: cargo +nightly update -Z minimal-versions
+
+      # `zeromq` declares `async-trait = "0.1"`, `thiserror = "1"` and `log = "0.4"`, and the first
+      # release of each predates what it uses: async-trait 0.1.0 does not build against the `quote`
+      # its own manifest admits, thiserror 1.0.0 has no `#[from]`, and log 0.4.0 has no
+      # path-qualified macros. Too-loose bounds in a third-party manifest; drop each entry when
+      # zeromq's own floor moves past it.
+      - name: Pin dependencies whose declared bounds are too loose
+        run: |
+          cargo update -p async-trait --precise 0.1.20
+          cargo update -p thiserror@1.0.0 --precise 1.0.2
+          cargo update -p log --precise 0.4.4
+
+      # Minimum dependencies on the minimum compiler: the worst case a user can assemble.
+      # Resolution above needs nightly, so only this step drops to the floor.
+      - name: Build and test against minimal versions
+        env:
+          RUSTUP_TOOLCHAIN: ${{ steps.msrv.outputs.toolchain }}
+        run: |
+          cargo check --locked --workspace --all-targets --all-features
+          cargo test --locked --workspace --all-features --no-fail-fast
 
   security:
     name: Security scans
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 

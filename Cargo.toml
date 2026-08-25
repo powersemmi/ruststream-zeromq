@@ -16,12 +16,16 @@ ruststream-zeromq = { path = "crates/ruststream-zeromq" }
 
 ruststream = { version = ">=0.7.0, <0.8.0", default-features = false }
 
+# Floors, not majors. A major-only bound resolves to the first release of that major under the
+# minimal-versions gate, and those releases predate the APIs used here (and in `zeromq`, whose
+# own bounds are major-only). Each floor below is the oldest release the workspace was checked
+# against; raise one only together with a run of that gate.
 zeromq = { version = "0.6", default-features = false, features = ["tokio-runtime", "all-transport"] }
-bytes = "1"
-futures = "0.3"
-thiserror = "2"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
-tracing = "0.1"
+bytes = "1.5"
+futures = "0.3.30"
+thiserror = "2.0.3"
+tokio = { version = "1.38", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tracing = "0.1.40"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
