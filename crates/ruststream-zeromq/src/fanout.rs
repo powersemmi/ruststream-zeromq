@@ -45,6 +45,7 @@ pub mod prelude {
     pub use super::{Publish, ZmqFanout};
 }
 
+use std::future::{Future, ready};
 use std::sync::Arc;
 
 use ruststream::{
@@ -154,11 +155,11 @@ impl ConnectedBroker for ConnectedZmqFanout {
     type Error = ZmqError;
     type Closed = ();
 
-    async fn shutdown(self) -> Result<(), Self::Error> {
+    fn shutdown(self) -> impl Future<Output = Result<(), Self::Error>> {
         self.lifecycle
             .closed
             .store(true, std::sync::atomic::Ordering::Release);
-        Ok(())
+        ready(Ok(()))
     }
 }
 
@@ -267,8 +268,11 @@ pub struct ZmqFanoutPublish;
 impl PublishPolicy<ConnectedZmqFanout> for ZmqFanoutPublish {
     type Live = ZmqFanoutPublisher;
 
-    async fn pair(self, connected: &ConnectedZmqFanout) -> Result<Self::Live, PairError> {
-        Ok(connected.publisher())
+    fn pair(
+        self,
+        connected: &ConnectedZmqFanout,
+    ) -> impl Future<Output = Result<Self::Live, PairError>> {
+        ready(Ok(connected.publisher()))
     }
 }
 
