@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use ruststream::{
-    AckError, Broker, ConnectedBroker, Headers, IncomingMessage, OutgoingMessage, Publisher,
+    AckError, Broker, ConnectedBroker, HeaderMap, IncomingMessage, OutgoingMessage, Publisher,
     Subscribe, Subscriber,
 };
 use ruststream_zeromq::{ZmqEndpoint, ZmqFanout, ZmqQueue};
@@ -25,7 +25,7 @@ async fn queue_roundtrip_preserves_payload_and_headers() {
         .await
         .expect("subscription opens");
 
-    let mut headers = Headers::new();
+    let mut headers = HeaderMap::new();
     headers.insert("content-type", "application/json");
     headers.insert("x-tenant", "acme");
     let publisher = connected.publisher();

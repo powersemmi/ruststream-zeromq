@@ -1,7 +1,7 @@
 //! [`ZmqMessage`]: a delivered message.
 
 use bytes::Bytes;
-use ruststream::{AckError, Headers, IncomingMessage};
+use ruststream::{AckError, HeaderMap, IncomingMessage};
 
 /// A message delivered by one of the transport's subscribers.
 ///
@@ -9,7 +9,7 @@ use ruststream::{AckError, Headers, IncomingMessage};
 /// [`AckError::Unsupported`] rather than emulated.
 pub struct ZmqMessage {
     pub(crate) name: String,
-    pub(crate) headers: Headers,
+    pub(crate) headers: HeaderMap,
     pub(crate) payload: Bytes,
 }
 
@@ -35,7 +35,7 @@ impl IncomingMessage for ZmqMessage {
         &self.payload
     }
 
-    fn headers(&self) -> &Headers {
+    fn headers(&self) -> &HeaderMap {
         &self.headers
     }
 
