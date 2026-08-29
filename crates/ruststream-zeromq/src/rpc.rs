@@ -8,9 +8,10 @@
 /// The publish policy of this form, under the name an include site writes.
 pub use self::ZmqRpcPublish as Publish;
 
-/// The imports a service on the DEALER/ROUTER exchange writes, in one glob: the framework's
-/// prelude, the shared [`ZmqEndpoint`], the descriptor [`ZmqRpc`], its publish policy as
-/// [`Publish`], and the [`RequestReply`] capability.
+/// The imports a service on the DEALER/ROUTER exchange writes, in one glob.
+///
+/// The framework's prelude, the shared [`ZmqEndpoint`], the descriptor [`ZmqRpc`], its publish
+/// policy as [`Publish`], and the [`RequestReply`] capability.
 ///
 /// # Examples
 ///
