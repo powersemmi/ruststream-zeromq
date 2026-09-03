@@ -17,9 +17,9 @@ struct Job {
 }
 
 #[subscriber("jobs")]
-async fn handle(job: &Job) -> HandlerResult {
+async fn handle(job: &Job) -> HandlerOutcome {
     println!("working on job {}", job.id);
-    HandlerResult::Ack
+    HandlerOutcome::ack()
 }
 // --8<-- [end:handler]
 

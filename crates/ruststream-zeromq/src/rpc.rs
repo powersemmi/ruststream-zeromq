@@ -5,13 +5,10 @@
 //! the same ROUTER. The requester side uses the [`RequestReply`] capability: one DEALER per
 //! request, correlated by the `correlation-id` header.
 
-/// The publish policy of this form, under the name an include site writes.
-pub use self::ZmqRpcPublish as Publish;
-
 /// The imports a service on the DEALER/ROUTER exchange writes, in one glob.
 ///
 /// The framework's prelude, the shared [`ZmqEndpoint`], the descriptor [`ZmqRpc`], its publish
-/// policy as [`Publish`], and the [`RequestReply`] capability.
+/// policy [`ZmqRpcPublish`], and the [`RequestReply`] capability.
 ///
 /// # Examples
 ///
@@ -41,7 +38,8 @@ pub use self::ZmqRpcPublish as Publish;
 ///     RustStream::new(AppInfo::new("greeter", "0.1.0")).with_broker(
 ///         ZmqRpc::new(ZmqEndpoint::bind("tcp://0.0.0.0:5557")),
 ///         |b| {
-///             b.include(greet).publisher(TypedPublisher::new(Publish));
+///             b.include(greet)
+///                 .publisher(TypedPublisher::new(ZmqRpcPublish));
 ///         },
 ///     )
 /// }
@@ -54,7 +52,10 @@ pub mod prelude {
     // Only this form implements it; keep it out of the queue and fan-out preludes.
     pub use ruststream::RequestReply;
 
-    pub use super::{Publish, ZmqRpc};
+    // The policy keeps its full name: the framework's prelude owns `Publish` (its out-slot
+    // capability trait), so an alias of that name here would shadow the trait for every
+    // service that globs this module.
+    pub use super::{ZmqRpc, ZmqRpcPublish};
 }
 
 use std::future::{Future, ready};

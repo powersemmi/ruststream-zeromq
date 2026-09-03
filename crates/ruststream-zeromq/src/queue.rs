@@ -1,10 +1,8 @@
 //! [`ZmqQueue`]: the PUSH/PULL pattern - competing consumers, round-robin.
 
-/// The publish policy of this form, under the name an include site writes.
-pub use self::ZmqQueuePublish as Publish;
-
 /// The imports a service on the PUSH/PULL queue writes, in one glob: the framework's prelude, the
-/// shared [`ZmqEndpoint`], the descriptor [`ZmqQueue`], and its publish policy as [`Publish`].
+/// shared [`ZmqEndpoint`], the descriptor [`ZmqQueue`], and its publish policy
+/// [`ZmqQueuePublish`].
 ///
 /// # Examples
 ///
@@ -32,7 +30,8 @@ pub use self::ZmqQueuePublish as Publish;
 ///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
 ///         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
 ///         |b| {
-///             b.include(handle).publisher(TypedPublisher::new(Publish));
+///             b.include(handle)
+///                 .publisher(TypedPublisher::new(ZmqQueuePublish));
 ///         },
 ///     )
 /// }
@@ -42,7 +41,10 @@ pub mod prelude {
 
     pub use crate::endpoint::ZmqEndpoint;
 
-    pub use super::{Publish, ZmqQueue};
+    // The policy keeps its full name: the framework's prelude owns `Publish` (its out-slot
+    // capability trait), so an alias of that name here would shadow the trait for every
+    // service that globs this module.
+    pub use super::{ZmqQueue, ZmqQueuePublish};
 }
 
 use std::future::{Future, ready};

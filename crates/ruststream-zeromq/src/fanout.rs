@@ -4,11 +4,9 @@
 //! started misses what was sent before it arrived (the slow joiner), and a message published
 //! with no matching subscriber is dropped silently.
 
-/// The publish policy of this form, under the name an include site writes.
-pub use self::ZmqFanoutPublish as Publish;
-
 /// The imports a service on the PUB/SUB fan-out writes, in one glob: the framework's prelude, the
-/// shared [`ZmqEndpoint`], the descriptor [`ZmqFanout`], and its publish policy as [`Publish`].
+/// shared [`ZmqEndpoint`], the descriptor [`ZmqFanout`], and its publish policy
+/// [`ZmqFanoutPublish`].
 ///
 /// # Examples
 ///
@@ -22,9 +20,9 @@ pub use self::ZmqFanoutPublish as Publish;
 /// }
 ///
 /// #[subscriber("events")]
-/// async fn handle(event: &Event) -> HandlerResult {
+/// async fn handle(event: &Event) -> HandlerOutcome {
 ///     let _ = event.id;
-///     HandlerResult::Ack
+///     HandlerOutcome::ack()
 /// }
 ///
 /// #[ruststream::app]
@@ -42,7 +40,10 @@ pub mod prelude {
 
     pub use crate::endpoint::ZmqEndpoint;
 
-    pub use super::{Publish, ZmqFanout};
+    // The policy keeps its full name: the framework's prelude owns `Publish` (its out-slot
+    // capability trait), so an alias of that name here would shadow the trait for every
+    // service that globs this module.
+    pub use super::{ZmqFanout, ZmqFanoutPublish};
 }
 
 use std::future::{Future, ready};

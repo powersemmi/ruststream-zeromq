@@ -1,12 +1,11 @@
-//! The imports a service that names more than one `ZeroMQ` form writes, in one glob: the
-//! framework's prelude, the shared [`ZmqEndpoint`], the [`RequestReply`] capability, and the three
-//! form modules.
+//! The imports a service that names more than one `ZeroMQ` form writes, in one glob.
 //!
-//! Reach a form's descriptor and policy through its module - `queue::ZmqQueue`, `queue::Publish`,
-//! `rpc::Publish`. A service on a single form imports that form's prelude
-//! ([`queue::prelude`], [`fanout::prelude`], [`rpc::prelude`]) and writes a bare `Publish` instead.
+//! The framework's prelude, the shared [`ZmqEndpoint`], the [`RequestReply`] capability, the
+//! three descriptors with their publish policies, and the three form modules (for the connected
+//! forms and live publishers, which a service rarely names).
 //!
-//! `Publish` is a publish policy, not the framework's `runtime::Publish` builder.
+//! A service on a single form imports that form's prelude instead: [`queue::prelude`],
+//! [`fanout::prelude`], [`rpc::prelude`].
 //!
 //! # Examples
 //!
@@ -32,10 +31,10 @@
 //! #[ruststream::app]
 //! fn app() -> impl App {
 //!     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
-//!         queue::ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
+//!         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
 //!         |b| {
 //!             b.include(work)
-//!                 .publisher(TypedPublisher::new(queue::Publish));
+//!                 .publisher(TypedPublisher::new(ZmqQueuePublish));
 //!         },
 //!     )
 //! }
@@ -46,5 +45,25 @@ pub use ruststream::prelude::*;
 
 pub use crate::endpoint::ZmqEndpoint;
 
-// No bare `Publish` here: each of the three forms has one, so the name would be ambiguous.
-pub use crate::{fanout, queue, rpc};
+// The descriptors and policies are already distinct per form, so they come in flat; the
+// framework's prelude owns `Publish` (the out-slot capability trait), and a per-form alias of
+// that name would shadow it.
+pub use crate::{
+    ZmqFanout, ZmqFanoutPublish, ZmqQueue, ZmqQueuePublish, ZmqRpc, ZmqRpcPublish, fanout, queue,
+    rpc,
+};
+
+#[cfg(test)]
+mod tests {
+    /// Every prelude this crate ships must leave `Publish` resolving to the framework's
+    /// out-slot capability trait. A name of our own would shadow it under a glob import, and a
+    /// body that bounds its slot on it would fail with "expected trait, found struct" at the
+    /// signature rather than at the import. The bounds below are the whole assertion.
+    #[expect(dead_code, reason = "the bounds are the assertion; nothing calls them")]
+    mod publish_is_the_framework_trait {
+        fn root<P: crate::prelude::Publish>(_: &P) {}
+        fn queue<P: crate::queue::prelude::Publish>(_: &P) {}
+        fn fanout<P: crate::fanout::prelude::Publish>(_: &P) {}
+        fn rpc<P: crate::rpc::prelude::Publish>(_: &P) {}
+    }
+}
