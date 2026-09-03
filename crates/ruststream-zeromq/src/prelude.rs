@@ -45,9 +45,12 @@ pub use ruststream::prelude::*;
 
 pub use crate::endpoint::ZmqEndpoint;
 
-// The descriptors and policies are already distinct per form, so they come in flat; the
-// framework's prelude owns `Publish` (the out-slot capability trait), and a per-form alias of
-// that name would shadow it.
+// The descriptors and policies are already distinct per form, so they come in flat. The bare
+// names the framework's prelude owns for its slot capability traits - `Publish` today,
+// `TransactionalPublish`, `OwnedTransactionalPublish` and `RequestReplyPublish` as they land -
+// are not ours to take: an explicit re-export beats the glob above, so an alias under one of
+// them would replace a trait with a struct for every service that globs this module. The probes
+// below hold the line for the name that exists; extend them as the others arrive.
 pub use crate::{
     ZmqFanout, ZmqFanoutPublish, ZmqQueue, ZmqQueuePublish, ZmqRpc, ZmqRpcPublish, fanout, queue,
     rpc,
@@ -55,15 +58,37 @@ pub use crate::{
 
 #[cfg(test)]
 mod tests {
-    /// Every prelude this crate ships must leave `Publish` resolving to the framework's
-    /// out-slot capability trait. A name of our own would shadow it under a glob import, and a
-    /// body that bounds its slot on it would fail with "expected trait, found struct" at the
-    /// signature rather than at the import. The bounds below are the whole assertion.
+    //! Every prelude this crate ships must leave `Publish` resolving to the framework's slot
+    //! capability trait. Each probe globs one prelude exactly as a service does and then asks
+    //! for the trait as a bound, so a shadowing alias fails here - at the import that caused
+    //! it - rather than in some downstream handler signature with "expected trait, found
+    //! struct".
+
     #[expect(dead_code, reason = "the bounds are the assertion; nothing calls them")]
-    mod publish_is_the_framework_trait {
-        fn root<P: crate::prelude::Publish>(_: &P) {}
-        fn queue<P: crate::queue::prelude::Publish>(_: &P) {}
-        fn fanout<P: crate::fanout::prelude::Publish>(_: &P) {}
-        fn rpc<P: crate::rpc::prelude::Publish>(_: &P) {}
+    mod root {
+        use crate::prelude::*;
+
+        fn probe<T: Publish>() {}
+    }
+
+    #[expect(dead_code, reason = "the bounds are the assertion; nothing calls them")]
+    mod queue {
+        use crate::queue::prelude::*;
+
+        fn probe<T: Publish>() {}
+    }
+
+    #[expect(dead_code, reason = "the bounds are the assertion; nothing calls them")]
+    mod fanout {
+        use crate::fanout::prelude::*;
+
+        fn probe<T: Publish>() {}
+    }
+
+    #[expect(dead_code, reason = "the bounds are the assertion; nothing calls them")]
+    mod rpc {
+        use crate::rpc::prelude::*;
+
+        fn probe<T: Publish>() {}
     }
 }
