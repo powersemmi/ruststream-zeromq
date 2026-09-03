@@ -1,8 +1,10 @@
 //! [`ZmqQueue`]: the PUSH/PULL pattern - competing consumers, round-robin.
 
-/// The imports a service on the PUSH/PULL queue writes, in one glob: the framework's prelude, the
-/// shared [`ZmqEndpoint`], the descriptor [`ZmqQueue`], and its publish policy
-/// [`ZmqQueuePublish`].
+/// The publish policy of this form, under the name a mount site writes.
+pub use self::ZmqQueuePublish as Publish;
+
+/// The imports a routes file on the PUSH/PULL queue writes, in one glob: the framework's prelude,
+/// the shared [`ZmqEndpoint`], the descriptor [`ZmqQueue`], and its publish policy as [`Publish`].
 ///
 /// # Examples
 ///
@@ -30,8 +32,7 @@
 ///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
 ///         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
 ///         |b| {
-///             b.include(handle)
-///                 .publisher(TypedPublisher::new(ZmqQueuePublish));
+///             b.include(handle).publisher(TypedPublisher::new(Publish));
 ///         },
 ///     )
 /// }
@@ -41,10 +42,10 @@ pub mod prelude {
 
     pub use crate::endpoint::ZmqEndpoint;
 
-    // The policy keeps its full name: the framework's prelude owns `Publish` (its out-slot
-    // capability trait), so an alias of that name here would shadow the trait for every
-    // service that globs this module.
-    pub use super::{ZmqQueue, ZmqQueuePublish};
+    // `Publish` is the mount-site vocabulary, and it is why this glob belongs in a routes file
+    // rather than a handler one: a handler imports the framework prelude alone and bounds its
+    // injected publisher with a broker capability trait, so the two names never meet.
+    pub use super::{Publish, ZmqQueue};
 }
 
 use std::future::{Future, ready};

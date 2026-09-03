@@ -4,9 +4,12 @@
 //! started misses what was sent before it arrived (the slow joiner), and a message published
 //! with no matching subscriber is dropped silently.
 
-/// The imports a service on the PUB/SUB fan-out writes, in one glob: the framework's prelude, the
-/// shared [`ZmqEndpoint`], the descriptor [`ZmqFanout`], and its publish policy
-/// [`ZmqFanoutPublish`].
+/// The publish policy of this form, under the name a mount site writes.
+pub use self::ZmqFanoutPublish as Publish;
+
+/// The imports a routes file on the PUB/SUB fan-out writes, in one glob: the framework's prelude,
+/// the shared [`ZmqEndpoint`], the descriptor [`ZmqFanout`], and its publish policy as
+/// [`Publish`].
 ///
 /// # Examples
 ///
@@ -40,10 +43,10 @@ pub mod prelude {
 
     pub use crate::endpoint::ZmqEndpoint;
 
-    // The policy keeps its full name: the framework's prelude owns `Publish` (its out-slot
-    // capability trait), so an alias of that name here would shadow the trait for every
-    // service that globs this module.
-    pub use super::{ZmqFanout, ZmqFanoutPublish};
+    // `Publish` is the mount-site vocabulary, and it is why this glob belongs in a routes file
+    // rather than a handler one: a handler imports the framework prelude alone and bounds its
+    // injected publisher with a broker capability trait, so the two names never meet.
+    pub use super::{Publish, ZmqFanout};
 }
 
 use std::future::{Future, ready};

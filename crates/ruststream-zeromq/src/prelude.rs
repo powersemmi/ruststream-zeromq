@@ -1,11 +1,12 @@
-//! The imports a service that names more than one `ZeroMQ` form writes, in one glob.
+//! The imports a routes file that mounts more than one `ZeroMQ` form writes, in one glob.
 //!
 //! The framework's prelude, the shared [`ZmqEndpoint`], the [`RequestReply`] capability, the
 //! three descriptors with their publish policies, and the three form modules (for the connected
 //! forms and live publishers, which a service rarely names).
 //!
-//! A service on a single form imports that form's prelude instead: [`queue::prelude`],
-//! [`fanout::prelude`], [`rpc::prelude`].
+//! Policies keep their prefixed names here, because all three forms call theirs `Publish` and one
+//! glob cannot carry three. A routes file on a single form imports that form's prelude instead -
+//! [`queue::prelude`], [`fanout::prelude`], [`rpc::prelude`] - and writes the bare `Publish`.
 //!
 //! # Examples
 //!
@@ -45,12 +46,9 @@ pub use ruststream::prelude::*;
 
 pub use crate::endpoint::ZmqEndpoint;
 
-// The descriptors and policies are already distinct per form, so they come in flat. The bare
-// names the framework's prelude owns for its slot capability traits - `Publish` today,
-// `TransactionalPublish`, `OwnedTransactionalPublish` and `RequestReplyPublish` as they land -
-// are not ours to take: an explicit re-export beats the glob above, so an alias under one of
-// them would replace a trait with a struct for every service that globs this module. The probes
-// below hold the line for the name that exists; extend them as the others arrive.
+// Prefixed here, aliased to the bare `Publish` in each form prelude: three forms cannot share
+// one bare name in a single glob, and a routes file that mounts two of them is exactly the file
+// that needs to tell them apart.
 pub use crate::{
     ZmqFanout, ZmqFanoutPublish, ZmqQueue, ZmqQueuePublish, ZmqRpc, ZmqRpcPublish, fanout, queue,
     rpc,
@@ -58,37 +56,65 @@ pub use crate::{
 
 #[cfg(test)]
 mod tests {
-    //! Every prelude this crate ships must leave `Publish` resolving to the framework's slot
-    //! capability trait. Each probe globs one prelude exactly as a service does and then asks
-    //! for the trait as a bound, so a shadowing alias fails here - at the import that caused
-    //! it - rather than in some downstream handler signature with "expected trait, found
-    //! struct".
+    //! What each prelude must carry, checked by globbing it exactly as a file would.
+    //!
+    //! A handler bound names a broker capability trait ([`Publisher`] and its siblings) and a
+    //! mount site names a policy, so both vocabularies have to survive the glob: the capability
+    //! trait as a bound, the policy as a value. A form prelude offers its policy under the bare
+    //! `Publish`; the crate prelude cannot, because three forms would collide, so it offers the
+    //! prefixed names and this pins that difference.
 
-    #[expect(dead_code, reason = "the bounds are the assertion; nothing calls them")]
-    mod root {
-        use crate::prelude::*;
-
-        fn probe<T: Publish>() {}
-    }
-
-    #[expect(dead_code, reason = "the bounds are the assertion; nothing calls them")]
     mod queue {
         use crate::queue::prelude::*;
 
-        fn probe<T: Publish>() {}
+        #[expect(dead_code, reason = "the bound is the assertion; nothing calls it")]
+        fn handler_bound<T: Publisher>() {}
+
+        #[test]
+        fn the_mount_site_vocabulary_is_the_bare_name() {
+            let _: Publish = Publish;
+        }
     }
 
-    #[expect(dead_code, reason = "the bounds are the assertion; nothing calls them")]
     mod fanout {
         use crate::fanout::prelude::*;
 
-        fn probe<T: Publish>() {}
+        #[expect(dead_code, reason = "the bound is the assertion; nothing calls it")]
+        fn handler_bound<T: Publisher>() {}
+
+        #[test]
+        fn the_mount_site_vocabulary_is_the_bare_name() {
+            let _: Publish = Publish;
+        }
     }
 
-    #[expect(dead_code, reason = "the bounds are the assertion; nothing calls them")]
     mod rpc {
         use crate::rpc::prelude::*;
 
-        fn probe<T: Publish>() {}
+        #[expect(dead_code, reason = "the bounds are the assertion; nothing calls them")]
+        fn handler_bound<T: Publisher>() {}
+
+        // The request side rides the same policy, so `RequestReply` is a bound like any other.
+        #[expect(dead_code, reason = "the bounds are the assertion; nothing calls them")]
+        fn request_bound<T: RequestReply>() {}
+
+        #[test]
+        fn the_mount_site_vocabulary_is_the_bare_name() {
+            let _: Publish = Publish;
+        }
+    }
+
+    mod root {
+        use crate::prelude::*;
+
+        #[expect(dead_code, reason = "the bound is the assertion; nothing calls it")]
+        fn handler_bound<T: Publisher>() {}
+
+        #[test]
+        fn the_three_policies_arrive_under_their_prefixed_names() {
+            let _: ZmqQueuePublish = ZmqQueuePublish;
+            let _: ZmqFanoutPublish = ZmqFanoutPublish;
+            let _: ZmqRpcPublish = ZmqRpcPublish;
+        }
     }
 }

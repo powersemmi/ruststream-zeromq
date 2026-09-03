@@ -5,10 +5,17 @@
 //! the same ROUTER. The requester side uses the [`RequestReply`] capability: one DEALER per
 //! request, correlated by the `correlation-id` header.
 
-/// The imports a service on the DEALER/ROUTER exchange writes, in one glob.
+/// The publish policy of this form, under the name a mount site writes.
+///
+/// There is no separate request-side policy to name: both directions of the exchange run on one
+/// [`ZmqRpcPublisher`], which routes replies through the responder's ROUTER and issues requests
+/// over its own DEALER.
+pub use self::ZmqRpcPublish as Publish;
+
+/// The imports a routes file on the DEALER/ROUTER exchange writes, in one glob.
 ///
 /// The framework's prelude, the shared [`ZmqEndpoint`], the descriptor [`ZmqRpc`], its publish
-/// policy [`ZmqRpcPublish`], and the [`RequestReply`] capability.
+/// policy as [`Publish`], and the [`RequestReply`] capability.
 ///
 /// # Examples
 ///
@@ -38,8 +45,7 @@
 ///     RustStream::new(AppInfo::new("greeter", "0.1.0")).with_broker(
 ///         ZmqRpc::new(ZmqEndpoint::bind("tcp://0.0.0.0:5557")),
 ///         |b| {
-///             b.include(greet)
-///                 .publisher(TypedPublisher::new(ZmqRpcPublish));
+///             b.include(greet).publisher(TypedPublisher::new(Publish));
 ///         },
 ///     )
 /// }
@@ -52,10 +58,10 @@ pub mod prelude {
     // Only this form implements it; keep it out of the queue and fan-out preludes.
     pub use ruststream::RequestReply;
 
-    // The policy keeps its full name: the framework's prelude owns `Publish` (its out-slot
-    // capability trait), so an alias of that name here would shadow the trait for every
-    // service that globs this module.
-    pub use super::{ZmqRpc, ZmqRpcPublish};
+    // `Publish` is the mount-site vocabulary, and it is why this glob belongs in a routes file
+    // rather than a handler one: a handler imports the framework prelude alone and bounds its
+    // injected publisher with a broker capability trait, so the two names never meet.
+    pub use super::{Publish, ZmqRpc};
 }
 
 use std::future::{Future, ready};

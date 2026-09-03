@@ -62,13 +62,21 @@ A subscription is named, and the name is the first frame on the wire. For `ZmqFa
 also the subscription prefix the socket filters on, so a subscriber on `events` receives
 `events.created` as well.
 
-Each pattern ships its own prelude, and that is the one import a service file needs:
+Each pattern ships its own prelude, and that is the one import a routes file needs:
 `ruststream_zeromq::queue::prelude::*`, `fanout::prelude::*` or `rpc::prelude::*`. It carries the
-framework's own prelude, the endpoint, the pattern's descriptor, and the pattern's publish policy;
-`rpc::prelude` also carries `RequestReply`.
+framework's own prelude, the endpoint, the pattern's descriptor, and the pattern's publish policy
+under the name `Publish`; `rpc::prelude` also carries `RequestReply`. Because every pattern names
+its policy `Publish`, moving a service between patterns changes the import line and nothing at the
+mount site.
 
-A file that names more than one pattern imports `ruststream_zeromq::prelude::*`, which carries all
-three descriptors and all three policies under their own names.
+Two vocabularies, two files. A mount site names a *policy* and reaches it through the pattern
+prelude above; a handler bounds its injected publisher with a *broker capability trait*
+(`Publisher`, `RequestReply`) and imports `ruststream::prelude::*` alone. Keeping handlers off the
+pattern prelude is what keeps the bare `Publish` free for the mount site.
+
+A file that mounts more than one pattern imports `ruststream_zeromq::prelude::*` instead. Three
+patterns cannot share one bare name, so that glob carries the prefixed policies -
+`ZmqQueuePublish`, `ZmqFanoutPublish`, `ZmqRpcPublish` - alongside the three descriptors.
 
 ```rust
 --8<-- "crates/ruststream-zeromq/examples/zmq_pipeline.rs:handler"
