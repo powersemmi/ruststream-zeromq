@@ -64,11 +64,11 @@ also the subscription prefix the socket filters on, so a subscriber on `events` 
 
 Each pattern ships its own prelude, and that is the one import a service file needs:
 `ruststream_zeromq::queue::prelude::*`, `fanout::prelude::*` or `rpc::prelude::*`. It carries the
-framework's own prelude, the endpoint, the pattern's descriptor, and the pattern's publish policy
-under the name `Publish`; `rpc::prelude` also carries `RequestReply`.
+framework's own prelude, the endpoint, the pattern's descriptor, and the pattern's publish policy;
+`rpc::prelude` also carries `RequestReply`.
 
-A file that names more than one pattern imports `ruststream_zeromq::prelude::*` and qualifies:
-`queue::Publish`, `rpc::Publish`.
+A file that names more than one pattern imports `ruststream_zeromq::prelude::*`, which carries all
+three descriptors and all three policies under their own names.
 
 ```rust
 --8<-- "crates/ruststream-zeromq/examples/zmq_pipeline.rs:handler"
@@ -154,9 +154,14 @@ deserializes from.
 ## Publishing
 
 Every publish runs through the framework's publish builder, whichever surface holds the publisher:
-`message(..)` for a value, `raw(..)` for bytes, with the destination, the headers and the codec
-resolved from the most specific level that names one. This transport adds no step of its own to
-that chain, so the framework's own publishing guide applies unchanged.
+`message(..)` carries a value and the wire follows that value's type, with the destination, the
+headers and the codec resolved from the most specific level that names one. This transport adds no
+step of its own to that chain, so the framework's own publishing guide applies unchanged.
+
+Bytes a service already holds encoded - the common case when the peer on the other side framed
+them - travel as a `#[derive(Outgoing, Serialized)]` newtype through the same `message(..)` call.
+No codec runs on them, and the type names on the channel what would otherwise be an anonymous
+payload.
 
 ## Request and reply
 
