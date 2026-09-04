@@ -28,14 +28,16 @@ pub use self::ZmqRpcPublish as Publish;
 ///     who: String,
 /// }
 ///
+/// // `Reply` is the marker naming the reply position at the mount site, so the message type
+/// // answering the request carries its own name.
 /// #[derive(Serialize)]
-/// struct Reply {
+/// struct Answer {
 ///     text: String,
 /// }
 ///
 /// #[subscriber("greeter", publish("reply"))]
-/// async fn greet(request: &Greeting) -> Reply {
-///     Reply {
+/// async fn greet(request: &Greeting) -> Answer {
+///     Answer {
 ///         text: format!("hello {}", request.who),
 ///     }
 /// }
@@ -45,7 +47,7 @@ pub use self::ZmqRpcPublish as Publish;
 ///     RustStream::new(AppInfo::new("greeter", "0.1.0")).with_broker(
 ///         ZmqRpc::new(ZmqEndpoint::bind("tcp://0.0.0.0:5557")),
 ///         |b| {
-///             b.include(greet).publisher(Publish);
+///             b.include(greet).out(Reply, Publish);
 ///         },
 ///     )
 /// }

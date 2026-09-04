@@ -54,9 +54,10 @@ publisher:
 | `ZmqFanout` | PUB/SUB | Broadcast: each message reaches every subscriber whose name prefix matches. | `ZmqFanoutPublish` |
 | `ZmqRpc` | DEALER/ROUTER | Request and reply. | `ZmqRpcPublish` |
 
-Each policy is also the `DefaultPublish` policy of its connected form, so a
-`#[subscriber(.., publish("dest"))]` handler mounted without an explicit publisher sends through
-it.
+A mount site names a policy with one verb, `.out(marker, policy)`: `Reply` for the value a
+`#[subscriber(.., publish("dest"))]` handler returns, a slot marker for an injected `Out<..>`
+publisher. Each policy is also the `DefaultPublish` policy of its connected form, so a handler
+mounted without an `.out(Reply, ..)` call sends its reply through it anyway.
 
 A subscription is named, and the name is the first frame on the wire. For `ZmqFanout` that name is
 also the subscription prefix the socket filters on, so a subscriber on `events` receives
@@ -223,7 +224,7 @@ literal destination in the decorator:
 --8<-- "crates/ruststream-zeromq/examples/zmq_request_reply.rs:transform"
 ```
 
-Mounting the handler with that transform on its publisher is the whole wiring:
+Naming that publisher at the reply position and hanging the transform on it is the whole wiring:
 
 ```rust
 --8<-- "crates/ruststream-zeromq/examples/zmq_request_reply.rs:responder"
