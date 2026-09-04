@@ -32,7 +32,7 @@ pub use self::ZmqQueuePublish as Publish;
 ///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
 ///         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
 ///         |b| {
-///             b.include(handle).publisher(TypedPublisher::new(Publish));
+///             b.include(handle).publisher(Publish);
 ///         },
 ///     )
 /// }

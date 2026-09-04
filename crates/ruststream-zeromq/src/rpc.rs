@@ -45,7 +45,7 @@ pub use self::ZmqRpcPublish as Publish;
 ///     RustStream::new(AppInfo::new("greeter", "0.1.0")).with_broker(
 ///         ZmqRpc::new(ZmqEndpoint::bind("tcp://0.0.0.0:5557")),
 ///         |b| {
-///             b.include(greet).publisher(TypedPublisher::new(Publish));
+///             b.include(greet).publisher(Publish);
 ///         },
 ///     )
 /// }

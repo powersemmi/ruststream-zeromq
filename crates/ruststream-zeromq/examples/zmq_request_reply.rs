@@ -13,9 +13,7 @@ use std::io;
 use std::time::Duration;
 
 use ruststream::codec::{Codec, JsonCodec};
-use ruststream::runtime::{
-    App, AppInfo, Outgoing, PublishContext, PublishTransform, RustStream, TypedPublisher,
-};
+use ruststream::runtime::{App, AppInfo, Outgoing, PublishContext, PublishTransform, RustStream};
 use ruststream::{IncomingMessage, OutgoingMessage, RequestReply, subscriber};
 use ruststream_zeromq::{ZmqEndpoint, ZmqRpc, ZmqRpcPublish};
 use serde::{Deserialize, Serialize};
@@ -65,7 +63,8 @@ fn app() -> impl App {
         |b| {
             // --8<-- [start:responder]
             b.include(greet)
-                .publisher(TypedPublisher::new(ZmqRpcPublish).transform(ReplyToRequester));
+                .publisher(ZmqRpcPublish)
+                .transform(ReplyToRequester);
             // --8<-- [end:responder]
 
             // --8<-- [start:request]
