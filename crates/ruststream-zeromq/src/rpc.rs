@@ -69,20 +69,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
+use futures::Stream;
 use ruststream::{
     Broker, ConnectedBroker, DefaultPublish, DescribeServer, OutgoingMessage, PairError,
-    PublishPolicy, Publisher, RequestReply, ServerSpec, Subscribe,
+    PublishPolicy, Publisher, RequestReply, ServerSpec, Subscribe, Subscriber,
 };
 use tokio::sync::{Mutex, OnceCell, mpsc};
 use zeromq::prelude::*;
 use zeromq::util::PeerIdentity;
 use zeromq::{DealerSocket, RouterSendHalf, RouterSocket, SocketOptions};
 
-use crate::common::{DriverHandle, Lifecycle, SharedLifecycle, send_with_retry};
+use crate::common::{DriverHandle, Lifecycle, SharedLifecycle, WireSubscriber, send_with_retry};
 use crate::endpoint::ZmqEndpoint;
 use crate::error::ZmqError;
 use crate::message::ZmqMessage;
-use crate::queue::ZmqSubscriber;
 use crate::wire;
 
 /// The prefix of reply destinations minted by the responder subscription.
@@ -222,8 +222,40 @@ impl ConnectedBroker for ConnectedZmqRpc {
     }
 }
 
+/// A responder subscription on the ROUTER socket, yielding one request at a time.
+///
+/// It is the one subscriber of this crate that is no
+/// [`BatchSubscriber`](ruststream::BatchSubscriber), so `.batch(..)` on a `ZmqRpc` registration
+/// does not compile - deliberately. A responder exists to answer, and the address it answers at
+/// travels per request in the `reply-to` header the ROUTER stamps on it; a page carries one
+/// publish context for the whole page, so a page's answers could not be addressed to the peers
+/// that asked. Keeping the capability off the type turns that into a compile error instead of a
+/// run of misrouted replies. Page the one-way patterns ([`ZmqQueue`](crate::ZmqQueue),
+/// [`ZmqFanout`](crate::ZmqFanout)) instead, and answer requests one at a time.
+pub struct ZmqRpcSubscriber {
+    name: String,
+    inner: WireSubscriber,
+}
+
+impl std::fmt::Debug for ZmqRpcSubscriber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ZmqRpcSubscriber")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Subscriber for ZmqRpcSubscriber {
+    type Message = ZmqMessage;
+    type Error = ZmqError;
+
+    fn stream(&mut self) -> impl Stream<Item = Result<ZmqMessage, ZmqError>> + Send + '_ {
+        self.inner.stream()
+    }
+}
+
 impl Subscribe for ConnectedZmqRpc {
-    type Subscriber = ZmqSubscriber;
+    type Subscriber = ZmqRpcSubscriber;
 
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
         self.shared.lifecycle.ensure_open()?;
@@ -272,11 +304,13 @@ impl Subscribe for ConnectedZmqRpc {
                 }
             }
         });
-        Ok(ZmqSubscriber::from_parts(
-            name.to_owned(),
-            rx,
-            DriverHandle { task },
-        ))
+        Ok(ZmqRpcSubscriber {
+            name: name.to_owned(),
+            inner: WireSubscriber {
+                rx,
+                _driver: DriverHandle { task },
+            },
+        })
     }
 }
 
@@ -426,4 +460,31 @@ impl PublishPolicy<ConnectedZmqRpc> for ZmqRpcPublish {
 
 impl DefaultPublish for ConnectedZmqRpc {
     type Policy = ZmqRpcPublish;
+}
+
+#[cfg(test)]
+mod tests {
+    //! Where the paging capability sits, pinned as bounds.
+    //!
+    //! The one-way patterns page; the responder only delivers, so a `.batch(..)` registration on
+    //! [`ZmqRpc`] fails to compile rather than answering a page of requests at one address. The
+    //! absence cannot be written as a bound, so it lives in [`ZmqRpcSubscriber`]'s own docs; what
+    //! is checkable is that the split has not quietly collapsed.
+
+    use ruststream::{BatchSubscriber, Subscriber};
+
+    use super::ZmqRpcSubscriber;
+    use crate::ZmqSubscriber;
+
+    #[expect(dead_code, reason = "the bounds are the assertion; nothing calls them")]
+    fn pages<S: BatchSubscriber>() {}
+
+    #[expect(dead_code, reason = "the bounds are the assertion; nothing calls them")]
+    fn delivers<S: Subscriber>() {}
+
+    #[expect(dead_code, reason = "the bounds are the assertion; nothing calls them")]
+    fn split() {
+        pages::<ZmqSubscriber>();
+        delivers::<ZmqRpcSubscriber>();
+    }
 }

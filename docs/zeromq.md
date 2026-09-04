@@ -22,7 +22,7 @@ acknowledgement lands:
 | --- | --- | --- |
 | `Subscribe` | Yes | All three connected forms open a subscription by name, and the name is the first frame on the wire. See [The three patterns](#the-three-patterns). |
 | Acknowledgement (`ack` / `nack`) | No | Both report `AckError::Unsupported`. Delivery is at most once: once a socket has handed a message over, no protocol frame exists to settle it, and there is no store to redeliver from, so emulating a result would report a guarantee the transport does not provide. |
-| `BatchSubscriber` | No | A socket yields one multipart message at a time; there is no batch receive. |
+| `BatchSubscriber` | Client-side, on the one-way patterns | A socket yields one multipart message per receive, so there is no batch receive to translate a page size into; `ZmqQueue` and `ZmqFanout` assemble the pages on the client instead, to the size the mount site named. `ZmqRpc` does not carry it at all, deliberately: a page of requests could not be answered per requester, so `.batch(..)` on a responder is a compile error. See [Pages](#pages). |
 | `TransactionalPublisher` | No | ZeroMQ has no transactions. |
 | `OwnedTransactions` | No | ZeroMQ has no transactions. |
 | `RequestReply` | Yes, on `ZmqRpc` | `ZmqRpcPublisher` implements it over DEALER/ROUTER: a request goes out on a DEALER socket and the answer is matched by the `correlation-id` header, or the call fails on timeout. `ZmqQueue` and `ZmqFanout` are one-way patterns with no return path, so their publishers do not implement it. See [Request and reply](#request-and-reply). |
@@ -87,6 +87,36 @@ Wiring the handler onto a pattern is identical to any other broker:
 ```rust
 --8<-- "crates/ruststream-zeromq/examples/zmq_pipeline.rs:app"
 ```
+
+## Pages
+
+A handler that takes a slice is handed a whole page of jobs, and the mount site says how large a
+page may get:
+
+```rust
+--8<-- "crates/ruststream-zeromq/examples/zmq_pages.rs:handler"
+```
+
+```rust
+--8<-- "crates/ruststream-zeromq/examples/zmq_pages.rs:app"
+```
+
+A receive on a socket yields one multipart message, so there is no batch receive for that number to
+turn into. The deliveries are collected on this side instead: a page closes once it holds the size
+the mount named, or 20 ms after its first delivery, whichever comes first. A page therefore never
+carries more than the mount asked for and often carries fewer, which is the framework's contract
+either way - nothing at the mount site says whether the transport paged or the client did.
+
+The 20 ms is the crate's own and not a setting. It bounds the latency a partial page costs, and it
+is short against the round trip the socket is waiting on anyway; the page size is not the crate's
+to choose, since it arrives per subscription from the mount site.
+
+`ZmqRpc` is the exception: `.batch(..)` on a responder registration does not compile. A responder
+exists to answer, and the address it answers at travels per request in the `reply-to` header the
+ROUTER stamps on it, while a page carries a single publish context for all of its replies.
+Answering a page would send every reply to one peer, so `ZmqRpcSubscriber` carries no
+`BatchSubscriber` and the mistake is a compile error naming the type rather than a run of
+misrouted replies.
 
 ## Endpoints
 
@@ -206,7 +236,9 @@ responder and requester in one process, over an ephemeral bind.
 ## Testing
 
 The `testing` feature ships `ZmqTestBroker`: an in-process stand-in that reproduces the crate's core
-routing with no sockets and no network. It follows the same ladder as the real patterns, and its
+routing with no sockets and no network. It delivers one message at a time and pages on the client
+exactly as `ZmqQueue` does, so a page handler that runs in production also runs under the harness.
+It follows the same ladder as the real patterns, and its
 connected form implements `ruststream::testing::TestableBroker`, so the same broker drives the
 `TestApp` harness and the framework's conformance suite; inject traffic with
 `broker.inject(OutgoingMessage::new(..))` and assert on published output with the free
@@ -214,5 +246,6 @@ connected form implements `ruststream::testing::TestableBroker`, so the same bro
 [Unit-testing a service with TestApp](https://powersemmi.github.io/ruststream/latest/guides/testing/#unit-testing-a-service-with-testapp).
 
 Socket-level behaviour needs no external service. The conformance routing suite, the lifecycle
-ladder, the request/reply capability, and a wire-layout check driven by a raw foreign-style peer all
-run on loopback sockets, so `just test` covers the whole crate with nothing to start first.
+ladder, the batch and request/reply capabilities, and a wire-layout check driven by a raw
+foreign-style peer all run on loopback sockets, so `just test` covers the whole crate with nothing
+to start first.

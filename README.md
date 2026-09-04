@@ -31,6 +31,8 @@ Three socket patterns cover three messaging shapes:
 - **`ZmqFanout`** - PUB/SUB: broadcast, prefix filtering by name.
 - **`ZmqRpc`** - DEALER/ROUTER: request and reply (`RequestReply` on the publisher; replies route back through the responder's `reply-to` header).
 
+A socket hands over one message per receive, so a `&[T]` page handler on `ZmqQueue` or `ZmqFanout` is served by assembling its pages on the client, to the size the mount site names (`b.include(drain.batch(nonzero!(32)))`). `ZmqRpc` does not page: a page carries one publish context for all of its replies, and a responder answers each requester at its own `reply-to` address, so `.batch(..)` there is a compile error rather than a run of misrouted replies.
+
 Because there is no server, the role is explicit - which side listens is a deployment decision:
 
 ```rust

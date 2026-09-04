@@ -49,18 +49,21 @@ pub mod prelude {
 }
 
 use std::future::{Future, ready};
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use futures::Stream;
 use ruststream::{
-    Broker, ConnectedBroker, DefaultPublish, DescribeServer, OutgoingMessage, PairError,
-    PublishPolicy, Publisher, ServerSpec, Subscribe, Subscriber,
+    BatchSubscriber, Broker, BufferedSubscriber, ConnectedBroker, DefaultPublish, DescribeServer,
+    OutgoingMessage, PairError, PublishPolicy, Publisher, ServerSpec, Subscribe, Subscriber,
 };
 use tokio::sync::{Mutex, OnceCell, mpsc};
 use zeromq::prelude::*;
 use zeromq::{PullSocket, PushSocket};
 
-use crate::common::{DriverHandle, Lifecycle, SharedLifecycle, send_with_retry};
+use crate::common::{
+    DriverHandle, Lifecycle, PAGE_MAX_WAIT, SharedLifecycle, WireSubscriber, send_with_retry,
+};
 use crate::endpoint::ZmqEndpoint;
 use crate::error::ZmqError;
 use crate::message::ZmqMessage;
@@ -197,19 +200,19 @@ impl Subscribe for ConnectedZmqQueue {
                 }
             }
         });
-        Ok(ZmqSubscriber {
-            name: name.to_owned(),
+        Ok(ZmqSubscriber::from_parts(
+            name.to_owned(),
             rx,
-            _driver: DriverHandle { task },
-        })
+            DriverHandle { task },
+        ))
     }
 }
 
-/// A subscription on one of the transport's patterns; yields [`ZmqMessage`]s.
+/// A subscription on one of the one-way patterns - PUSH/PULL or PUB/SUB - yielding
+/// [`ZmqMessage`]s singly or in pages.
 pub struct ZmqSubscriber {
     name: String,
-    rx: mpsc::UnboundedReceiver<Result<ZmqMessage, ZmqError>>,
-    _driver: DriverHandle,
+    inner: BufferedSubscriber<WireSubscriber>,
 }
 
 impl std::fmt::Debug for ZmqSubscriber {
@@ -228,8 +231,11 @@ impl ZmqSubscriber {
     ) -> Self {
         Self {
             name,
-            rx,
-            _driver: driver,
+            inner: BufferedSubscriber::new(WireSubscriber {
+                rx,
+                _driver: driver,
+            })
+            .max_wait(PAGE_MAX_WAIT),
         }
     }
 }
@@ -239,10 +245,21 @@ impl Subscriber for ZmqSubscriber {
     type Error = ZmqError;
 
     fn stream(&mut self) -> impl Stream<Item = Result<ZmqMessage, ZmqError>> + Send + '_ {
-        // Poll the channel in place rather than wrapping it in an owning stream, so `stream`
-        // can be called again after the returned stream is dropped (the runtime and the
-        // conformance helpers re-enter it per call).
-        futures::stream::poll_fn(move |cx| self.rx.poll_recv(cx))
+        self.inner.stream()
+    }
+}
+
+/// The transport has no pages of its own - a receive yields one multipart message - so they are
+/// assembled on the client, to the size the registration named. The deadline that closes a partial
+/// page is the crate's own (20 ms); the size is not, it arrives per subscription.
+impl BatchSubscriber for ZmqSubscriber {
+    type Batch = Vec<ZmqMessage>;
+
+    fn batches(
+        &mut self,
+        size: NonZeroUsize,
+    ) -> impl Stream<Item = Result<Self::Batch, ZmqError>> + Send + '_ {
+        self.inner.batches(size)
     }
 }
 

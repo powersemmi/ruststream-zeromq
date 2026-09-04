@@ -30,6 +30,19 @@ async fn zmq_queue_passes_lifecycle() {
     .await;
 }
 
+/// The pages are assembled on the client, so this is where the size the subscription was opened
+/// with is proved to cap them - the suite opens at a size smaller than the run.
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zmq_queue_passes_batch_suite() {
+    capabilities::batches(
+        || ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")),
+        |name| Name::new(name.to_owned()),
+        |connected| connected.publisher(),
+    )
+    .await;
+}
+
 #[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn zmq_rpc_passes_request_reply_suite() {

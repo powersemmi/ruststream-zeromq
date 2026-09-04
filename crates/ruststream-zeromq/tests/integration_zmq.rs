@@ -1,16 +1,20 @@
 //! End-to-end checks over real sockets on the loopback, including the wire-layout contract a
 //! non-Rust peer relies on.
 
+use std::io;
 use std::pin::pin;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use futures::StreamExt;
-use ruststream::runtime::PublishExt;
+use ruststream::runtime::{AppInfo, HandlerOutcome, PublishExt, RustStream, SubscriberSettings};
 use ruststream::{
     AckError, Broker, ConnectedBroker, HeaderMap, IncomingMessage, Outgoing, OutgoingMessage,
-    Publisher, Serialized, Subscribe, Subscriber,
+    Publisher, Serialized, Subscribe, Subscriber, nonzero, subscriber,
 };
-use ruststream_zeromq::{ZmqEndpoint, ZmqFanout, ZmqQueue};
+use ruststream_zeromq::{ZmqEndpoint, ZmqFanout, ZmqQueue, ZmqQueuePublish};
+use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 use zeromq::prelude::*;
 
 const RECV_TIMEOUT: Duration = Duration::from_secs(10);
@@ -127,6 +131,74 @@ async fn fanout_filters_by_name_prefix() {
     assert_eq!(message.name(), "orders.eu.1");
 
     connected.shutdown().await.expect("shutdown succeeds");
+}
+
+#[derive(Debug, Deserialize, Serialize, Outgoing)]
+#[outgoing(name = "pages")]
+struct Job {
+    id: usize,
+}
+
+/// Reports the length of every page it is handed, so the test reads the shape back without
+/// waiting on a clock.
+static PAGES: OnceLock<mpsc::UnboundedSender<usize>> = OnceLock::new();
+
+#[subscriber("pages")]
+async fn record_pages(jobs: &[Job]) -> HandlerOutcome {
+    PAGES
+        .get()
+        .expect("the test installs the sender before the app starts")
+        .send(jobs.len())
+        .expect("the test holds the receiver");
+    HandlerOutcome::ack()
+}
+
+/// A socket hands over one multipart message per receive, so the pages a `&[T]` body sees are
+/// assembled on the client - and the size the mount site named is what caps them. This runs the
+/// whole path a service writes: a page mount, real sockets, and a publisher dialing the port the
+/// subscription bound.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_page_mount_caps_the_pages_a_body_sees() {
+    const PAGE: usize = 3;
+    const COUNT: usize = 7;
+
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    PAGES.set(tx).expect("one page mount per test binary");
+
+    let app = RustStream::new(AppInfo::new("pager", "0.1.0")).with_broker(
+        ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")),
+        |b| {
+            b.include(record_pages.batch(nonzero!(3)));
+            // `start()` resolves only after subscriptions are open, and this hook runs there, so
+            // the publisher has a bound address to dial and nothing is published into the void.
+            b.after_startup(ZmqQueuePublish, async move |publisher| -> io::Result<()> {
+                for id in 0..COUNT {
+                    publisher
+                        .message(&Job { id })
+                        .publish()
+                        .await
+                        .map_err(io::Error::other)?;
+                }
+                Ok(())
+            });
+        },
+    );
+    let running = app.start().await.expect("startup succeeds");
+
+    let mut seen = 0;
+    while seen < COUNT {
+        let page = tokio::time::timeout(RECV_TIMEOUT, rx.recv())
+            .await
+            .expect("a page arrives")
+            .expect("the app holds the sender");
+        assert!(
+            page <= PAGE,
+            "a page must never carry more than the size the mount named: got {page}",
+        );
+        seen += page;
+    }
+
+    running.shutdown().await.expect("shutdown succeeds");
 }
 
 /// The documented three-frame layout is the contract a Python or C++ peer composes by hand;

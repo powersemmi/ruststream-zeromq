@@ -1,21 +1,27 @@
 //! [`ZmqTestSubscriber`] and [`ZmqTestMessage`].
 
 use std::future::{Future, ready};
+use std::num::NonZeroUsize;
 use std::sync::{Arc, OnceLock};
 
 use futures::Stream;
 
-use ruststream::{AckError, HeaderMap, IncomingMessage, Subscriber, testing::Coordinator};
+use ruststream::{
+    AckError, BatchSubscriber, BufferedSubscriber, HeaderMap, IncomingMessage, Subscriber,
+    testing::Coordinator,
+};
 
+use crate::common::PAGE_MAX_WAIT;
 use crate::error::ZmqError;
 use crate::testing::broker::TestState;
 use crate::testing::router::{Delivery, DeliveryReceiver, DeliverySender, SubscriptionId};
 
-/// Subscriber returned by [`ConnectedZmqTestBroker`](crate::testing::ConnectedZmqTestBroker).
+/// The routed side of an in-process subscription, matching the real transport's one-at-a-time
+/// delivery; pages are assembled over it by the wrapper in [`ZmqTestSubscriber`].
 ///
 /// Dropping it unregisters the subscription, so handlers stop receiving as soon as their task
 /// finishes.
-pub struct ZmqTestSubscriber {
+struct TestWire {
     state: Arc<TestState>,
     id: SubscriptionId,
     rx: DeliveryReceiver,
@@ -25,37 +31,13 @@ pub struct ZmqTestSubscriber {
     coordinator: Option<Coordinator>,
 }
 
-impl std::fmt::Debug for ZmqTestSubscriber {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ZmqTestSubscriber").finish_non_exhaustive()
-    }
-}
-
-impl ZmqTestSubscriber {
-    pub(crate) fn new(
-        state: Arc<TestState>,
-        id: SubscriptionId,
-        rx: DeliveryReceiver,
-        requeue: DeliverySender,
-        coordinator: Option<Coordinator>,
-    ) -> Self {
-        Self {
-            state,
-            id,
-            rx,
-            requeue,
-            coordinator,
-        }
-    }
-}
-
-impl Drop for ZmqTestSubscriber {
+impl Drop for TestWire {
     fn drop(&mut self) {
         self.state.router.unsubscribe(self.id);
     }
 }
 
-impl Subscriber for ZmqTestSubscriber {
+impl Subscriber for TestWire {
     type Message = ZmqTestMessage;
     type Error = ZmqError;
 
@@ -76,6 +58,60 @@ impl Subscriber for ZmqTestSubscriber {
                 })
             })
         })
+    }
+}
+
+/// Subscriber returned by [`ConnectedZmqTestBroker`](crate::testing::ConnectedZmqTestBroker).
+pub struct ZmqTestSubscriber {
+    inner: BufferedSubscriber<TestWire>,
+}
+
+impl std::fmt::Debug for ZmqTestSubscriber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ZmqTestSubscriber").finish_non_exhaustive()
+    }
+}
+
+impl ZmqTestSubscriber {
+    pub(crate) fn new(
+        state: Arc<TestState>,
+        id: SubscriptionId,
+        rx: DeliveryReceiver,
+        requeue: DeliverySender,
+        coordinator: Option<Coordinator>,
+    ) -> Self {
+        Self {
+            inner: BufferedSubscriber::new(TestWire {
+                state,
+                id,
+                rx,
+                requeue,
+                coordinator,
+            })
+            .max_wait(PAGE_MAX_WAIT),
+        }
+    }
+}
+
+impl Subscriber for ZmqTestSubscriber {
+    type Message = ZmqTestMessage;
+    type Error = ZmqError;
+
+    fn stream(&mut self) -> impl Stream<Item = Result<Self::Message, Self::Error>> + Send + '_ {
+        self.inner.stream()
+    }
+}
+
+/// Pages the same way the real subscriber does - on the client, to the size the registration
+/// named - so a page handler that runs in production also compiles and runs in a `TestApp`.
+impl BatchSubscriber for ZmqTestSubscriber {
+    type Batch = Vec<ZmqTestMessage>;
+
+    fn batches(
+        &mut self,
+        size: NonZeroUsize,
+    ) -> impl Stream<Item = Result<Self::Batch, ZmqError>> + Send + '_ {
+        self.inner.batches(size)
     }
 }
 
