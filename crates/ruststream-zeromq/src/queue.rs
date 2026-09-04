@@ -62,7 +62,7 @@ use zeromq::prelude::*;
 use zeromq::{PullSocket, PushSocket};
 
 use crate::common::{
-    DriverHandle, Lifecycle, PAGE_MAX_WAIT, SharedLifecycle, WireSubscriber, send_with_retry,
+    BATCH_MAX_WAIT, DriverHandle, Lifecycle, SharedLifecycle, WireSubscriber, send_with_retry,
 };
 use crate::endpoint::ZmqEndpoint;
 use crate::error::ZmqError;
@@ -209,7 +209,7 @@ impl Subscribe for ConnectedZmqQueue {
 }
 
 /// A subscription on one of the one-way patterns - PUSH/PULL or PUB/SUB - yielding
-/// [`ZmqMessage`]s singly or in pages.
+/// [`ZmqMessage`]s singly or in batches.
 pub struct ZmqSubscriber {
     name: String,
     inner: BufferedSubscriber<WireSubscriber>,
@@ -235,7 +235,7 @@ impl ZmqSubscriber {
                 rx,
                 _driver: driver,
             })
-            .max_wait(PAGE_MAX_WAIT),
+            .max_wait(BATCH_MAX_WAIT),
         }
     }
 }
@@ -249,9 +249,9 @@ impl Subscriber for ZmqSubscriber {
     }
 }
 
-/// The transport has no pages of its own - a receive yields one multipart message - so they are
+/// The transport has no batches of its own - a receive yields one multipart message - so they are
 /// assembled on the client, to the size the registration named. The deadline that closes a partial
-/// page is the crate's own (20 ms); the size is not, it arrives per subscription.
+/// batch is the crate's own (20 ms); the size is not, it arrives per subscription.
 impl BatchSubscriber for ZmqSubscriber {
     type Batch = Vec<ZmqMessage>;
 

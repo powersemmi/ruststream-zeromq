@@ -30,7 +30,7 @@ async fn zmq_queue_passes_lifecycle() {
     .await;
 }
 
-/// The pages are assembled on the client, so this is where the size the subscription was opened
+/// The batches are assembled on the client, so this is where the size the subscription was opened
 /// with is proved to cap them - the suite opens at a size smaller than the run.
 #[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

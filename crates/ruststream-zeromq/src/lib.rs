@@ -11,8 +11,9 @@
 //! - [`ZmqRpc`] - DEALER/ROUTER: request and reply.
 //!
 //! A receive yields one multipart message, so the two one-way patterns serve a `&[T]` handler by
-//! assembling its pages on the client, to the size the mount site names. The request-reply form
-//! deliberately does not - see [`ZmqRpcSubscriber`] for why a page of requests cannot be answered.
+//! assembling its batches on the client, to the size the mount site names. The request-reply form
+//! deliberately does not - see [`ZmqRpcSubscriber`] for why a batch of requests cannot be
+//! answered.
 //!
 //! The frame layout is part of the public contract, because the peer on the other side
 //! composes messages by hand: frame 0 is the name (also the subscription prefix for the

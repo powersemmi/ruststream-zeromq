@@ -11,13 +11,13 @@ use ruststream::{
     testing::Coordinator,
 };
 
-use crate::common::PAGE_MAX_WAIT;
+use crate::common::BATCH_MAX_WAIT;
 use crate::error::ZmqError;
 use crate::testing::broker::TestState;
 use crate::testing::router::{Delivery, DeliveryReceiver, DeliverySender, SubscriptionId};
 
 /// The routed side of an in-process subscription, matching the real transport's one-at-a-time
-/// delivery; pages are assembled over it by the wrapper in [`ZmqTestSubscriber`].
+/// delivery; batches are assembled over it by the wrapper in [`ZmqTestSubscriber`].
 ///
 /// Dropping it unregisters the subscription, so handlers stop receiving as soon as their task
 /// finishes.
@@ -88,7 +88,7 @@ impl ZmqTestSubscriber {
                 requeue,
                 coordinator,
             })
-            .max_wait(PAGE_MAX_WAIT),
+            .max_wait(BATCH_MAX_WAIT),
         }
     }
 }
@@ -102,8 +102,8 @@ impl Subscriber for ZmqTestSubscriber {
     }
 }
 
-/// Pages the same way the real subscriber does - on the client, to the size the registration
-/// named - so a page handler that runs in production also compiles and runs in a `TestApp`.
+/// Batches the same way the real subscriber does - on the client, to the size the registration
+/// named - so a batch handler that runs in production also compiles and runs in a `TestApp`.
 impl BatchSubscriber for ZmqTestSubscriber {
     type Batch = Vec<ZmqTestMessage>;
 

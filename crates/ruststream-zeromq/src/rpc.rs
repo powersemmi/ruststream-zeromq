@@ -229,10 +229,10 @@ impl ConnectedBroker for ConnectedZmqRpc {
 /// It is the one subscriber of this crate that is no
 /// [`BatchSubscriber`](ruststream::BatchSubscriber), so `.batch(..)` on a `ZmqRpc` registration
 /// does not compile - deliberately. A responder exists to answer, and the address it answers at
-/// travels per request in the `reply-to` header the ROUTER stamps on it; a page carries one
-/// publish context for the whole page, so a page's answers could not be addressed to the peers
+/// travels per request in the `reply-to` header the ROUTER stamps on it; a batch carries one
+/// publish context for the whole batch, so a batch's answers could not be addressed to the peers
 /// that asked. Keeping the capability off the type turns that into a compile error instead of a
-/// run of misrouted replies. Page the one-way patterns ([`ZmqQueue`](crate::ZmqQueue),
+/// run of misrouted replies. Batch the one-way patterns ([`ZmqQueue`](crate::ZmqQueue),
 /// [`ZmqFanout`](crate::ZmqFanout)) instead, and answer requests one at a time.
 pub struct ZmqRpcSubscriber {
     name: String,
@@ -466,10 +466,10 @@ impl DefaultPublish for ConnectedZmqRpc {
 
 #[cfg(test)]
 mod tests {
-    //! Where the paging capability sits, pinned as bounds.
+    //! Where the batching capability sits, pinned as bounds.
     //!
-    //! The one-way patterns page; the responder only delivers, so a `.batch(..)` registration on
-    //! [`ZmqRpc`] fails to compile rather than answering a page of requests at one address. The
+    //! The one-way patterns batch; the responder only delivers, so a `.batch(..)` registration on
+    //! [`ZmqRpc`] fails to compile rather than answering a batch of requests at one address. The
     //! absence cannot be written as a bound, so it lives in [`ZmqRpcSubscriber`]'s own docs; what
     //! is checkable is that the split has not quietly collapsed.
 
@@ -479,14 +479,14 @@ mod tests {
     use crate::ZmqSubscriber;
 
     #[expect(dead_code, reason = "the bounds are the assertion; nothing calls them")]
-    fn pages<S: BatchSubscriber>() {}
+    fn batches<S: BatchSubscriber>() {}
 
     #[expect(dead_code, reason = "the bounds are the assertion; nothing calls them")]
     fn delivers<S: Subscriber>() {}
 
     #[expect(dead_code, reason = "the bounds are the assertion; nothing calls them")]
     fn split() {
-        pages::<ZmqSubscriber>();
+        batches::<ZmqSubscriber>();
         delivers::<ZmqRpcSubscriber>();
     }
 }

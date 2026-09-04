@@ -19,13 +19,13 @@ use crate::message::ZmqMessage;
 pub(crate) const SEND_RETRY_WINDOW: Duration = Duration::from_secs(5);
 pub(crate) const SEND_RETRY_STEP: Duration = Duration::from_millis(50);
 
-/// How long a partial page waits for more deliveries after its first one.
+/// How long a partial batch waits for more deliveries after its first one.
 ///
-/// ZMTP carries one multipart message per receive, so pages are assembled on the client and this
-/// deadline is the crate's own choice - the page size is not, it arrives per subscription. Twenty
+/// ZMTP carries one multipart message per receive, so batches are assembled on the client and this
+/// deadline is the crate's own choice - the batch size is not, it arrives per subscription. Twenty
 /// milliseconds coalesces a burst that is already queued behind the socket while costing an idle
 /// subscription far less than the round trip it is waiting on anyway.
-pub(crate) const PAGE_MAX_WAIT: Duration = Duration::from_millis(20);
+pub(crate) const BATCH_MAX_WAIT: Duration = Duration::from_millis(20);
 
 /// Shared lifecycle state: the endpoint, the address a local subscription resolved by
 /// binding (which is what a same-process publisher dials for the loopback arrangement), and
@@ -156,7 +156,7 @@ impl Drop for DriverHandle {
 /// The socket side of any subscription: the driver task's channel, one delivery at a time, which
 /// is all a receive on a ZMTP socket yields.
 ///
-/// The public subscribers wrap it - the paging patterns through the framework's client-side
+/// The public subscribers wrap it - the batching patterns through the framework's client-side
 /// buffer, the request-reply one directly.
 pub(crate) struct WireSubscriber {
     pub(crate) rx: mpsc::UnboundedReceiver<Result<ZmqMessage, ZmqError>>,

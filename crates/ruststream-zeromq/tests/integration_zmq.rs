@@ -134,18 +134,18 @@ async fn fanout_filters_by_name_prefix() {
 }
 
 #[derive(Debug, Deserialize, Serialize, Outgoing)]
-#[outgoing(name = "pages")]
+#[outgoing(name = "batches")]
 struct Job {
     id: usize,
 }
 
-/// Reports the length of every page it is handed, so the test reads the shape back without
+/// Reports the length of every batch it is handed, so the test reads the shape back without
 /// waiting on a clock.
-static PAGES: OnceLock<mpsc::UnboundedSender<usize>> = OnceLock::new();
+static BATCHES: OnceLock<mpsc::UnboundedSender<usize>> = OnceLock::new();
 
-#[subscriber("pages")]
-async fn record_pages(jobs: &[Job]) -> HandlerOutcome {
-    PAGES
+#[subscriber("batches")]
+async fn record_batches(jobs: &[Job]) -> HandlerOutcome {
+    BATCHES
         .get()
         .expect("the test installs the sender before the app starts")
         .send(jobs.len())
@@ -153,22 +153,22 @@ async fn record_pages(jobs: &[Job]) -> HandlerOutcome {
     HandlerOutcome::ack()
 }
 
-/// A socket hands over one multipart message per receive, so the pages a `&[T]` body sees are
+/// A socket hands over one multipart message per receive, so the batches a `&[T]` body sees are
 /// assembled on the client - and the size the mount site named is what caps them. This runs the
-/// whole path a service writes: a page mount, real sockets, and a publisher dialing the port the
+/// whole path a service writes: a batch mount, real sockets, and a publisher dialing the port the
 /// subscription bound.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_page_mount_caps_the_pages_a_body_sees() {
-    const PAGE: usize = 3;
+async fn a_batch_mount_caps_the_batches_a_body_sees() {
+    const BATCH: usize = 3;
     const COUNT: usize = 7;
 
     let (tx, mut rx) = mpsc::unbounded_channel();
-    PAGES.set(tx).expect("one page mount per test binary");
+    BATCHES.set(tx).expect("one batch mount per test binary");
 
-    let app = RustStream::new(AppInfo::new("pager", "0.1.0")).with_broker(
+    let app = RustStream::new(AppInfo::new("batcher", "0.1.0")).with_broker(
         ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")),
         |b| {
-            b.include(record_pages.batch(nonzero!(3)));
+            b.include(record_batches.batch(nonzero!(3)));
             // `start()` resolves only after subscriptions are open, and this hook runs there, so
             // the publisher has a bound address to dial and nothing is published into the void.
             b.after_startup(ZmqQueuePublish, async move |publisher| -> io::Result<()> {
@@ -187,15 +187,15 @@ async fn a_page_mount_caps_the_pages_a_body_sees() {
 
     let mut seen = 0;
     while seen < COUNT {
-        let page = tokio::time::timeout(RECV_TIMEOUT, rx.recv())
+        let batch = tokio::time::timeout(RECV_TIMEOUT, rx.recv())
             .await
-            .expect("a page arrives")
+            .expect("a batch arrives")
             .expect("the app holds the sender");
         assert!(
-            page <= PAGE,
-            "a page must never carry more than the size the mount named: got {page}",
+            batch <= BATCH,
+            "a batch must never carry more than the size the mount named: got {batch}",
         );
-        seen += page;
+        seen += batch;
     }
 
     running.shutdown().await.expect("shutdown succeeds");

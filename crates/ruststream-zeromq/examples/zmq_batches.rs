@@ -1,10 +1,10 @@
-//! A PUSH/PULL worker that settles a whole page of jobs at a time.
+//! A PUSH/PULL worker that settles a whole batch of jobs at a time.
 //!
 //! Nothing about the wire changes: the producer still pushes one message at a time, in the same
-//! frame layout, and the pages are assembled on this side.
+//! frame layout, and the batches are assembled on this side.
 //!
 //! ```text
-//! cargo run --example zmq_pages -- run
+//! cargo run --example zmq_batches -- run
 //! ```
 
 // --8<-- [start:handler]
@@ -19,7 +19,7 @@ struct Job {
 #[subscriber("jobs")]
 async fn drain(jobs: &[Job]) -> HandlerOutcome {
     let ids: Vec<u64> = jobs.iter().map(|job| job.id).collect();
-    println!("working on a page of {}: {ids:?}", jobs.len());
+    println!("working on a batch of {}: {ids:?}", jobs.len());
     HandlerOutcome::ack()
 }
 // --8<-- [end:handler]
