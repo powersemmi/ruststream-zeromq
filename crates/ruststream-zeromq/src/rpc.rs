@@ -478,14 +478,15 @@ mod tests {
     use super::ZmqRpcSubscriber;
     use crate::ZmqSubscriber;
 
-    #[expect(dead_code, reason = "the bounds are the assertion; nothing calls them")]
     fn batches<S: BatchSubscriber>() {}
 
-    #[expect(dead_code, reason = "the bounds are the assertion; nothing calls them")]
     fn delivers<S: Subscriber>() {}
 
-    #[expect(dead_code, reason = "the bounds are the assertion; nothing calls them")]
-    fn split() {
+    // The instantiations are the assertion, so the body has nothing to run; a test rather than an
+    // uncalled function because a chain of uncalled helpers is dead code on one compiler and live
+    // on another, and the floor toolchain disagrees with stable about which.
+    #[test]
+    fn the_one_way_patterns_batch_and_the_responder_only_delivers() {
         batches::<ZmqSubscriber>();
         delivers::<ZmqRpcSubscriber>();
     }
