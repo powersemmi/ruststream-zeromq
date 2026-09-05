@@ -10,6 +10,11 @@
 //! - [`ZmqFanout`] - PUB/SUB: broadcast, prefix filtering by name.
 //! - [`ZmqRpc`] - DEALER/ROUTER: request and reply.
 //!
+//! A receive yields one multipart message, so the two one-way patterns serve a `&[T]` handler by
+//! assembling its batches on the client, to the size the mount site names. The request-reply form
+//! deliberately does not - see [`ZmqRpcSubscriber`] for why a batch of requests cannot be
+//! answered.
+//!
 //! The frame layout is part of the public contract, because the peer on the other side
 //! composes messages by hand: frame 0 is the name (also the subscription prefix for the
 //! fan-out pattern), frame 1 the headers (`"name: value"` lines; may be empty), frame 2 the
@@ -28,17 +33,20 @@
 mod common;
 mod endpoint;
 mod error;
-mod fanout;
 mod message;
-mod queue;
-mod rpc;
+pub mod prelude;
+mod wire;
+
+// Public, not just re-export sources: each form carries its own prelude.
+pub mod fanout;
+pub mod queue;
+pub mod rpc;
 #[cfg(feature = "testing")]
 pub mod testing;
-mod wire;
 
 pub use endpoint::ZmqEndpoint;
 pub use error::ZmqError;
 pub use fanout::{ConnectedZmqFanout, ZmqFanout, ZmqFanoutPublish, ZmqFanoutPublisher};
 pub use message::ZmqMessage;
 pub use queue::{ConnectedZmqQueue, ZmqQueue, ZmqQueuePublish, ZmqQueuePublisher, ZmqSubscriber};
-pub use rpc::{ConnectedZmqRpc, ZmqRpc, ZmqRpcPublish, ZmqRpcPublisher};
+pub use rpc::{ConnectedZmqRpc, ZmqRpc, ZmqRpcPublish, ZmqRpcPublisher, ZmqRpcSubscriber};

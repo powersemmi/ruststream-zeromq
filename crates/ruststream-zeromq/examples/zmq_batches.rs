@@ -1,10 +1,10 @@
-//! A worker stage of a PUSH/PULL pipeline: upstream pushes work, this service pulls it.
+//! A PUSH/PULL worker that settles a whole batch of jobs at a time.
 //!
-//! The producer runs separately: any peer that speaks the crate's frame layout (name,
-//! headers, payload) can push into this socket, Rust or not.
+//! Nothing about the wire changes: the producer still pushes one message at a time, in the same
+//! frame layout, and the batches are assembled on this side.
 //!
 //! ```text
-//! cargo run --example zmq_pipeline -- run
+//! cargo run --example zmq_batches -- run
 //! ```
 
 // --8<-- [start:handler]
@@ -17,8 +17,9 @@ struct Job {
 }
 
 #[subscriber("jobs")]
-async fn handle(job: &Job) -> HandlerOutcome {
-    println!("working on job {}", job.id);
+async fn drain(jobs: &[Job]) -> HandlerOutcome {
+    let ids: Vec<u64> = jobs.iter().map(|job| job.id).collect();
+    println!("working on a batch of {}: {ids:?}", jobs.len());
     HandlerOutcome::ack()
 }
 // --8<-- [end:handler]
@@ -29,7 +30,7 @@ fn app() -> impl App {
     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
         |b| {
-            b.include(handle);
+            b.include(drain.batch(nonzero!(32)));
         },
     )
 }

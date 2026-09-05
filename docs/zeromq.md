@@ -8,8 +8,8 @@ concepts (writing subscribers, routing, codecs, middleware), see the
 [RustStream documentation](https://powersemmi.github.io/ruststream/).
 
 ```toml
-ruststream = { version = "0.6", features = ["macros"] }
-ruststream-zeromq = "0.6"
+ruststream = { version = "0.7", features = ["macros"] }
+ruststream-zeromq = "0.7"
 serde = { version = "1", features = ["derive"] }
 ```
 
@@ -22,7 +22,7 @@ acknowledgement lands:
 | --- | --- | --- |
 | `Subscribe` | Yes | All three connected forms open a subscription by name, and the name is the first frame on the wire. See [The three patterns](#the-three-patterns). |
 | Acknowledgement (`ack` / `nack`) | No | Both report `AckError::Unsupported`. Delivery is at most once: once a socket has handed a message over, no protocol frame exists to settle it, and there is no store to redeliver from, so emulating a result would report a guarantee the transport does not provide. |
-| `BatchSubscriber` | No | A socket yields one multipart message at a time; there is no batch receive. |
+| `BatchSubscriber` | Client-side, on the one-way patterns | A socket yields one multipart message per receive, so there is no batch receive to translate a batch size into; `ZmqQueue` and `ZmqFanout` assemble the batches on the client instead, to the size the mount site named. `ZmqRpc` does not carry it at all, deliberately: a batch of requests could not be answered per requester, so `.batch(..)` on a responder is a compile error. See [Batches](#batches). |
 | `TransactionalPublisher` | No | ZeroMQ has no transactions. |
 | `OwnedTransactions` | No | ZeroMQ has no transactions. |
 | `RequestReply` | Yes, on `ZmqRpc` | `ZmqRpcPublisher` implements it over DEALER/ROUTER: a request goes out on a DEALER socket and the answer is matched by the `correlation-id` header, or the call fails on timeout. `ZmqQueue` and `ZmqFanout` are one-way patterns with no return path, so their publishers do not implement it. See [Request and reply](#request-and-reply). |
@@ -54,13 +54,30 @@ publisher:
 | `ZmqFanout` | PUB/SUB | Broadcast: each message reaches every subscriber whose name prefix matches. | `ZmqFanoutPublish` |
 | `ZmqRpc` | DEALER/ROUTER | Request and reply. | `ZmqRpcPublish` |
 
-Each policy is also the `DefaultPublish` policy of its connected form, so a
-`#[subscriber(.., publish("dest"))]` handler mounted without an explicit publisher sends through
-it.
+A mount site names a policy with one verb, `.out(marker, policy)`: `Reply` for the value a
+`#[subscriber(.., publish("dest"))]` handler returns, a slot marker for an injected `Out<..>`
+publisher. Each policy is also the `DefaultPublish` policy of its connected form, so a handler
+mounted without an `.out(Reply, ..)` call sends its reply through it anyway.
 
 A subscription is named, and the name is the first frame on the wire. For `ZmqFanout` that name is
 also the subscription prefix the socket filters on, so a subscriber on `events` receives
 `events.created` as well.
+
+Each pattern ships its own prelude, and that is the one import a routes file needs:
+`ruststream_zeromq::queue::prelude::*`, `fanout::prelude::*` or `rpc::prelude::*`. It carries the
+framework's own prelude, the endpoint, the pattern's descriptor, and the pattern's publish policy
+under the name `Publish`; `rpc::prelude` also carries `RequestReply`. Because every pattern names
+its policy `Publish`, moving a service between patterns changes the import line and nothing at the
+mount site.
+
+Two vocabularies, two files. A mount site names a *policy* and reaches it through the pattern
+prelude above; a handler bounds its injected publisher with a *broker capability trait*
+(`Publisher`, `RequestReply`) and imports `ruststream::prelude::*` alone. Keeping handlers off the
+pattern prelude is what keeps the bare `Publish` free for the mount site.
+
+A file that mounts more than one pattern imports `ruststream_zeromq::prelude::*` instead. Three
+patterns cannot share one bare name, so that glob carries the prefixed policies -
+`ZmqQueuePublish`, `ZmqFanoutPublish`, `ZmqRpcPublish` - alongside the three descriptors.
 
 ```rust
 --8<-- "crates/ruststream-zeromq/examples/zmq_pipeline.rs:handler"
@@ -71,6 +88,36 @@ Wiring the handler onto a pattern is identical to any other broker:
 ```rust
 --8<-- "crates/ruststream-zeromq/examples/zmq_pipeline.rs:app"
 ```
+
+## Batches
+
+A handler that takes a slice is handed a whole batch of jobs, and the mount site says how large a
+batch may get:
+
+```rust
+--8<-- "crates/ruststream-zeromq/examples/zmq_batches.rs:handler"
+```
+
+```rust
+--8<-- "crates/ruststream-zeromq/examples/zmq_batches.rs:app"
+```
+
+A receive on a socket yields one multipart message, so there is no batch receive for that number to
+turn into. The deliveries are collected on this side instead: a batch closes once it holds the size
+the mount named, or 20 ms after its first delivery, whichever comes first. A batch therefore never
+carries more than the mount asked for and often carries fewer, which is the framework's contract
+either way - nothing at the mount site says whether the transport batched or the client did.
+
+The 20 ms is the crate's own and not a setting. It bounds the latency a partial batch costs, and it
+is short against the round trip the socket is waiting on anyway; the batch size is not the crate's
+to choose, since it arrives per subscription from the mount site.
+
+`ZmqRpc` is the exception: `.batch(..)` on a responder registration does not compile. A responder
+exists to answer, and the address it answers at travels per request in the `reply-to` header the
+ROUTER stamps on it, while a batch carries a single publish context for all of its replies.
+Answering a batch would send every reply to one peer, so `ZmqRpcSubscriber` carries no
+`BatchSubscriber` and the mistake is a compile error naming the type rather than a run of
+misrouted replies.
 
 ## Endpoints
 
@@ -143,6 +190,18 @@ Because the payload frame is whatever the framework's codec produced, the peer o
 the codec: with the default JSON codec, `payload` is the JSON document a handler's input type
 deserializes from.
 
+## Publishing
+
+Every publish runs through the framework's publish builder, whichever surface holds the publisher:
+`message(..)` carries a value and the wire follows that value's type, with the destination, the
+headers and the codec resolved from the most specific level that names one. This transport adds no
+step of its own to that chain, so the framework's own publishing guide applies unchanged.
+
+Bytes a service already holds encoded - the common case when the peer on the other side framed
+them - travel as a `#[derive(Outgoing, Serialized)]` newtype through the same `message(..)` call.
+No codec runs on them, and the type names on the channel what would otherwise be an anonymous
+payload.
+
 ## Request and reply
 
 `ZmqRpc` covers both ends of DEALER/ROUTER.
@@ -165,7 +224,7 @@ literal destination in the decorator:
 --8<-- "crates/ruststream-zeromq/examples/zmq_request_reply.rs:transform"
 ```
 
-Mounting the handler with that transform on its publisher is the whole wiring:
+Naming that publisher at the reply position and hanging the transform on it is the whole wiring:
 
 ```rust
 --8<-- "crates/ruststream-zeromq/examples/zmq_request_reply.rs:responder"
@@ -178,7 +237,9 @@ responder and requester in one process, over an ephemeral bind.
 ## Testing
 
 The `testing` feature ships `ZmqTestBroker`: an in-process stand-in that reproduces the crate's core
-routing with no sockets and no network. It follows the same ladder as the real patterns, and its
+routing with no sockets and no network. It delivers one message at a time and batches on the client
+exactly as `ZmqQueue` does, so a batch handler that runs in production also runs under the harness.
+It follows the same ladder as the real patterns, and its
 connected form implements `ruststream::testing::TestableBroker`, so the same broker drives the
 `TestApp` harness and the framework's conformance suite; inject traffic with
 `broker.inject(OutgoingMessage::new(..))` and assert on published output with the free
@@ -186,5 +247,6 @@ connected form implements `ruststream::testing::TestableBroker`, so the same bro
 [Unit-testing a service with TestApp](https://powersemmi.github.io/ruststream/latest/guides/testing/#unit-testing-a-service-with-testapp).
 
 Socket-level behaviour needs no external service. The conformance routing suite, the lifecycle
-ladder, the request/reply capability, and a wire-layout check driven by a raw foreign-style peer all
-run on loopback sockets, so `just test` covers the whole crate with nothing to start first.
+ladder, the batch and request/reply capabilities, and a wire-layout check driven by a raw
+foreign-style peer all run on loopback sockets, so `just test` covers the whole crate with nothing
+to start first.

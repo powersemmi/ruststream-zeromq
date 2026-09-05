@@ -31,5 +31,5 @@ tracing.workspace = true
 
 [dev-dependencies]
 ruststream = { workspace = true, features = ["conformance", "testing", "macros", "json"] }
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1.0.196", features = ["derive"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }

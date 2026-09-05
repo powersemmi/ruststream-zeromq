@@ -9,7 +9,7 @@
   <a href="https://crates.io/crates/ruststream-zeromq"><img src="https://img.shields.io/crates/v/ruststream-zeromq.svg" alt="crates.io"></a>
   <a href="https://crates.io/crates/ruststream-zeromq"><img src="https://img.shields.io/crates/dr/ruststream-zeromq" alt="Recent downloads"></a>
   <a href="https://docs.rs/ruststream-zeromq"><img src="https://img.shields.io/docsrs/ruststream-zeromq" alt="docs.rs"></a>
-  <img src="https://img.shields.io/badge/MSRV-1.85-blue.svg" alt="MSRV 1.85">
+  <img src="https://img.shields.io/badge/MSRV-1.88-blue.svg" alt="MSRV 1.88">
   <img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License">
   <a href="https://t.me/ruststream_community"><img src="https://img.shields.io/badge/-Telegram-blue?logo=telegram&label=News" alt="Telegram news channel"></a>
   <a href="https://t.me/ruststream_communuty_ru_chat"><img src="https://img.shields.io/badge/-Telegram-blue?logo=telegram&label=RU" alt="Telegram RU chat"></a>
@@ -30,6 +30,8 @@ Three socket patterns cover three messaging shapes:
 - **`ZmqQueue`** - PUSH/PULL: competing consumers, round-robin.
 - **`ZmqFanout`** - PUB/SUB: broadcast, prefix filtering by name.
 - **`ZmqRpc`** - DEALER/ROUTER: request and reply (`RequestReply` on the publisher; replies route back through the responder's `reply-to` header).
+
+A socket hands over one message per receive, so a `&[T]` batch handler on `ZmqQueue` or `ZmqFanout` is served by assembling its batches on the client, to the size the mount site names (`b.include(drain.batch(nonzero!(32)))`). `ZmqRpc` does not batch: a batch carries one publish context for all of its replies, and a responder answers each requester at its own `reply-to` address, so `.batch(..)` there is a compile error rather than a run of misrouted replies.
 
 Because there is no server, the role is explicit - which side listens is a deployment decision:
 
@@ -67,20 +69,18 @@ A Python peer sends `socket.send_multipart([b"orders", b"content-type: applicati
 
 ```toml
 [dependencies]
-ruststream = { version = "0.6", features = ["macros", "json"] }
-ruststream-zeromq = "0.6"
+ruststream = { version = "0.7", features = ["macros", "json"] }
+ruststream-zeromq = "0.7"
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
-ruststream-zeromq = { version = "0.6", features = ["testing"] }
+ruststream-zeromq = { version = "0.7", features = ["testing"] }
 ```
 
 ## Write a service
 
 ```rust
-use ruststream::runtime::{App, AppInfo, HandlerResult, RustStream};
-use ruststream::subscriber;
-use ruststream_zeromq::{ZmqEndpoint, ZmqQueue};
+use ruststream_zeromq::queue::prelude::*;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -89,9 +89,9 @@ struct Job {
 }
 
 #[subscriber("jobs")]
-async fn handle(job: &Job) -> HandlerResult {
+async fn handle(job: &Job) -> HandlerOutcome {
     println!("working on job {}", job.id);
-    HandlerResult::Ack
+    HandlerOutcome::ack()
 }
 
 #[ruststream::app]

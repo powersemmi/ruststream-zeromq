@@ -5,24 +5,86 @@
 //! the same ROUTER. The requester side uses the [`RequestReply`] capability: one DEALER per
 //! request, correlated by the `correlation-id` header.
 
+/// The publish policy of this form, under the name a mount site writes.
+///
+/// There is no separate request-side policy to name: both directions of the exchange run on one
+/// [`ZmqRpcPublisher`], which routes replies through the responder's ROUTER and issues requests
+/// over its own DEALER.
+pub use self::ZmqRpcPublish as Publish;
+
+/// The imports a routes file on the DEALER/ROUTER exchange writes, in one glob.
+///
+/// The framework's prelude, the shared [`ZmqEndpoint`], the descriptor [`ZmqRpc`], its publish
+/// policy as [`Publish`], and the [`RequestReply`] capability.
+///
+/// # Examples
+///
+/// ```
+/// use ruststream_zeromq::rpc::prelude::*;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Deserialize)]
+/// struct Greeting {
+///     who: String,
+/// }
+///
+/// // `Reply` is the marker naming the reply position at the mount site, so the message type
+/// // answering the request carries its own name.
+/// #[derive(Serialize)]
+/// struct Answer {
+///     text: String,
+/// }
+///
+/// #[subscriber("greeter", publish("reply"))]
+/// async fn greet(request: &Greeting) -> Answer {
+///     Answer {
+///         text: format!("hello {}", request.who),
+///     }
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     RustStream::new(AppInfo::new("greeter", "0.1.0")).with_broker(
+///         ZmqRpc::new(ZmqEndpoint::bind("tcp://0.0.0.0:5557")),
+///         |b| {
+///             b.include(greet).out(Reply, Publish);
+///         },
+///     )
+/// }
+/// ```
+pub mod prelude {
+    pub use ruststream::prelude::*;
+
+    pub use crate::endpoint::ZmqEndpoint;
+
+    // Only this form implements it; keep it out of the queue and fan-out preludes.
+    pub use ruststream::RequestReply;
+
+    // `Publish` is the mount-site vocabulary, and it is why this glob belongs in a routes file
+    // rather than a handler one: a handler imports the framework prelude alone and bounds its
+    // injected publisher with a broker capability trait, so the two names never meet.
+    pub use super::{Publish, ZmqRpc};
+}
+
+use std::future::{Future, ready};
 use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
+use futures::Stream;
 use ruststream::{
     Broker, ConnectedBroker, DefaultPublish, DescribeServer, OutgoingMessage, PairError,
-    PublishPolicy, Publisher, RequestReply, ServerSpec, Subscribe,
+    PublishPolicy, Publisher, RequestReply, ServerSpec, Subscribe, Subscriber,
 };
 use tokio::sync::{Mutex, OnceCell, mpsc};
 use zeromq::prelude::*;
 use zeromq::util::PeerIdentity;
 use zeromq::{DealerSocket, RouterSendHalf, RouterSocket, SocketOptions};
 
-use crate::common::{DriverHandle, Lifecycle, SharedLifecycle, send_with_retry};
+use crate::common::{DriverHandle, Lifecycle, SharedLifecycle, WireSubscriber, send_with_retry};
 use crate::endpoint::ZmqEndpoint;
 use crate::error::ZmqError;
 use crate::message::ZmqMessage;
-use crate::queue::ZmqSubscriber;
 use crate::wire;
 
 /// The prefix of reply destinations minted by the responder subscription.
@@ -38,7 +100,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn hex_decode(text: &str) -> Option<Vec<u8>> {
-    if text.len() % 2 != 0 {
+    if !text.len().is_multiple_of(2) {
         return None;
     }
     (0..text.len())
@@ -153,17 +215,49 @@ impl ConnectedBroker for ConnectedZmqRpc {
     type Error = ZmqError;
     type Closed = ();
 
-    async fn shutdown(self) -> Result<(), Self::Error> {
+    fn shutdown(self) -> impl Future<Output = Result<(), Self::Error>> {
         self.shared
             .lifecycle
             .closed
             .store(true, std::sync::atomic::Ordering::Release);
-        Ok(())
+        ready(Ok(()))
+    }
+}
+
+/// A responder subscription on the ROUTER socket, yielding one request at a time.
+///
+/// It is the one subscriber of this crate that is no
+/// [`BatchSubscriber`](ruststream::BatchSubscriber), so `.batch(..)` on a `ZmqRpc` registration
+/// does not compile - deliberately. A responder exists to answer, and the address it answers at
+/// travels per request in the `reply-to` header the ROUTER stamps on it; a batch carries one
+/// publish context for the whole batch, so a batch's answers could not be addressed to the peers
+/// that asked. Keeping the capability off the type turns that into a compile error instead of a
+/// run of misrouted replies. Batch the one-way patterns ([`ZmqQueue`](crate::ZmqQueue),
+/// [`ZmqFanout`](crate::ZmqFanout)) instead, and answer requests one at a time.
+pub struct ZmqRpcSubscriber {
+    name: String,
+    inner: WireSubscriber,
+}
+
+impl std::fmt::Debug for ZmqRpcSubscriber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ZmqRpcSubscriber")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Subscriber for ZmqRpcSubscriber {
+    type Message = ZmqMessage;
+    type Error = ZmqError;
+
+    fn stream(&mut self) -> impl Stream<Item = Result<ZmqMessage, ZmqError>> + Send + '_ {
+        self.inner.stream()
     }
 }
 
 impl Subscribe for ConnectedZmqRpc {
-    type Subscriber = ZmqSubscriber;
+    type Subscriber = ZmqRpcSubscriber;
 
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
         self.shared.lifecycle.ensure_open()?;
@@ -212,11 +306,13 @@ impl Subscribe for ConnectedZmqRpc {
                 }
             }
         });
-        Ok(ZmqSubscriber::from_parts(
-            name.to_owned(),
-            rx,
-            DriverHandle { task },
-        ))
+        Ok(ZmqRpcSubscriber {
+            name: name.to_owned(),
+            inner: WireSubscriber {
+                rx,
+                _driver: DriverHandle { task },
+            },
+        })
     }
 }
 
@@ -356,11 +452,42 @@ pub struct ZmqRpcPublish;
 impl PublishPolicy<ConnectedZmqRpc> for ZmqRpcPublish {
     type Live = ZmqRpcPublisher;
 
-    async fn pair(self, connected: &ConnectedZmqRpc) -> Result<Self::Live, PairError> {
-        Ok(connected.publisher())
+    fn pair(
+        self,
+        connected: &ConnectedZmqRpc,
+    ) -> impl Future<Output = Result<Self::Live, PairError>> {
+        ready(Ok(connected.publisher()))
     }
 }
 
 impl DefaultPublish for ConnectedZmqRpc {
     type Policy = ZmqRpcPublish;
+}
+
+#[cfg(test)]
+mod tests {
+    //! Where the batching capability sits, pinned as bounds.
+    //!
+    //! The one-way patterns batch; the responder only delivers, so a `.batch(..)` registration on
+    //! [`ZmqRpc`] fails to compile rather than answering a batch of requests at one address. The
+    //! absence cannot be written as a bound, so it lives in [`ZmqRpcSubscriber`]'s own docs; what
+    //! is checkable is that the split has not quietly collapsed.
+
+    use ruststream::{BatchSubscriber, Subscriber};
+
+    use super::ZmqRpcSubscriber;
+    use crate::ZmqSubscriber;
+
+    fn batches<S: BatchSubscriber>() {}
+
+    fn delivers<S: Subscriber>() {}
+
+    // The instantiations are the assertion, so the body has nothing to run; a test rather than an
+    // uncalled function because a chain of uncalled helpers is dead code on one compiler and live
+    // on another, and the floor toolchain disagrees with stable about which.
+    #[test]
+    fn the_one_way_patterns_batch_and_the_responder_only_delivers() {
+        batches::<ZmqSubscriber>();
+        delivers::<ZmqRpcSubscriber>();
+    }
 }

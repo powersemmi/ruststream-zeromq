@@ -4,17 +4,28 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use tokio::sync::OnceCell;
+use futures::Stream;
+use ruststream::Subscriber;
+use tokio::sync::{OnceCell, mpsc};
 use zeromq::prelude::*;
 use zeromq::{Socket, ZmqError as WireError};
 
 use crate::endpoint::{Role, ZmqEndpoint};
 use crate::error::{ZmqError, box_err};
+use crate::message::ZmqMessage;
 
 /// How long a send retries while the ZMTP handshake settles: the implementation returns the
 /// message immediately when no peer is attached yet, which is routine right after `connect`.
 pub(crate) const SEND_RETRY_WINDOW: Duration = Duration::from_secs(5);
 pub(crate) const SEND_RETRY_STEP: Duration = Duration::from_millis(50);
+
+/// How long a partial batch waits for more deliveries after its first one.
+///
+/// ZMTP carries one multipart message per receive, so batches are assembled on the client and this
+/// deadline is the crate's own choice - the batch size is not, it arrives per subscription. Twenty
+/// milliseconds coalesces a burst that is already queued behind the socket while costing an idle
+/// subscription far less than the round trip it is waiting on anyway.
+pub(crate) const BATCH_MAX_WAIT: Duration = Duration::from_millis(20);
 
 /// Shared lifecycle state: the endpoint, the address a local subscription resolved by
 /// binding (which is what a same-process publisher dials for the loopback arrangement), and
@@ -139,6 +150,28 @@ pub(crate) struct DriverHandle {
 impl Drop for DriverHandle {
     fn drop(&mut self) {
         self.task.abort();
+    }
+}
+
+/// The socket side of any subscription: the driver task's channel, one delivery at a time, which
+/// is all a receive on a ZMTP socket yields.
+///
+/// The public subscribers wrap it - the batching patterns through the framework's client-side
+/// buffer, the request-reply one directly.
+pub(crate) struct WireSubscriber {
+    pub(crate) rx: mpsc::UnboundedReceiver<Result<ZmqMessage, ZmqError>>,
+    pub(crate) _driver: DriverHandle,
+}
+
+impl Subscriber for WireSubscriber {
+    type Message = ZmqMessage;
+    type Error = ZmqError;
+
+    fn stream(&mut self) -> impl Stream<Item = Result<ZmqMessage, ZmqError>> + Send + '_ {
+        // Poll the channel in place rather than wrapping it in an owning stream, so `stream`
+        // can be called again after the returned stream is dropped (the runtime and the
+        // conformance helpers re-enter it per call).
+        futures::stream::poll_fn(move |cx| self.rx.poll_recv(cx))
     }
 }
 

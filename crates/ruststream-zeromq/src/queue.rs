@@ -1,17 +1,69 @@
 //! [`ZmqQueue`]: the PUSH/PULL pattern - competing consumers, round-robin.
 
+/// The publish policy of this form, under the name a mount site writes.
+pub use self::ZmqQueuePublish as Publish;
+
+/// The imports a routes file on the PUSH/PULL queue writes, in one glob: the framework's prelude,
+/// the shared [`ZmqEndpoint`], the descriptor [`ZmqQueue`], and its publish policy as [`Publish`].
+///
+/// # Examples
+///
+/// ```
+/// use ruststream_zeromq::queue::prelude::*;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Deserialize)]
+/// struct Job {
+///     id: u64,
+/// }
+///
+/// #[derive(Serialize)]
+/// struct Done {
+///     id: u64,
+/// }
+///
+/// #[subscriber("jobs", publish("results"))]
+/// async fn handle(job: &Job) -> Done {
+///     Done { id: job.id }
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
+///         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
+///         |b| {
+///             b.include(handle).out(Reply, Publish);
+///         },
+///     )
+/// }
+/// ```
+pub mod prelude {
+    pub use ruststream::prelude::*;
+
+    pub use crate::endpoint::ZmqEndpoint;
+
+    // `Publish` is the mount-site vocabulary, and it is why this glob belongs in a routes file
+    // rather than a handler one: a handler imports the framework prelude alone and bounds its
+    // injected publisher with a broker capability trait, so the two names never meet.
+    pub use super::{Publish, ZmqQueue};
+}
+
+use std::future::{Future, ready};
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use futures::Stream;
 use ruststream::{
-    Broker, ConnectedBroker, DefaultPublish, DescribeServer, OutgoingMessage, PairError,
-    PublishPolicy, Publisher, ServerSpec, Subscribe, Subscriber,
+    BatchSubscriber, Broker, BufferedSubscriber, ConnectedBroker, DefaultPublish, DescribeServer,
+    OutgoingMessage, PairError, PublishPolicy, Publisher, ServerSpec, Subscribe, Subscriber,
 };
 use tokio::sync::{Mutex, OnceCell, mpsc};
 use zeromq::prelude::*;
 use zeromq::{PullSocket, PushSocket};
 
-use crate::common::{DriverHandle, Lifecycle, SharedLifecycle, send_with_retry};
+use crate::common::{
+    BATCH_MAX_WAIT, DriverHandle, Lifecycle, SharedLifecycle, WireSubscriber, send_with_retry,
+};
 use crate::endpoint::ZmqEndpoint;
 use crate::error::ZmqError;
 use crate::message::ZmqMessage;
@@ -109,11 +161,11 @@ impl ConnectedBroker for ConnectedZmqQueue {
     type Error = ZmqError;
     type Closed = ();
 
-    async fn shutdown(self) -> Result<(), Self::Error> {
+    fn shutdown(self) -> impl Future<Output = Result<(), Self::Error>> {
         self.lifecycle
             .closed
             .store(true, std::sync::atomic::Ordering::Release);
-        Ok(())
+        ready(Ok(()))
     }
 }
 
@@ -148,19 +200,19 @@ impl Subscribe for ConnectedZmqQueue {
                 }
             }
         });
-        Ok(ZmqSubscriber {
-            name: name.to_owned(),
+        Ok(ZmqSubscriber::from_parts(
+            name.to_owned(),
             rx,
-            _driver: DriverHandle { task },
-        })
+            DriverHandle { task },
+        ))
     }
 }
 
-/// A subscription on one of the transport's patterns; yields [`ZmqMessage`]s.
+/// A subscription on one of the one-way patterns - PUSH/PULL or PUB/SUB - yielding
+/// [`ZmqMessage`]s singly or in batches.
 pub struct ZmqSubscriber {
     name: String,
-    rx: mpsc::UnboundedReceiver<Result<ZmqMessage, ZmqError>>,
-    _driver: DriverHandle,
+    inner: BufferedSubscriber<WireSubscriber>,
 }
 
 impl std::fmt::Debug for ZmqSubscriber {
@@ -179,8 +231,11 @@ impl ZmqSubscriber {
     ) -> Self {
         Self {
             name,
-            rx,
-            _driver: driver,
+            inner: BufferedSubscriber::new(WireSubscriber {
+                rx,
+                _driver: driver,
+            })
+            .max_wait(BATCH_MAX_WAIT),
         }
     }
 }
@@ -190,10 +245,21 @@ impl Subscriber for ZmqSubscriber {
     type Error = ZmqError;
 
     fn stream(&mut self) -> impl Stream<Item = Result<ZmqMessage, ZmqError>> + Send + '_ {
-        // Poll the channel in place rather than wrapping it in an owning stream, so `stream`
-        // can be called again after the returned stream is dropped (the runtime and the
-        // conformance helpers re-enter it per call).
-        futures::stream::poll_fn(move |cx| self.rx.poll_recv(cx))
+        self.inner.stream()
+    }
+}
+
+/// The transport has no batches of its own - a receive yields one multipart message - so they are
+/// assembled on the client, to the size the registration named. The deadline that closes a partial
+/// batch is the crate's own (20 ms); the size is not, it arrives per subscription.
+impl BatchSubscriber for ZmqSubscriber {
+    type Batch = Vec<ZmqMessage>;
+
+    fn batches(
+        &mut self,
+        size: NonZeroUsize,
+    ) -> impl Stream<Item = Result<Self::Batch, ZmqError>> + Send + '_ {
+        self.inner.batches(size)
     }
 }
 
@@ -252,8 +318,11 @@ pub struct ZmqQueuePublish;
 impl PublishPolicy<ConnectedZmqQueue> for ZmqQueuePublish {
     type Live = ZmqQueuePublisher;
 
-    async fn pair(self, connected: &ConnectedZmqQueue) -> Result<Self::Live, PairError> {
-        Ok(connected.publisher())
+    fn pair(
+        self,
+        connected: &ConnectedZmqQueue,
+    ) -> impl Future<Output = Result<Self::Live, PairError>> {
+        ready(Ok(connected.publisher()))
     }
 }
 

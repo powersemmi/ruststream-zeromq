@@ -49,6 +49,10 @@ markdown_extensions:
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
   - toc:
       permalink: true
+      # Keeps non-ASCII headings: the default slugifier gives them empty ids.
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.inlinehilite
@@ -63,10 +67,38 @@ markdown_extensions:
 
 hooks:
   - docs/hooks/snippet_titles.py
+  - docs/hooks/i18n_banner.py
 
 plugins:
   - search
   # Versioned docs are published with `mike` (see the Docs workflow and the version switcher).
+  # Translations live under `docs/<locale>/`; English stays at the docs root as the default.
+  - i18n:
+      docs_structure: folder
+      fallback_to_default: true
+      reconfigure_material: true
+      reconfigure_search: true
+      languages:
+        - locale: en
+          name: English
+          default: true
+          build: true
+        - locale: ru
+          name: Russian
+          build: true
+          nav_translations:
+            Home: Главная
+            Guide: Руководство
+            RustStream docs: Документация RustStream
+            API reference: Справочник API
+        - locale: zh
+          name: Chinese
+          build: true
+          nav_translations:
+            Home: 首页
+            Guide: 指南
+            RustStream docs: RustStream 文档
+            API reference: API 参考
 
 extra:
   version:
