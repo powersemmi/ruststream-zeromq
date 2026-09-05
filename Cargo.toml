@@ -14,7 +14,10 @@ authors = ["RustStream contributors"]
 [workspace.dependencies]
 ruststream-zeromq = { path = "crates/ruststream-zeromq" }
 
-ruststream = { version = ">=0.7.0, <0.8.0", default-features = false }
+# Names the pre-release explicitly: cargo excludes pre-releases from a range that does not, so a
+# bound starting at `0.7.0` would not match the `0.7.0-rc.1` candidate. The upper bound keeps the
+# final `0.7.0` and every later 0.7 patch admissible without a second edit.
+ruststream = { version = ">=0.7.0-rc.1, <0.8.0", default-features = false }
 
 # Floors, not majors: a major-only bound resolves below the APIs used here under minimal-versions.
 zeromq = { version = "0.6", default-features = false, features = ["tokio-runtime", "all-transport"] }
