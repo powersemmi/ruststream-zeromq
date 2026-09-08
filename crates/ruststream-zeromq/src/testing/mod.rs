@@ -25,6 +25,11 @@
 //! what the transport cannot. The routing it checks is covered directly in the crate's
 //! `testing_core` tests.
 //!
+//! The ladder holds too, aliasing included: `shutdown` closes the transport before dropping what
+//! it carried, so a publisher paired earlier - or a clone of the broker - reports
+//! [`ZmqError::NotConnected`](crate::ZmqError::NotConnected) instead of succeeding against a
+//! broker that is gone.
+//!
 //! What has no counterpart in a channel is not imitated. There is no peer to connect, so a
 //! publish that a real PUSH socket would fail after its retry window is recorded and dropped here,
 //! and a request timeout covers the wait for an answer alone. Delivery guarantees, high-water

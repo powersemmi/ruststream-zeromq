@@ -181,6 +181,94 @@ async fn headers_travel_and_every_publish_is_logged() {
     broker.shutdown().await.expect("the broker shuts down");
 }
 
+/// A publisher handed out before the shutdown aliases the transport and outlives it, so it must
+/// report the closed connection rather than route into a dead broker - the aliasing half of the
+/// broker contract, which the ladder cannot make a compile error. Every handle answers the same
+/// way the real ones do, so a service can match on the error it would really see.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publishing_after_shutdown_errors() {
+    let broker = connected().await;
+    let queue = broker.queue_publisher();
+    let fanout = broker.fanout_publisher();
+    let rpc = broker.rpc_publisher();
+    // Subscribing after the shutdown cannot be reached through the owner - the ladder consumed it -
+    // so the aliased clone stands in for the handle a service kept.
+    let alias = broker.clone();
+    let reply_to = {
+        // A reply address minted while the transport was live, so the refusal below is about the
+        // shutdown and not about the destination.
+        let mut responder = broker.subscribe("echo").await.expect("the responder");
+        let asking = broker.rpc_publisher();
+        let request = tokio::spawn(async move {
+            let _ = asking
+                .request(OutgoingMessage::new("echo", b"ping".as_slice()), NOTHING)
+                .await;
+        });
+        let address = {
+            let mut stream = pin!(responder.stream());
+            let message = tokio::time::timeout(WAIT, stream.next())
+                .await
+                .expect("the request arrives")
+                .expect("the stream is open")
+                .expect("the delivery is ok");
+            message
+                .headers()
+                .reply_to()
+                .expect("a request carries the address to answer")
+                .to_owned()
+        };
+        // The requester gives up on its own timeout; nothing answers it, which is not this test's
+        // subject.
+        request.await.expect("the request task joins");
+        address
+    };
+
+    broker.shutdown().await.expect("the broker shuts down");
+
+    for (label, error) in [
+        (
+            "queue publish",
+            queue
+                .publish(OutgoingMessage::new("jobs", b"late".as_slice()))
+                .await
+                .expect_err("a queue publish after shutdown must fail"),
+        ),
+        (
+            "fan-out publish",
+            fanout
+                .publish(OutgoingMessage::new("events", b"late".as_slice()))
+                .await
+                .expect_err("a fan-out publish after shutdown must fail"),
+        ),
+        (
+            "reply publish",
+            rpc.publish(OutgoingMessage::new(reply_to.as_str(), b"late".as_slice()))
+                .await
+                .expect_err("a reply after shutdown must fail"),
+        ),
+        (
+            "request",
+            rpc.request(OutgoingMessage::new("echo", b"late".as_slice()), NOTHING)
+                .await
+                .expect_err("a request after shutdown must fail"),
+        ),
+    ] {
+        assert!(
+            matches!(error, ZmqError::NotConnected),
+            "{label} through a closed transport must report NotConnected, got: {error}",
+        );
+    }
+
+    let subscribing = alias
+        .subscribe("jobs")
+        .await
+        .expect_err("subscribing on a closed transport must fail");
+    assert!(
+        matches!(subscribing, ZmqError::NotConnected),
+        "a subscription opened after shutdown must report NotConnected, got: {subscribing}",
+    );
+}
+
 /// PUSH hands each message to one of the peers connected to it, so mounting a second worker
 /// spreads the load instead of doubling the work. The stand-in picks in subscription order.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -56,19 +56,30 @@ impl ZmqTestPublisher {
             routing: Routing::Prefix,
         }
     }
-}
 
-impl Publisher for ZmqTestPublisher {
-    type Error = ZmqError;
-
-    fn publish(&self, msg: OutgoingMessage<'_>) -> impl Future<Output = Result<(), Self::Error>> {
+    fn route(&self, msg: &OutgoingMessage<'_>) -> Result<(), ZmqError> {
+        self.state.ensure_open()?;
         self.state.publish(
             msg.name(),
             Bytes::copy_from_slice(msg.payload()),
             msg.headers().clone(),
             self.routing,
         );
-        ready(Ok(()))
+        Ok(())
+    }
+}
+
+impl Publisher for ZmqTestPublisher {
+    type Error = ZmqError;
+
+    /// Routes `msg` by this publisher's pattern rule.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZmqError::NotConnected`] once the transport this handle aliases has been shut
+    /// down, rather than routing into a dead broker.
+    fn publish(&self, msg: OutgoingMessage<'_>) -> impl Future<Output = Result<(), Self::Error>> {
+        ready(self.route(&msg))
     }
 }
 
@@ -100,6 +111,7 @@ impl ZmqTestRpcPublisher {
 
     /// The reply leg, shared by the sync and async entry points.
     fn route_reply(&self, msg: &OutgoingMessage<'_>) -> Result<(), ZmqError> {
+        self.state.ensure_open()?;
         if !msg.name().starts_with(REPLY_PREFIX) {
             return Err(ZmqError::Send {
                 name: msg.name().to_owned(),
@@ -130,7 +142,8 @@ impl Publisher for ZmqTestRpcPublisher {
     ///
     /// # Errors
     ///
-    /// Returns [`ZmqError::Send`] when the destination is not a reply address.
+    /// Returns [`ZmqError::Send`] when the destination is not a reply address, and
+    /// [`ZmqError::NotConnected`] once the transport this handle aliases has been shut down.
     fn publish(&self, msg: OutgoingMessage<'_>) -> impl Future<Output = Result<(), Self::Error>> {
         ready(self.route_reply(&msg))
     }
@@ -144,11 +157,9 @@ impl Publisher for ZmqTestRpcPublisher {
 /// reaching a peer. The inbox is an ordinary address in the router rather than a live DEALER, so
 /// a reply nobody is waiting for is recorded in the published log instead of being dropped by the
 /// transport, and a reply routed while no responder subscription exists is silently discarded
-/// where the socket publisher reports that no ROUTER is attached. After
-/// [`shutdown`](ruststream::ConnectedBroker::shutdown) the router holds no subscriptions, so a
-/// request made through a handle that outlived the transport times out here rather than reporting
-/// a closed transport. Delivery guarantees, back-pressure and the slow joiner are transport
-/// behaviour and are not reproduced at all; exercise them on the loopback suite.
+/// where the socket publisher reports that no ROUTER is attached. Delivery guarantees,
+/// back-pressure and the slow joiner are transport behaviour and are not reproduced at all;
+/// exercise them on the loopback suite.
 impl RequestReply for ZmqTestRpcPublisher {
     type Reply = ZmqTestMessage;
 
@@ -157,6 +168,9 @@ impl RequestReply for ZmqTestRpcPublisher {
         msg: OutgoingMessage<'_>,
         timeout: Duration,
     ) -> Result<Self::Reply, Self::Error> {
+        // Checked before the inbox is minted: a handle that outlived the transport reports the
+        // dead connection, rather than waiting out a timeout nothing could ever answer.
+        self.state.ensure_open()?;
         let inbox = new_reply_address();
         let (id, mut rx) = self.state.router.subscribe(inbox.clone());
 

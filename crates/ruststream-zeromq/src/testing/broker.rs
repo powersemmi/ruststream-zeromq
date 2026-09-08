@@ -1,6 +1,7 @@
 //! [`ZmqTestBroker`]: the in-process transport and its connected form.
 
 use std::future::{Future, ready};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use bytes::Bytes;
@@ -12,16 +13,41 @@ use crate::testing::publisher::{ZmqTestPublisher, ZmqTestRpcPublisher};
 use crate::testing::router::{AddressRouter, Routing};
 use crate::testing::subscriber::ZmqTestSubscriber;
 
-/// Shared state of one in-process broker: the router plus the harness coordinator.
+/// Shared state of one in-process broker: the router, the harness coordinator, and whether the
+/// transport is still open.
 #[derive(Debug, Default)]
 pub(crate) struct TestState {
     pub(crate) router: AddressRouter,
     coordinator: OnceLock<Coordinator>,
+    closed: AtomicBool,
 }
 
 impl TestState {
     fn coordinator(&self) -> Option<&Coordinator> {
         self.coordinator.get()
+    }
+
+    /// Marks the transport shut down. Set before the router is cleared, so no handle can slip a
+    /// publish in between.
+    pub(crate) fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+    }
+
+    /// The check every handle makes before touching the transport.
+    ///
+    /// The ladder makes owner-side misuse a compile error, but a publisher handed out earlier
+    /// outlives the connection, and that handle must report the dead transport rather than
+    /// succeed against it - the same answer, [`ZmqError::NotConnected`], that the real publishers
+    /// give through their lifecycle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZmqError::NotConnected`] once the connected form has been shut down.
+    pub(crate) fn ensure_open(&self) -> Result<(), ZmqError> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(ZmqError::NotConnected);
+        }
+        Ok(())
     }
 
     pub(crate) fn publish(
@@ -115,7 +141,13 @@ impl ConnectedBroker for ConnectedZmqTestBroker {
     type Error = ZmqError;
     type Closed = ();
 
+    /// Closes the transport, then drops what it was carrying.
+    ///
+    /// The order matters: handles that outlived the connection see the closed transport rather
+    /// than a router that is merely empty, which is the difference between an error and a publish
+    /// that silently reaches nobody.
     fn shutdown(self) -> impl Future<Output = Result<(), Self::Error>> {
+        self.state.close();
         self.state.router.clear();
         ready(Ok(()))
     }
@@ -125,13 +157,15 @@ impl Subscribe for ConnectedZmqTestBroker {
     type Subscriber = ZmqTestSubscriber;
 
     fn subscribe(&self, name: &str) -> impl Future<Output = Result<Self::Subscriber, Self::Error>> {
-        let (id, rx) = self.state.router.subscribe(name.to_owned());
-        ready(Ok(ZmqTestSubscriber::new(
-            Arc::clone(&self.state),
-            id,
-            rx,
-            self.state.coordinator().cloned(),
-        )))
+        ready(self.state.ensure_open().map(|()| {
+            let (id, rx) = self.state.router.subscribe(name.to_owned());
+            ZmqTestSubscriber::new(
+                Arc::clone(&self.state),
+                id,
+                rx,
+                self.state.coordinator().cloned(),
+            )
+        }))
     }
 }
 
@@ -145,6 +179,9 @@ impl TestableBroker for ConnectedZmqTestBroker {
     /// Injection carries no pattern - a name is all the harness has - so it reaches every
     /// subscription spelled exactly like the destination. To exercise a pattern's own rule
     /// (competing consumers, prefix filtering), publish through that pattern's policy instead.
+    ///
+    /// It does not consult the closed flag the publishers consult: this is the harness reaching
+    /// into the transport, not a handle a service holds, and it has no error to report through.
     fn inject(&self, message: OutgoingMessage<'_>) {
         self.state.publish(
             message.name(),

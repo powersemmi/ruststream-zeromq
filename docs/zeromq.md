@@ -291,6 +291,11 @@ check redelivery, so a transport with no settlement cannot pass it without prete
 it checks - ordering, delivery only after subscribe, header propagation, the publish log - is
 covered directly in the crate's `tests/testing_core.rs`.
 
+A handle that outlives the connection says so. `shutdown` closes the transport before it drops what
+it was carrying, so a publisher paired earlier, or a clone of the broker, reports
+`ZmqError::NotConnected` rather than publishing into a broker that is gone - the answer the real
+publishers give, and the one a service would match on.
+
 ### What it does not reproduce
 
 Everything that needs a peer, because a channel has none. A real PUSH socket blocks and then fails
