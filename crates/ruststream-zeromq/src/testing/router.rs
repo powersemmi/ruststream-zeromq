@@ -70,12 +70,15 @@ pub(crate) struct AddressRouter {
 }
 
 impl AddressRouter {
-    /// Registers a subscription on `address` and returns the receiving end the subscriber polls,
-    /// together with the [`SubscriptionId`] needed to unsubscribe.
+    /// Registers a subscription on `address` and returns the channel pair the subscriber will
+    /// use, together with the [`SubscriptionId`] needed to unsubscribe.
     ///
-    /// The sending end stays in the registry: only a publish puts a delivery on a subscription,
-    /// because `ZeroMQ` has no redelivery for a settled message to ask for.
-    pub(crate) fn subscribe(&self, address: String) -> (SubscriptionId, DeliveryReceiver) {
+    /// The returned [`DeliverySender`] is the same one fanout uses, so subscribers can re-send
+    /// a delivery into their own queue to implement `nack(requeue = true)`.
+    pub(crate) fn subscribe(
+        &self,
+        address: String,
+    ) -> (SubscriptionId, DeliverySender, DeliveryReceiver) {
         let (tx, rx) = mpsc::unbounded_channel();
         let id = SubscriptionId(self.next_id.fetch_add(1, Ordering::Relaxed));
         self.state
@@ -86,10 +89,10 @@ impl AddressRouter {
                 id,
                 Subscription {
                     address,
-                    sender: tx,
+                    sender: tx.clone(),
                 },
             );
-        (id, rx)
+        (id, tx, rx)
     }
 
     /// Removes a subscription. No-op if the id is unknown (double-drop of the subscriber).

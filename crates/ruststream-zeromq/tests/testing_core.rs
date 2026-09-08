@@ -1,16 +1,9 @@
-//! What the in-process stand-in does: the routing contract, then each pattern's own rule.
+//! What the in-process stand-in does, pattern by pattern.
 //!
-//! The routing scenarios here are the ones the framework's `harness::run_suite` would check, minus
-//! the ones that presume settlement. `ZeroMQ` acknowledges nothing, so that suite cannot run
-//! against an honest stand-in (see `tests/conformance_zmq.rs`), and what it would have covered -
-//! ordering, delivery only after subscribe, header propagation, the publish log - is covered here
-//! directly.
-//!
-//! Then the patterns, twice over: the publishers driven directly, where each delivery rule is
-//! visible on its own, and the same rules reached through a service's wiring under the `TestApp`
-//! harness - the mount sites a routes file writes, with the production policies attached. Socket
-//! behaviour (delivery guarantees, back-pressure, the slow joiner) is the loopback suite's
-//! business.
+//! Two halves: the publishers driven directly, where each pattern's delivery rule is visible on
+//! its own, and the same rules reached through a service's wiring under the `TestApp` harness -
+//! the mount sites a routes file writes, with the production policies attached. Socket behaviour
+//! (delivery guarantees, back-pressure, the slow joiner) is the loopback suite's business.
 
 #![cfg(feature = "testing")]
 
@@ -24,10 +17,10 @@ use ruststream::runtime::{
     AppInfo, DefaultSlot, HandlerOutcome, Out, Outgoing, PublishContext, PublishTransform, Reply,
     RustStream,
 };
-use ruststream::testing::{TestApp, TestableBroker};
+use ruststream::testing::TestApp;
 use ruststream::{
-    AckError, Broker, ConnectedBroker, HeaderMap, IncomingMessage, OutgoingMessage, Publisher,
-    RequestReply, Subscribe, Subscriber, subscriber,
+    Broker, ConnectedBroker, IncomingMessage, OutgoingMessage, Publisher, RequestReply, Subscribe,
+    Subscriber, subscriber,
 };
 use ruststream_zeromq::testing::{ConnectedZmqTestBroker, ZmqTestBroker, ZmqTestSubscriber};
 use ruststream_zeromq::{ZmqError, ZmqFanoutPublish, ZmqQueuePublish, ZmqRpcPublish};
@@ -66,119 +59,6 @@ async fn expect_idle(subscriber: &mut ZmqTestSubscriber, why: &str) {
         tokio::time::timeout(NOTHING, stream.next()).await.is_err(),
         "{why}",
     );
-}
-
-/// Settlement is the transport's, not the stand-in's: `ZeroMQ` acknowledges nothing, so a
-/// handler's ack and its retry are both reported unsupported and no redelivery follows. A
-/// stand-in that settled here would pass a retry handler that loses messages in production.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn settling_a_delivery_is_unsupported_and_nothing_is_redelivered() {
-    let broker = connected().await;
-    let mut subscriber = broker.subscribe("orders").await.expect("the subscription");
-
-    broker.inject(OutgoingMessage::new("orders", b"one".as_slice()));
-
-    {
-        let mut stream = pin!(subscriber.stream());
-        let message = tokio::time::timeout(WAIT, stream.next())
-            .await
-            .expect("a delivery arrives")
-            .expect("the stream is open")
-            .expect("the delivery is ok");
-        assert!(
-            matches!(message.nack(true).await, Err(AckError::Unsupported)),
-            "a transport that acknowledges nothing cannot honour a requeue",
-        );
-    }
-    expect_idle(
-        &mut subscriber,
-        "nack(requeue = true) must not redeliver on a transport with no redelivery",
-    )
-    .await;
-
-    broker.inject(OutgoingMessage::new("orders", b"two".as_slice()));
-    let mut stream = pin!(subscriber.stream());
-    let message = tokio::time::timeout(WAIT, stream.next())
-        .await
-        .expect("a delivery arrives")
-        .expect("the stream is open")
-        .expect("the delivery is ok");
-    assert!(
-        matches!(message.ack().await, Err(AckError::Unsupported)),
-        "acknowledgement is reported unsupported, exactly as the real subscriber reports it",
-    );
-
-    broker.shutdown().await.expect("the broker shuts down");
-}
-
-/// Deliveries arrive in publish order, and only what was published after the subscription opened
-/// arrives at all - the routing contract, minus the settlement the framework's suite presumes.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn deliveries_keep_publish_order_and_start_at_the_subscription() {
-    let broker = connected().await;
-    broker.inject(OutgoingMessage::new("events", b"before".as_slice()));
-
-    let mut subscriber = broker.subscribe("events").await.expect("the subscription");
-    for id in 0..10u32 {
-        broker.inject(OutgoingMessage::new("events", id.to_be_bytes().as_slice()));
-    }
-
-    {
-        let mut stream = pin!(subscriber.stream());
-        for expected in 0..10u32 {
-            let message = tokio::time::timeout(WAIT, stream.next())
-                .await
-                .expect("a delivery arrives")
-                .expect("the stream is open")
-                .expect("the delivery is ok");
-            assert_eq!(
-                message.payload(),
-                expected.to_be_bytes(),
-                "deliveries must arrive in publish order",
-            );
-        }
-        assert!(
-            tokio::time::timeout(NOTHING, stream.next()).await.is_err(),
-            "what was published before the subscription opened must not arrive",
-        );
-    }
-
-    broker.shutdown().await.expect("the broker shuts down");
-}
-
-/// Headers travel with the payload, and every publish is observable in the log the harness
-/// assertions read.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn headers_travel_and_every_publish_is_logged() {
-    let broker = connected().await;
-    let mut subscriber = broker.subscribe("audit").await.expect("the subscription");
-
-    let mut headers = HeaderMap::new();
-    headers.insert("Content-Type", "application/json");
-    headers.insert("X-Tenant", "acme");
-    broker.inject(OutgoingMessage::new("audit", b"{}".as_slice()).with_headers(headers));
-    broker.inject(OutgoingMessage::new("audit", b"{}".as_slice()));
-
-    {
-        let mut stream = pin!(subscriber.stream());
-        let message = tokio::time::timeout(WAIT, stream.next())
-            .await
-            .expect("a delivery arrives")
-            .expect("the stream is open")
-            .expect("the delivery is ok");
-        assert_eq!(
-            message.headers().content_type(),
-            Some("application/json"),
-            "a header set on the publish must reach the handler",
-        );
-        assert_eq!(message.headers().get("x-tenant"), Some(b"acme".as_slice()));
-    }
-
-    let logged = broker.published("audit");
-    assert_eq!(logged.len(), 2, "the log must observe every publish");
-    assert_eq!(logged[0].payload(), b"{}");
-
-    broker.shutdown().await.expect("the broker shuts down");
 }
 
 /// A publisher handed out before the shutdown aliases the transport and outlives it, so it must

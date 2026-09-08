@@ -172,7 +172,7 @@ impl RequestReply for ZmqTestRpcPublisher {
         // dead connection, rather than waiting out a timeout nothing could ever answer.
         self.state.ensure_open()?;
         let inbox = new_reply_address();
-        let (id, mut rx) = self.state.router.subscribe(inbox.clone());
+        let (id, requeue, mut rx) = self.state.router.subscribe(inbox.clone());
 
         // A caller-supplied correlation id is respected, the way the socket publisher respects
         // it, so an upper layer that matches on its own identifier sees it on both.
@@ -209,6 +209,7 @@ impl RequestReply for ZmqTestRpcPublisher {
 
         Ok(ZmqTestMessage::from_reply(
             delivery.ok_or(ZmqError::RequestTimeout)?,
+            requeue,
         ))
     }
 }
