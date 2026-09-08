@@ -253,6 +253,11 @@ one the service ships: `ZmqQueuePublish`, `ZmqFanoutPublish` and `ZmqRpcPublish`
 mount on `ZmqTestBroker`. A handler that binds `Out<impl RequestReply, ..>` mounts on the rpc
 policy here exactly as it does over a socket - and, as in production, on that policy alone.
 
+One stand-in covers three patterns, but a broker names one default publish policy, so a mount that
+omits `.out(Reply, ..)` takes the queue rule here whichever pattern the service runs on. Name the
+policy at the mount site - `.out(Reply, ZmqFanoutPublish)` - and the harness and the deployment
+publish the same way.
+
 ### What each pattern keeps in process
 
 The policy a mount names carries the pattern's delivery rule, so the difference between the three
