@@ -15,8 +15,8 @@ Three socket patterns cover three messaging shapes: `ZmqQueue` (PUSH/PULL, compe
 reply).
 
 ```toml
-ruststream = { version = "0.6", features = ["macros", "json"] }
-ruststream-zeromq = "0.6"
+ruststream = { version = "0.7", features = ["macros", "json"] }
+ruststream-zeromq = "0.7"
 serde = { version = "1", features = ["derive"] }
 ```
 

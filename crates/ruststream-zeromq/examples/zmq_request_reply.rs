@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use ruststream::codec::{Codec, JsonCodec};
 use ruststream::runtime::{
-    App, AppInfo, Outgoing, PublishContext, PublishTransform, RustStream, TypedPublisher,
+    App, AppInfo, Outgoing, PublishContext, PublishTransform, Reply, RustStream,
 };
 use ruststream::{IncomingMessage, OutgoingMessage, RequestReply, subscriber};
 use ruststream_zeromq::{ZmqEndpoint, ZmqRpc, ZmqRpcPublish};
@@ -25,8 +25,10 @@ struct Greeting {
     who: String,
 }
 
+// `Reply` is the mount site's marker for this handler's reply position, so the message type
+// answering the request carries its own name.
 #[derive(Debug, Deserialize, Serialize)]
-struct Reply {
+struct Answer {
     text: String,
 }
 
@@ -50,8 +52,8 @@ impl<C> PublishTransform<C> for ReplyToRequester {
 
 // The literal destination is a placeholder: `ReplyToRequester` replaces it per delivery.
 #[subscriber("greeter", publish("reply"))]
-async fn greet(request: &Greeting) -> Reply {
-    Reply {
+async fn greet(request: &Greeting) -> Answer {
+    Answer {
         text: format!("hello {}", request.who),
     }
 }
@@ -65,7 +67,8 @@ fn app() -> impl App {
         |b| {
             // --8<-- [start:responder]
             b.include(greet)
-                .publisher(TypedPublisher::new(ZmqRpcPublish).transform(ReplyToRequester));
+                .out(Reply, ZmqRpcPublish)
+                .transform(ReplyToRequester);
             // --8<-- [end:responder]
 
             // --8<-- [start:request]
@@ -82,7 +85,7 @@ fn app() -> impl App {
                     )
                     .await
                     .map_err(io::Error::other)?;
-                let answer: Reply = JsonCodec
+                let answer: Answer = JsonCodec
                     .decode(answer.payload())
                     .map_err(io::Error::other)?;
                 println!("reply: {}", answer.text);

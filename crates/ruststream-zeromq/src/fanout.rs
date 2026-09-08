@@ -4,6 +4,52 @@
 //! started misses what was sent before it arrived (the slow joiner), and a message published
 //! with no matching subscriber is dropped silently.
 
+/// The publish policy of this form, under the name a mount site writes.
+pub use self::ZmqFanoutPublish as Publish;
+
+/// The imports a routes file on the PUB/SUB fan-out writes, in one glob: the framework's prelude,
+/// the shared [`ZmqEndpoint`], the descriptor [`ZmqFanout`], and its publish policy as
+/// [`Publish`].
+///
+/// # Examples
+///
+/// ```
+/// use ruststream_zeromq::fanout::prelude::*;
+/// use serde::Deserialize;
+///
+/// #[derive(Deserialize)]
+/// struct Event {
+///     id: u64,
+/// }
+///
+/// #[subscriber("events")]
+/// async fn handle(event: &Event) -> HandlerOutcome {
+///     let _ = event.id;
+///     HandlerOutcome::ack()
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     RustStream::new(AppInfo::new("watcher", "0.1.0")).with_broker(
+///         ZmqFanout::new(ZmqEndpoint::connect("tcp://ml:5556")),
+///         |b| {
+///             b.include(handle);
+///         },
+///     )
+/// }
+/// ```
+pub mod prelude {
+    pub use ruststream::prelude::*;
+
+    pub use crate::endpoint::ZmqEndpoint;
+
+    // `Publish` is the mount-site vocabulary, and it is why this glob belongs in a routes file
+    // rather than a handler one: a handler imports the framework prelude alone and bounds its
+    // injected publisher with a broker capability trait, so the two names never meet.
+    pub use super::{Publish, ZmqFanout};
+}
+
+use std::future::{Future, ready};
 use std::sync::Arc;
 
 use ruststream::{
@@ -113,11 +159,11 @@ impl ConnectedBroker for ConnectedZmqFanout {
     type Error = ZmqError;
     type Closed = ();
 
-    async fn shutdown(self) -> Result<(), Self::Error> {
+    fn shutdown(self) -> impl Future<Output = Result<(), Self::Error>> {
         self.lifecycle
             .closed
             .store(true, std::sync::atomic::Ordering::Release);
-        Ok(())
+        ready(Ok(()))
     }
 }
 
@@ -226,8 +272,11 @@ pub struct ZmqFanoutPublish;
 impl PublishPolicy<ConnectedZmqFanout> for ZmqFanoutPublish {
     type Live = ZmqFanoutPublisher;
 
-    async fn pair(self, connected: &ConnectedZmqFanout) -> Result<Self::Live, PairError> {
-        Ok(connected.publisher())
+    fn pair(
+        self,
+        connected: &ConnectedZmqFanout,
+    ) -> impl Future<Output = Result<Self::Live, PairError>> {
+        ready(Ok(connected.publisher()))
     }
 }
 

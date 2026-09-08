@@ -1,7 +1,9 @@
 //! [`ZmqMessage`]: a delivered message.
 
+use std::future::{Future, ready};
+
 use bytes::Bytes;
-use ruststream::{AckError, Headers, IncomingMessage};
+use ruststream::{AckError, HeaderMap, IncomingMessage};
 
 /// A message delivered by one of the transport's subscribers.
 ///
@@ -9,7 +11,7 @@ use ruststream::{AckError, Headers, IncomingMessage};
 /// [`AckError::Unsupported`] rather than emulated.
 pub struct ZmqMessage {
     pub(crate) name: String,
-    pub(crate) headers: Headers,
+    pub(crate) headers: HeaderMap,
     pub(crate) payload: Bytes,
 }
 
@@ -35,15 +37,15 @@ impl IncomingMessage for ZmqMessage {
         &self.payload
     }
 
-    fn headers(&self) -> &Headers {
+    fn headers(&self) -> &HeaderMap {
         &self.headers
     }
 
-    async fn ack(self) -> Result<(), AckError> {
-        Err(AckError::Unsupported)
+    fn ack(self) -> impl Future<Output = Result<(), AckError>> {
+        ready(Err(AckError::Unsupported))
     }
 
-    async fn nack(self, _requeue: bool) -> Result<(), AckError> {
-        Err(AckError::Unsupported)
+    fn nack(self, _requeue: bool) -> impl Future<Output = Result<(), AckError>> {
+        ready(Err(AckError::Unsupported))
     }
 }

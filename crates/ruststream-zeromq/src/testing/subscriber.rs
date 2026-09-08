@@ -1,20 +1,27 @@
 //! [`ZmqTestSubscriber`] and [`ZmqTestMessage`].
 
+use std::future::{Future, ready};
+use std::num::NonZeroUsize;
 use std::sync::{Arc, OnceLock};
 
 use futures::Stream;
 
-use ruststream::{AckError, Headers, IncomingMessage, Subscriber, testing::Coordinator};
+use ruststream::{
+    AckError, BatchSubscriber, BufferedSubscriber, HeaderMap, IncomingMessage, Subscriber,
+    testing::Coordinator,
+};
 
+use crate::common::BATCH_MAX_WAIT;
 use crate::error::ZmqError;
 use crate::testing::broker::TestState;
 use crate::testing::router::{Delivery, DeliveryReceiver, DeliverySender, SubscriptionId};
 
-/// Subscriber returned by [`ConnectedZmqTestBroker`](crate::testing::ConnectedZmqTestBroker).
+/// The routed side of an in-process subscription, matching the real transport's one-at-a-time
+/// delivery; batches are assembled over it by the wrapper in [`ZmqTestSubscriber`].
 ///
 /// Dropping it unregisters the subscription, so handlers stop receiving as soon as their task
 /// finishes.
-pub struct ZmqTestSubscriber {
+struct TestWire {
     state: Arc<TestState>,
     id: SubscriptionId,
     rx: DeliveryReceiver,
@@ -24,37 +31,13 @@ pub struct ZmqTestSubscriber {
     coordinator: Option<Coordinator>,
 }
 
-impl std::fmt::Debug for ZmqTestSubscriber {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ZmqTestSubscriber").finish_non_exhaustive()
-    }
-}
-
-impl ZmqTestSubscriber {
-    pub(crate) fn new(
-        state: Arc<TestState>,
-        id: SubscriptionId,
-        rx: DeliveryReceiver,
-        requeue: DeliverySender,
-        coordinator: Option<Coordinator>,
-    ) -> Self {
-        Self {
-            state,
-            id,
-            rx,
-            requeue,
-            coordinator,
-        }
-    }
-}
-
-impl Drop for ZmqTestSubscriber {
+impl Drop for TestWire {
     fn drop(&mut self) {
         self.state.router.unsubscribe(self.id);
     }
 }
 
-impl Subscriber for ZmqTestSubscriber {
+impl Subscriber for TestWire {
     type Message = ZmqTestMessage;
     type Error = ZmqError;
 
@@ -75,6 +58,60 @@ impl Subscriber for ZmqTestSubscriber {
                 })
             })
         })
+    }
+}
+
+/// Subscriber returned by [`ConnectedZmqTestBroker`](crate::testing::ConnectedZmqTestBroker).
+pub struct ZmqTestSubscriber {
+    inner: BufferedSubscriber<TestWire>,
+}
+
+impl std::fmt::Debug for ZmqTestSubscriber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ZmqTestSubscriber").finish_non_exhaustive()
+    }
+}
+
+impl ZmqTestSubscriber {
+    pub(crate) fn new(
+        state: Arc<TestState>,
+        id: SubscriptionId,
+        rx: DeliveryReceiver,
+        requeue: DeliverySender,
+        coordinator: Option<Coordinator>,
+    ) -> Self {
+        Self {
+            inner: BufferedSubscriber::new(TestWire {
+                state,
+                id,
+                rx,
+                requeue,
+                coordinator,
+            })
+            .max_wait(BATCH_MAX_WAIT),
+        }
+    }
+}
+
+impl Subscriber for ZmqTestSubscriber {
+    type Message = ZmqTestMessage;
+    type Error = ZmqError;
+
+    fn stream(&mut self) -> impl Stream<Item = Result<Self::Message, Self::Error>> + Send + '_ {
+        self.inner.stream()
+    }
+}
+
+/// Batches the same way the real subscriber does - on the client, to the size the registration
+/// named - so a batch handler that runs in production also compiles and runs in a `TestApp`.
+impl BatchSubscriber for ZmqTestSubscriber {
+    type Batch = Vec<ZmqTestMessage>;
+
+    fn batches(
+        &mut self,
+        size: NonZeroUsize,
+    ) -> impl Stream<Item = Result<Self::Batch, ZmqError>> + Send + '_ {
+        self.inner.batches(size)
     }
 }
 
@@ -129,19 +166,19 @@ impl IncomingMessage for ZmqTestMessage {
             .unwrap_or_default()
     }
 
-    fn headers(&self) -> &Headers {
-        static EMPTY: OnceLock<Headers> = OnceLock::new();
+    fn headers(&self) -> &HeaderMap {
+        static EMPTY: OnceLock<HeaderMap> = OnceLock::new();
         self.delivery
             .as_ref()
-            .map_or_else(|| EMPTY.get_or_init(Headers::new), |d| &d.headers)
+            .map_or_else(|| EMPTY.get_or_init(HeaderMap::new), |d| &d.headers)
     }
 
-    async fn ack(mut self) -> Result<(), AckError> {
+    fn ack(mut self) -> impl Future<Output = Result<(), AckError>> {
         self.delivery.take();
-        Ok(())
+        ready(Ok(()))
     }
 
-    async fn nack(mut self, requeue: bool) -> Result<(), AckError> {
+    fn nack(mut self, requeue: bool) -> impl Future<Output = Result<(), AckError>> {
         let delivery = self
             .delivery
             .take()
@@ -156,6 +193,6 @@ impl IncomingMessage for ZmqTestMessage {
                 coordinator.enqueued();
             }
         }
-        Ok(())
+        ready(Ok(()))
     }
 }
