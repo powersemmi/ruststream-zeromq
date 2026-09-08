@@ -240,8 +240,8 @@ The `testing` feature ships `ZmqTestBroker`: an in-process stand-in that reprodu
 routing with no sockets and no network. It delivers one message at a time and batches on the client
 exactly as `ZmqQueue` does, so a batch handler that runs in production also runs under the harness.
 It follows the same ladder as the real patterns, and its
-connected form implements `ruststream::testing::TestableBroker`, so the same broker drives the
-`TestApp` harness and the framework's conformance suite; inject traffic with
+connected form implements `ruststream::testing::TestableBroker`, so it drives the
+`TestApp` harness; inject traffic with
 `broker.inject(OutgoingMessage::new(..))` and assert on published output with the free
 `ruststream::testing::expect_published`. See
 [Unit-testing a service with TestApp](https://powersemmi.github.io/ruststream/latest/guides/testing/#unit-testing-a-service-with-testapp).
@@ -278,18 +278,33 @@ Injection through the harness (`inject`, `tb.publish(..)`) carries no pattern - 
 has - so it delivers by exact destination. Reach a pattern's own rule by publishing through that
 pattern's policy.
 
+Settlement is reproduced by refusing it. `ZeroMQ` acknowledges nothing, so an in-process delivery
+reports `AckError::Unsupported` for both `ack` and `nack`, exactly as a delivery over a socket does,
+and nothing is ever redelivered. A handler that settles by retrying therefore loses its message
+under the harness the same way it loses it on the wire - which is the point: a stand-in that
+redelivered would hand you a passing test for something the deployment cannot do. Assert on what the
+handler did.
+
+That is also why the framework's routing suite, `harness::run_suite`, is not run against this
+stand-in. Every one of its scenarios acknowledges the delivery it received, and two exist only to
+check redelivery, so a transport with no settlement cannot pass it without pretending. The routing
+it checks - ordering, delivery only after subscribe, header propagation, the publish log - is
+covered directly in the crate's `tests/testing_core.rs`.
+
 ### What it does not reproduce
 
 Everything that needs a peer, because a channel has none. A real PUSH socket blocks and then fails
 when nothing is connected to it, while a publish here is recorded and dropped: "connected" means a
 socket in another process, which has no in-process counterpart. A request timeout covers the wait
-for an answer alone, never reaching a peer, and a request issued after `shutdown` times out where
-the socket publisher reports a closed transport. Delivery guarantees, high-water marks, the slow
-joiner, and settlement (`ZeroMQ` acknowledges nothing, so an in-process delivery settles where the
-transport reports `AckError::Unsupported`) stay transport behaviour throughout - assert on what a
-handler did, not on a settlement the sockets cannot perform.
+for an answer alone, never reaching a peer. Delivery guarantees, high-water marks and the slow
+joiner stay transport behaviour throughout.
 
-None of that needs an external service to test. The conformance routing suite, the lifecycle
-ladder, the batch and request/reply capabilities, and a wire-layout check driven by a raw
-foreign-style peer all run on loopback sockets, so `just test` covers the whole crate with nothing
-to start first.
+One capability split does not survive either, and cannot while the crate mounts by name: a
+responder's real subscriber is deliberately not a `BatchSubscriber`, but a mount site names only a
+string, so nothing tells the stand-in which pattern a subscription belongs to and `.batch(..)` on a
+request-reply mount compiles in a test where production rejects it. The publish side has no such
+gap, because there the policy at the mount site names the pattern.
+
+None of that needs an external service to test. The lifecycle ladder, the batch and request/reply
+capabilities, and a wire-layout check driven by a raw foreign-style peer all run on loopback
+sockets, so `just test` covers the whole crate with nothing to start first.

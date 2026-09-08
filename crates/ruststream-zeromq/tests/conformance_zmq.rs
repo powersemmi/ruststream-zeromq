@@ -1,6 +1,15 @@
-//! Conformance: the routing suite against the in-process transport, plus the lifecycle and
-//! request/reply suites over real sockets on the loopback - no external broker exists to
-//! need, which is the point of this crate.
+//! Conformance: the lifecycle, batch and request/reply suites over real sockets on the loopback -
+//! no external broker exists to need, which is the point of this crate - plus the request/reply
+//! suite against the in-process transport.
+//!
+//! The framework's routing suite ([`harness::run_suite`]) is not among them, and cannot be. Every
+//! one of its scenarios settles the delivery it received (`msg.ack().await.expect("ack failed")`),
+//! and two exist only to check that `nack` redelivers or drops. `ZeroMQ` acknowledges nothing:
+//! both the real subscriber and the stand-in report `AckError::Unsupported`, so the suite fails on
+//! its first scenario against an honest in-process transport, and the way to pass it would be to
+//! make the stand-in settle deliveries the deployment cannot settle. The scenarios that do hold
+//! here - ordering, delivery only after subscribe, header propagation, the publish log - are
+//! checked directly in `tests/testing_core.rs` instead.
 
 #![cfg(feature = "testing")]
 
@@ -8,11 +17,6 @@ use ruststream::Name;
 use ruststream::conformance::{capabilities, harness};
 use ruststream_zeromq::testing::ZmqTestBroker;
 use ruststream_zeromq::{ZmqEndpoint, ZmqQueue, ZmqRpc};
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn zmq_test_broker_passes_conformance_suite() {
-    harness::run_suite(ZmqTestBroker::new).await;
-}
 
 /// The stand-in answers the same request-reply contract the sockets do, the leg where nobody
 /// answers included, so a handler that binds the capability is testable in process.
