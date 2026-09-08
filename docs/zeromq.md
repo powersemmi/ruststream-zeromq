@@ -236,7 +236,7 @@ responder and requester in one process, over an ephemeral bind.
 
 ## Testing
 
-The `testing` feature ships `ZmqTestBroker`: an in-process stand-in that reproduces the crate's core
+The `testing` feature ships `ZmqTestBroker`: an in-process stand-in that reproduces the crate's
 routing with no sockets and no network. It delivers one message at a time and batches on the client
 exactly as `ZmqQueue` does, so a batch handler that runs in production also runs under the harness.
 It follows the same ladder as the real patterns, and its
@@ -246,7 +246,45 @@ connected form implements `ruststream::testing::TestableBroker`, so the same bro
 `ruststream::testing::expect_published`. See
 [Unit-testing a service with TestApp](https://powersemmi.github.io/ruststream/latest/guides/testing/#unit-testing-a-service-with-testapp).
 
-Socket-level behaviour needs no external service. The conformance routing suite, the lifecycle
+### Mount sites keep their policy
+
+The three production policies pair against the stand-in, so a routes file under the harness is the
+one the service ships: `ZmqQueuePublish`, `ZmqFanoutPublish` and `ZmqRpcPublish` all attach to a
+mount on `ZmqTestBroker`. A handler that binds `Out<impl RequestReply, ..>` mounts on the rpc
+policy here exactly as it does over a socket - and, as in production, on that policy alone.
+
+### What each pattern keeps in process
+
+The policy a mount names carries the pattern's delivery rule, so the difference between the three
+survives into a test:
+
+- **Queue.** Each message reaches one of the consumers on the destination, taken in turn. Two
+  workers mounted on one name split the work rather than both running it.
+- **Fan-out.** Each message reaches every subscription whose name is a prefix of the destination -
+  the protocol's own filter, so a subscription on `orders` sees `orders.eu.1` - and a message
+  nothing matches is dropped rather than failing the publish.
+- **Request-reply.** A request carries a `reply-to` inbox and a `correlation-id`; the answer routes
+  back to the caller that asked, and only an answer echoing that id resolves the request. A reply
+  published to anything but a reply address is refused, the same refusal the socket publisher
+  makes, so a responder mounted without a reply-routing transform fails here instead of on
+  deployment.
+
+Injection through the harness (`inject`, `tb.publish(..)`) carries no pattern - a name is all it
+has - so it delivers by exact destination. Reach a pattern's own rule by publishing through that
+pattern's policy.
+
+### What it does not reproduce
+
+Everything that needs a peer, because a channel has none. A real PUSH socket blocks and then fails
+when nothing is connected to it, while a publish here is recorded and dropped: "connected" means a
+socket in another process, which has no in-process counterpart. A request timeout covers the wait
+for an answer alone, never reaching a peer, and a request issued after `shutdown` times out where
+the socket publisher reports a closed transport. Delivery guarantees, high-water marks, the slow
+joiner, and settlement (`ZeroMQ` acknowledges nothing, so an in-process delivery settles where the
+transport reports `AckError::Unsupported`) stay transport behaviour throughout - assert on what a
+handler did, not on a settlement the sockets cannot perform.
+
+None of that needs an external service to test. The conformance routing suite, the lifecycle
 ladder, the batch and request/reply capabilities, and a wire-layout check driven by a raw
 foreign-style peer all run on loopback sockets, so `just test` covers the whole crate with nothing
 to start first.

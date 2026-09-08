@@ -14,6 +14,20 @@ async fn zmq_test_broker_passes_conformance_suite() {
     harness::run_suite(ZmqTestBroker::new).await;
 }
 
+/// The stand-in answers the same request-reply contract the sockets do, the leg where nobody
+/// answers included, so a handler that binds the capability is testable in process.
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zmq_test_broker_passes_request_reply_suite() {
+    capabilities::request_reply(
+        ZmqTestBroker::new,
+        |name| Name::new(name.to_owned()),
+        |connected| connected.rpc_publisher(),
+        |connected| connected.rpc_publisher(),
+    )
+    .await;
+}
+
 // `make_source` / `make_publisher` must stay closures: their bounds are higher-ranked
 // (`Fn(&str) -> _` / `Fn(&B) -> _`), so a bare method path - which binds one concrete lifetime -
 // would not type-check.

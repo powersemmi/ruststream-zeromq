@@ -5,13 +5,11 @@ use std::sync::{Arc, OnceLock};
 
 use bytes::Bytes;
 use ruststream::testing::{Coordinator, TestableBroker};
-use ruststream::{
-    Broker, ConnectedBroker, DefaultPublish, OutgoingMessage, PairError, PublishPolicy, Publisher,
-    RawMessage, Subscribe,
-};
+use ruststream::{Broker, ConnectedBroker, OutgoingMessage, RawMessage, Subscribe};
 
 use crate::error::ZmqError;
-use crate::testing::router::AddressRouter;
+use crate::testing::publisher::{ZmqTestPublisher, ZmqTestRpcPublisher};
+use crate::testing::router::{AddressRouter, Routing};
 use crate::testing::subscriber::ZmqTestSubscriber;
 
 /// Shared state of one in-process broker: the router plus the harness coordinator.
@@ -26,13 +24,25 @@ impl TestState {
         self.coordinator.get()
     }
 
-    pub(crate) fn publish(&self, name: &str, payload: Bytes, headers: ruststream::HeaderMap) {
+    pub(crate) fn publish(
+        &self,
+        name: &str,
+        payload: Bytes,
+        headers: ruststream::HeaderMap,
+        routing: Routing,
+    ) {
         self.router
-            .publish(name, payload, headers, self.coordinator());
+            .publish(name, payload, headers, routing, self.coordinator());
     }
 }
 
-/// An in-process stand-in for [`ZmqQueue`](crate::ZmqQueue): same core routing, no server.
+/// An in-process stand-in for the crate's three patterns: no server, no sockets, and each
+/// pattern's own delivery rule.
+///
+/// One broker covers all three because a `ZeroMQ` deployment has no server in the middle either;
+/// what differs between them is which subscriptions a publish reaches, and that travels with the
+/// publish policy a mount site names ([`ZmqQueuePublish`](crate::ZmqQueuePublish),
+/// [`ZmqFanoutPublish`](crate::ZmqFanoutPublish), [`ZmqRpcPublish`](crate::ZmqRpcPublish)).
 ///
 /// # Examples
 ///
@@ -54,12 +64,11 @@ impl ZmqTestBroker {
         Self::default()
     }
 
-    /// A publisher usable before `connect`, mirroring the real broker's early-publisher path.
+    /// A queue publisher usable before `connect`, mirroring the real broker's early-publisher
+    /// path.
     #[must_use]
-    pub fn publisher(&self) -> ZmqTestPublisher {
-        ZmqTestPublisher {
-            state: Arc::clone(&self.state),
-        }
+    pub fn queue_publisher(&self) -> ZmqTestPublisher {
+        ZmqTestPublisher::queue(Arc::clone(&self.state))
     }
 }
 
@@ -81,12 +90,24 @@ pub struct ConnectedZmqTestBroker {
 }
 
 impl ConnectedZmqTestBroker {
-    /// A publisher from the connected form.
+    /// A publisher into the queue: each message reaches one of the consumers on the destination.
     #[must_use]
-    pub fn publisher(&self) -> ZmqTestPublisher {
-        ZmqTestPublisher {
-            state: Arc::clone(&self.state),
-        }
+    pub fn queue_publisher(&self) -> ZmqTestPublisher {
+        ZmqTestPublisher::queue(Arc::clone(&self.state))
+    }
+
+    /// A publisher into the fan-out: each message reaches every subscription whose name is a
+    /// prefix of the destination, and none when nothing matches.
+    #[must_use]
+    pub fn fanout_publisher(&self) -> ZmqTestPublisher {
+        ZmqTestPublisher::fanout(Arc::clone(&self.state))
+    }
+
+    /// A publisher for the request-reply exchange: it routes replies to the address a request
+    /// carried, and issues requests through [`RequestReply`](ruststream::RequestReply).
+    #[must_use]
+    pub fn rpc_publisher(&self) -> ZmqTestRpcPublisher {
+        ZmqTestRpcPublisher::new(Arc::clone(&self.state))
     }
 }
 
@@ -120,11 +141,17 @@ impl TestableBroker for ConnectedZmqTestBroker {
         let _ = self.state.coordinator.set(coordinator);
     }
 
+    /// Injects a message the way a foreign peer would, by exact destination.
+    ///
+    /// Injection carries no pattern - a name is all the harness has - so it reaches every
+    /// subscription spelled exactly like the destination. To exercise a pattern's own rule
+    /// (competing consumers, prefix filtering), publish through that pattern's policy instead.
     fn inject(&self, message: OutgoingMessage<'_>) {
         self.state.publish(
             message.name(),
             Bytes::copy_from_slice(message.payload()),
             message.headers().clone(),
+            Routing::Exact,
         );
     }
 
@@ -134,54 +161,3 @@ impl TestableBroker for ConnectedZmqTestBroker {
 }
 
 ruststream::register_testable_broker!(ConnectedZmqTestBroker);
-
-/// Publisher for the in-process broker.
-#[derive(Debug, Clone)]
-pub struct ZmqTestPublisher {
-    state: Arc<TestState>,
-}
-
-impl Publisher for ZmqTestPublisher {
-    type Error = ZmqError;
-
-    fn publish(&self, msg: OutgoingMessage<'_>) -> impl Future<Output = Result<(), Self::Error>> {
-        self.state.publish(
-            msg.name(),
-            Bytes::copy_from_slice(msg.payload()),
-            msg.headers().clone(),
-        );
-        ready(Ok(()))
-    }
-}
-
-/// The publish policy for [`ZmqTestPublisher`].
-///
-/// Mirrors the real brokers' policies ([`ZmqQueuePublish`](crate::ZmqQueuePublish),
-/// [`ZmqFanoutPublish`](crate::ZmqFanoutPublish), [`ZmqRpcPublish`](crate::ZmqRpcPublish)).
-///
-/// # Examples
-///
-/// ```
-/// use ruststream_zeromq::testing::ZmqTestPublish;
-///
-/// let policy = ZmqTestPublish::default();
-/// # let _ = policy;
-/// ```
-#[derive(Debug, Clone, Copy, Default)]
-#[must_use]
-pub struct ZmqTestPublish;
-
-impl PublishPolicy<ConnectedZmqTestBroker> for ZmqTestPublish {
-    type Live = ZmqTestPublisher;
-
-    fn pair(
-        self,
-        connected: &ConnectedZmqTestBroker,
-    ) -> impl Future<Output = Result<Self::Live, PairError>> {
-        ready(Ok(connected.publisher()))
-    }
-}
-
-impl DefaultPublish for ConnectedZmqTestBroker {
-    type Policy = ZmqTestPublish;
-}

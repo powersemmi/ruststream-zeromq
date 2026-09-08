@@ -119,7 +119,13 @@ impl BatchSubscriber for ZmqTestSubscriber {
 ///
 /// `ack` consumes the handle; `nack(requeue = true)` re-queues the delivery on the owning
 /// subscription's channel so the next handler invocation sees it again; `nack(requeue = false)`
-/// drops it, matching the real subscriber's reject path in effect.
+/// drops it.
+///
+/// This is the one place the stand-in offers more than the transport, and the difference is worth
+/// keeping out of assertions: `ZeroMQ` acknowledges nothing, so [`ZmqMessage`](crate::ZmqMessage)
+/// reports [`AckError::Unsupported`] for both and a redelivery never happens. A handler that
+/// settles by retrying is exercised here and silently loses the message in production; assert on
+/// what the handler did, and cover redelivery with a broker that has it.
 pub struct ZmqTestMessage {
     delivery: Option<Delivery>,
     requeue: DeliverySender,
@@ -145,6 +151,7 @@ impl std::fmt::Debug for ZmqTestMessage {
 }
 
 impl ZmqTestMessage {
+    /// Builds a message carrying a harness coordinator clone: a dispatch-driven delivery.
     pub(crate) fn new(
         delivery: Delivery,
         requeue: DeliverySender,
@@ -155,6 +162,12 @@ impl ZmqTestMessage {
             requeue,
             coordinator,
         }
+    }
+
+    /// Builds a message with no coordinator: a reply the requester consumes itself, which the
+    /// router leaves uncounted for the same reason.
+    pub(crate) fn from_reply(delivery: Delivery, requeue: DeliverySender) -> Self {
+        Self::new(delivery, requeue, None)
     }
 }
 
