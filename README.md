@@ -81,7 +81,7 @@ ruststream-zeromq = { version = "0.7", features = ["testing"] }
 
 ## Write a service
 
-Each pattern ships a prelude carrying the framework's own, `ZmqEndpoint`, the pattern's descriptor, and its publish policy under the bare name `Publish` (`rpc::prelude` adds `RequestReply`). Switching pattern is then an import line, not a rewrite of the mount site:
+Each pattern ships its own prelude: the framework's, plus `ZmqEndpoint`, the pattern's descriptor, and its publish policy under the bare name `Publish` (`rpc::prelude` adds `RequestReply`). Switching pattern is then an import line, not a rewrite of the mount site:
 
 ```rust
 use ruststream_zeromq::queue::prelude::*;
