@@ -274,10 +274,6 @@ survives into a test:
   makes, so a responder mounted without a reply-routing transform fails here instead of on
   deployment.
 
-Injection through the harness (`inject`, `tb.publish(..)`) carries no pattern - a name is all it
-has - so it delivers by exact destination. Reach a pattern's own rule by publishing through that
-pattern's policy.
-
 A handle that outlives the connection says so. `shutdown` closes the transport before it drops what
 it was carrying, so a publisher paired earlier, or a clone of the broker, reports
 `ZmqError::NotConnected` rather than publishing into a broker that is gone - the answer the real

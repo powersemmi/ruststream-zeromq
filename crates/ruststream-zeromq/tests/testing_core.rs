@@ -19,8 +19,8 @@ use ruststream::runtime::{
 };
 use ruststream::testing::TestApp;
 use ruststream::{
-    Broker, ConnectedBroker, IncomingMessage, OutgoingMessage, Publisher, RequestReply, Subscribe,
-    Subscriber, subscriber,
+    Broker, ConnectedBroker, IncomingMessage, Outgoing, OutgoingMessage, Publisher, RequestReply,
+    Subscribe, Subscriber, subscriber,
 };
 use ruststream_zeromq::testing::{ConnectedZmqTestBroker, ZmqTestBroker, ZmqTestSubscriber};
 use ruststream_zeromq::{ZmqError, ZmqFanoutPublish, ZmqQueuePublish, ZmqRpcPublish};
@@ -298,7 +298,7 @@ struct Job {
     id: u64,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Outgoing, Serialize)]
 struct Done {
     id: u64,
 }
@@ -308,7 +308,7 @@ struct Event {
     id: u64,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Outgoing, Serialize)]
 struct Note {
     id: u64,
 }
@@ -391,7 +391,7 @@ struct Greeting {
     who: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Outgoing, Serialize)]
 struct Answer {
     text: String,
 }
