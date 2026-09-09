@@ -28,9 +28,10 @@ pub use self::ZmqRpcPublish as Publish;
 ///     who: String,
 /// }
 ///
-/// // `Reply` is the marker naming the reply position at the mount site, so the message type
-/// // answering the request carries its own name.
-/// #[derive(Serialize)]
+/// // An answer has no destination of its own: the ROUTER addresses it per request. The type
+/// // derives `Outgoing` without a name, and the clause's literal is the placeholder a publish
+/// // transform replaces with the request's `reply-to` address.
+/// #[derive(Serialize, Outgoing)]
 /// struct Answer {
 ///     text: String,
 /// }

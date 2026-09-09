@@ -17,12 +17,14 @@ pub use self::ZmqQueuePublish as Publish;
 ///     id: u64,
 /// }
 ///
-/// #[derive(Serialize)]
+/// // The result queue belongs to the message, so the type names it and the clause stays bare.
+/// #[derive(Serialize, Outgoing)]
+/// #[outgoing(name = "results")]
 /// struct Done {
 ///     id: u64,
 /// }
 ///
-/// #[subscriber("jobs", publish("results"))]
+/// #[subscriber("jobs", publish)]
 /// async fn handle(job: &Job) -> Done {
 ///     Done { id: job.id }
 /// }

@@ -13,10 +13,13 @@ use std::io;
 use std::time::Duration;
 
 use ruststream::codec::{Codec, JsonCodec};
+// The two `Outgoing` names live in different namespaces: the derive on a reply type is the macro
+// `ruststream::Outgoing`, and the value a publish transform rewrites is the type
+// `ruststream::runtime::Outgoing`.
 use ruststream::runtime::{
     App, AppInfo, Outgoing, PublishContext, PublishTransform, Reply, RustStream,
 };
-use ruststream::{IncomingMessage, OutgoingMessage, RequestReply, subscriber};
+use ruststream::{IncomingMessage, Outgoing, OutgoingMessage, RequestReply, subscriber};
 use ruststream_zeromq::{ZmqEndpoint, ZmqRpc, ZmqRpcPublish};
 use serde::{Deserialize, Serialize};
 
@@ -25,9 +28,9 @@ struct Greeting {
     who: String,
 }
 
-// `Reply` is the mount site's marker for this handler's reply position, so the message type
-// answering the request carries its own name.
-#[derive(Debug, Deserialize, Serialize)]
+// An answer has no destination of its own: the ROUTER addresses it per request. The type derives
+// `Outgoing` without a name, so the destination is the one the mount site supplies.
+#[derive(Debug, Deserialize, Serialize, Outgoing)]
 struct Answer {
     text: String,
 }

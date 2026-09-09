@@ -55,7 +55,7 @@ publisher:
 | `ZmqRpc` | DEALER/ROUTER | Request and reply. | `ZmqRpcPublish` |
 
 A mount site names a policy with one verb, `.out(marker, policy)`: `Reply` for the value a
-`#[subscriber(.., publish("dest"))]` handler returns, a slot marker for an injected `Out<..>`
+`#[subscriber(.., publish)]` handler returns, a slot marker for an injected `Out<..>`
 publisher. Each policy is also the `DefaultPublish` policy of its connected form, so a handler
 mounted without an `.out(Reply, ..)` call sends its reply through it anyway.
 
@@ -215,10 +215,11 @@ correlation id is respected, so an upper layer can match on its own identifier.
 --8<-- "crates/ruststream-zeromq/examples/zmq_request_reply.rs:request"
 ```
 
-The responder side is an ordinary reply handler. The ROUTER socket stamps each incoming request
-with a `reply-to` header addressing the peer that sent it, and a publish transform rewrites the
-reply destination to that address, so the answer routes back to the requester instead of to the
-literal destination in the decorator:
+The responder side is an ordinary reply handler. The ROUTER socket adds a `reply-to` header to
+each request, addressing the peer that sent it, and a publish transform rewrites the reply
+destination to that address. An answer is addressed per request, so its type declares no
+destination of its own and the name in the `publish("..")` clause is the placeholder the transform
+replaces:
 
 ```rust
 --8<-- "crates/ruststream-zeromq/examples/zmq_request_reply.rs:transform"
