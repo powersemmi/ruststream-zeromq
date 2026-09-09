@@ -360,7 +360,9 @@ impl Publisher for ZmqRpcPublisher {
             reason: "no responder subscription is attached".to_owned(),
         })?;
 
-        let mut message = wire::encode("reply", msg.headers(), msg.payload());
+        // Frame 0 of a reply is the literal "reply". The ROUTER identity frame pushed in front of
+        // it is what addresses the requester, so the name position carries nothing to route on.
+        let mut message = wire::encode_to(msg.name(), "reply", msg.headers(), msg.payload())?;
         message.push_front(Bytes::from(identity));
         let mut router = router.lock().await;
         router.send(message).await.map_err(|e| ZmqError::Send {
@@ -402,7 +404,7 @@ impl RequestReply for ZmqRpcPublisher {
         );
         let mut headers = msg.headers().clone();
         headers.insert("correlation-id", correlation.clone());
-        let request = wire::encode(msg.name(), &headers, msg.payload());
+        let request = wire::encode_to(msg.name(), msg.name(), &headers, msg.payload())?;
         send_with_retry(&mut dealer, msg.name(), request).await?;
 
         let exchange = async {
