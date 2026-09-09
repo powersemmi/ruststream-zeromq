@@ -126,7 +126,7 @@ impl Broker for ZmqFanout {
 
 impl DescribeServer for ZmqFanout {
     fn describe_server(&self) -> ServerSpec {
-        ServerSpec::new(self.endpoint.address(), "zeromq")
+        ServerSpec::new(self.endpoint.host(), "zeromq")
     }
 }
 

@@ -183,7 +183,7 @@ impl Broker for ZmqRpc {
 
 impl DescribeServer for ZmqRpc {
     fn describe_server(&self) -> ServerSpec {
-        ServerSpec::new(self.endpoint.address(), "zeromq")
+        ServerSpec::new(self.endpoint.host(), "zeromq")
     }
 }
 
