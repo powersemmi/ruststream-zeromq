@@ -104,12 +104,11 @@ impl Subscribe for ConnectedZmqTestBroker {
     type Subscriber = ZmqTestSubscriber;
 
     fn subscribe(&self, name: &str) -> impl Future<Output = Result<Self::Subscriber, Self::Error>> {
-        let (id, requeue, rx) = self.state.router.subscribe(name.to_owned());
+        let (id, rx) = self.state.router.subscribe(name.to_owned());
         ready(Ok(ZmqTestSubscriber::new(
             Arc::clone(&self.state),
             id,
             rx,
-            requeue,
             self.state.coordinator().cloned(),
         )))
     }
