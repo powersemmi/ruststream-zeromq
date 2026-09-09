@@ -92,7 +92,7 @@ struct Job {
     id: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Outgoing, Serialize)]
 struct Done {
     id: u64,
 }
@@ -117,7 +117,7 @@ fn app() -> impl App {
 
 ## Test it
 
-The `testing` feature ships `ZmqTestBroker`: an in-process stand-in with the same routing and the same lifecycle ladder, no sockets. Build the app around it and drive it with the framework's `TestApp` harness - the handlers and the mount verb are the production ones, and only the broker and its policy change. The harness encodes what it injects and decodes what it asserts on, so a test build adds `Serialize` to the input type and `Deserialize` plus `PartialEq` to the reply:
+The `testing` feature ships `ZmqTestBroker`: an in-process stand-in with the same routing and the same lifecycle ladder, no sockets. Build the app around it and drive it with the framework's `TestApp` harness - the handlers and the mount verb are the production ones, and only the broker and its policy change. The harness encodes what it injects and decodes what it asserts on, so a test build adds `Outgoing` and `Serialize` to the input type and `Deserialize` plus `PartialEq` to the reply:
 
 ```rust
 use ruststream::testing::TestApp;
