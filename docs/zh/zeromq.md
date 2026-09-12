@@ -56,15 +56,15 @@ serde = { version = "1", features = ["derive"] }
 的是什么。因此，同一个端点上的两个 `ZmqQueue` 订阅会把一股工作分着做，另一种工作需要它自己的端点。
 
 每种模式都自带 prelude，路由文件只需要这一个导入：`ruststream_zeromq::queue::prelude::*`、
-`fanout::prelude::*` 或 `rpc::prelude::*`。它重导出框架的 prelude、端点、这种模式的描述符，以及这
-种模式的发布策略（名字统一为 `Publish`）；`rpc::prelude` 还加上 `RequestReply`。每种模式都把自己的
-策略叫 `Publish`，因此服务在模式之间搬家时，改的是导入那一行，挂载点一个字都不用动。
+`fanout::prelude::*` 或 `rpc::prelude::*`。它重导出框架的 prelude、端点、这种模式的 Broker 类型，
+以及这种模式的发布策略（名字统一为 `Publish`）；`rpc::prelude` 还加上 `RequestReply`。每种模式都
+把自己的策略叫 `Publish`，因此服务在模式之间搬家时，改的是导入那一行，挂载点一个字都不用动。
 
 两套词汇，两个文件。挂载点点名策略；处理器用 Broker 的能力 trait（`Publisher`、`RequestReply`）
 约束注入进来的发布者，并且只导入 `ruststream::prelude::*`。
 
-挂载不止一种模式的文件，改为导入 `ruststream_zeromq::prelude::*`。这个 glob 重导出三个描述符，以及
-带前缀名字的三个策略：`ZmqQueuePublish`、`ZmqFanoutPublish` 和 `ZmqRpcPublish`。
+挂载不止一种模式的文件，改为导入 `ruststream_zeromq::prelude::*`。这个 glob 重导出三个 Broker
+类型，以及带前缀名字的三个策略：`ZmqQueuePublish`、`ZmqFanoutPublish` 和 `ZmqRpcPublish`。
 
 队列模式上的一个工作进程，它只导入这种模式的 prelude：
 
@@ -233,9 +233,9 @@ socket.send_multipart([b"jobs", b"content-type: application/json", payload])
 路由。它遵循与真实模式相同的那条阶梯。它一次投递一条消息，并像 `ZmqQueue` 那样在客户端侧攒
 批次，因此在生产中跑得起来的批量处理器，在测试套件下也跑得起来。
 
-用 `TestApp` 测试套件来驱动它。`TestApp::start(app)` 在进程内连接应用的各个 Broker，已启动的测试
-套件上的 `tb.broker::<ZmqTestBroker>()` 就是这个传输的句柄。从这个句柄出发，
-`.message(&job).to("jobs").publish()` 送进一个任务，
+用 `TestApp` 测试套件来驱动它。`TestApp::start(app).await?` 在进程内连接应用的各个 Broker，并返回
+已启动的测试套件，也就是下面的 `tb`；它上面的 `tb.broker::<ZmqTestBroker>()` 就是这个传输的句柄。
+从这个句柄出发，`.message(&job).to("jobs").publish()` 送进一个任务，
 `.subscriber("jobs").assert_called_once().with(&job)` 断言处理器收到了什么，
 `.published::<Done>("results").assert_called_once().with(&done)` 断言发布型处理器发出了什么。参见
 [用 TestApp 对服务做单元测试](https://powersemmi.github.io/ruststream/latest/guides/testing/#unit-testing-a-service-with-testapp)。
@@ -269,7 +269,7 @@ socket.send_multipart([b"jobs", b"content-type: application/json", payload])
 
 ### 它不复现什么 { #what-it-does-not-reproduce }
 
-凡是需要对端的，它都不复现，因为 channel 没有对端。真实的 PUSH 套接字在没有任何东西连上来时会
+凡是需要对端的，它都不复现，因为进程内的通道没有对端。真实的 PUSH 套接字在没有任何东西连上来时会
 阻塞、然后返回错误，而这里的一次发布是记录下来再丢掉：“已连接”指的是另一个进程里的套接字，进程
 内没有与之对应的东西。请求超时只覆盖等待应答这一段，从不涉及够到对端。投递保证、高水位和慢加入
 者，自始至终都是传输层的行为。

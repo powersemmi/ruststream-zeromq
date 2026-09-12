@@ -1,7 +1,7 @@
 //! The imports a routes file that mounts more than one `ZeroMQ` form writes, in one glob.
 //!
 //! The framework's prelude, the shared [`ZmqEndpoint`], the [`RequestReply`] capability, the
-//! three descriptors with their publish policies, and the three form modules (for the connected
+//! three broker types with their publish policies, and the three form modules (for the connected
 //! forms and live publishers, which a service rarely names).
 //!
 //! Policies keep their prefixed names here, because all three forms call theirs `Publish` and one

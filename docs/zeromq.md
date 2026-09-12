@@ -66,7 +66,7 @@ second kind of work needs its own endpoint.
 
 Each pattern ships its own prelude, and that is the one import a routes file needs:
 `ruststream_zeromq::queue::prelude::*`, `fanout::prelude::*` or `rpc::prelude::*`. It re-exports the
-framework's prelude, the endpoint, the pattern's descriptor and the pattern's publish policy under
+framework's prelude, the endpoint, the pattern's broker type and the pattern's publish policy under
 the name `Publish`; `rpc::prelude` adds `RequestReply`. Every pattern names its policy `Publish`, so
 moving a service between patterns changes the import line and nothing at the mount site.
 
@@ -75,7 +75,7 @@ with a broker capability trait (`Publisher`, `RequestReply`) and imports `rustst
 alone.
 
 A file that mounts more than one pattern imports `ruststream_zeromq::prelude::*` instead. That glob
-re-exports the three descriptors and the policies under their prefixed names, `ZmqQueuePublish`,
+re-exports the three broker types and the policies under their prefixed names, `ZmqQueuePublish`,
 `ZmqFanoutPublish` and `ZmqRpcPublish`.
 
 A worker on the queue pattern, with the pattern's prelude as its one import:
@@ -266,9 +266,9 @@ routing with no sockets and no network. It follows the same ladder as the real p
 one message at a time and assembles batches in the client exactly as `ZmqQueue` does, so a batch
 handler that runs in production also runs under the harness.
 
-Drive it through the `TestApp` harness. `TestApp::start(app)` connects the app's brokers in process,
-and `tb.broker::<ZmqTestBroker>()` on the started harness is this transport's handle. From that
-handle, `.message(&job).to("jobs").publish()` puts a job in,
+Drive it through the `TestApp` harness. `TestApp::start(app).await?` connects the app's brokers in
+process and returns the started harness, `tb` below; `tb.broker::<ZmqTestBroker>()` on it is this
+transport's handle. From that handle, `.message(&job).to("jobs").publish()` puts a job in,
 `.subscriber("jobs").assert_called_once().with(&job)` asserts what the handler received, and
 `.published::<Done>("results").assert_called_once().with(&done)` asserts what a publishing handler
 sent. See
@@ -309,13 +309,13 @@ publishers give, and the one a service would match on.
 
 ### What it does not reproduce
 
-Everything that needs a peer, because a channel has none. A real PUSH socket blocks and then fails
-when nothing is connected to it, while a publish here is recorded and dropped: "connected" means a
-socket in another process, which has no in-process counterpart. A request timeout covers the wait
-for an answer alone, never reaching a peer. Delivery guarantees, high-water marks and the slow
-joiner stay transport behaviour throughout.
+Everything that needs a peer, because an in-process channel has none. A real PUSH socket blocks and
+then fails when nothing is connected to it, while a publish here is recorded and dropped:
+"connected" means a socket in another process, which has no in-process counterpart. A request
+timeout covers the wait for an answer alone, never reaching a peer. Delivery guarantees, high-water
+marks and the slow joiner stay transport behaviour throughout.
 
-Settlement is reproduced rather than softened. `ZeroMQ` acknowledges nothing, so an in-process
+Settlement is reproduced rather than softened. ZeroMQ acknowledges nothing, so an in-process
 delivery reports `AckError::Unsupported` for `ack` and for `nack` and never comes back, exactly as a
 delivery over a socket does. A handler that settles by retrying is called once here, which is how
 often it runs on deployment; cover redelivery with a broker that has it.
