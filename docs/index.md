@@ -1,14 +1,12 @@
 # ruststream-zeromq
 
-**`ruststream-zeromq`** is the ZeroMQ transport for the
-[RustStream](https://powersemmi.github.io/ruststream/) messaging framework, built on the pure-Rust
-[`zeromq`](https://docs.rs/zeromq) implementation over the TCP and IPC transports.
+**`ruststream-zeromq`** connects a [RustStream](https://powersemmi.github.io/ruststream/) service to
+a ZeroMQ topology, over the pure-Rust [`zeromq`](https://docs.rs/zeromq) implementation on the TCP
+and IPC transports.
 
-Unlike every other broker crate there is no server in the middle, and that is the reason it exists:
-a Rust service can join a ZeroMQ topology an existing Python worker or C++ daemon already speaks,
-without leaving the framework. Handlers, routers, codecs, and middleware come from the framework;
-this crate supplies the sockets and a documented frame layout the peer on the other side can
-compose by hand.
+There is no server in the middle: two processes talk to each other directly. The frame layout is
+documented, so the peer on the other side composes messages by hand. A Rust service joins a
+topology an existing Python worker or C++ daemon already speaks.
 
 Three socket patterns cover three messaging shapes: `ZmqQueue` (PUSH/PULL, competing consumers),
 `ZmqFanout` (PUB/SUB, broadcast with prefix filtering), and `ZmqRpc` (DEALER/ROUTER, request and
@@ -38,5 +36,4 @@ serde = { version = "1", features = ["derive"] }
 
 This site documents the ZeroMQ transport only. Framework concepts that apply to every broker
 (writing subscribers, publishing, routing, codecs, middleware, observability, the CLI) live in the
-[RustStream documentation](https://powersemmi.github.io/ruststream/). The pages here cover what is
-specific to ZeroMQ and link back to the framework docs where the two meet.
+[RustStream documentation](https://powersemmi.github.io/ruststream/).
