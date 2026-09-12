@@ -29,7 +29,7 @@ Three socket patterns cover three messaging shapes:
 
 - **`ZmqQueue`** - PUSH/PULL: competing consumers, round-robin.
 - **`ZmqFanout`** - PUB/SUB: broadcast, prefix filtering by name.
-- **`ZmqRpc`** - DEALER/ROUTER: request and reply (`RequestReply` on the publisher; replies route back through the responder's `reply-to` header).
+- **`ZmqRpc`** - DEALER/ROUTER: request and reply. One publisher covers both directions: `RequestReply::request` issues a request over its own DEALER socket, and a plain publish routes a reply back through the responder's ROUTER, addressed by the `reply-to` header the ROUTER stamps on the request.
 
 A socket hands over one message per receive, so a `&[T]` batch handler on `ZmqQueue` or `ZmqFanout` is served by assembling its batches on the client, to the size the mount site names (`b.include(drain.batch(nonzero!(32)))`). `ZmqRpc` does not batch: a batch carries one publish context for all of its replies, and a responder answers each requester at its own `reply-to` address, so `.batch(..)` there is a compile error rather than a run of misrouted replies.
 
@@ -57,6 +57,8 @@ frame 2: payload   encoded by the framework's codec
 
 A Python peer sends `socket.send_multipart([b"orders", b"content-type: application/json", payload])`. A two-frame message from a minimal peer reads as headerless. The layout is stable across versions.
 
+The payload frame is whatever the framework's codec produced, so the peer only has to agree on the codec. Bytes a service already holds framed - the common case when the foreign peer chose the encoding - skip the codec entirely: a `#[derive(Outgoing, Serialized)]` newtype travels through the same `message(..).publish()` call and reaches the wire untouched.
+
 ## Scope and limits
 
 - Delivery is **at most once** and there is no durability; acknowledgement is reported as `AckError::Unsupported`, never emulated.
@@ -79,45 +81,66 @@ ruststream-zeromq = { version = "0.7", features = ["testing"] }
 
 ## Write a service
 
+Each pattern ships its own prelude: the framework's, plus `ZmqEndpoint`, the pattern's descriptor, and its publish policy under the bare name `Publish` (`rpc::prelude` adds `RequestReply`). Switching pattern is then an import line, not a rewrite of the mount site:
+
 ```rust
 use ruststream_zeromq::queue::prelude::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
 struct Job {
     id: u64,
 }
 
-#[subscriber("jobs")]
-async fn handle(job: &Job) -> HandlerOutcome {
-    println!("working on job {}", job.id);
-    HandlerOutcome::ack()
+#[derive(Debug, Outgoing, Serialize)]
+struct Done {
+    id: u64,
+}
+
+#[subscriber("jobs", publish("results"))]
+async fn handle(job: &Job) -> Done {
+    Done { id: job.id }
 }
 
 #[ruststream::app]
 fn app() -> impl App {
-    RustStream::new(AppInfo::new("worker", "0.1.0"))
-        .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
-            b.include(handle);
-        })
+    RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
+        ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
+        |b| {
+            b.include(handle).out(Reply, Publish);
+        },
+    )
 }
 ```
 
+`.out(marker, policy)` is the one mount verb: `Reply` names the position the handler's return value goes to, and a slot marker names an injected `Out<..>` publisher. A handler file needs none of this - it imports `ruststream::prelude::*` alone and bounds an injected publisher with a capability trait - which is what leaves the bare `Publish` free for the routes file. A file that mounts two patterns imports `ruststream_zeromq::prelude::*` instead, where the policies keep their prefixed names (`ZmqQueuePublish`, `ZmqFanoutPublish`, `ZmqRpcPublish`), because three of them cannot share one bare name.
+
 ## Test it
 
-The `testing` feature runs handlers against an in-process stand-in - no sockets, same routing, same ladder. Inject a message as a foreign peer would with `TestableBroker::inject`, then assert on what a handler published with the free `expect_published`:
+The `testing` feature ships `ZmqTestBroker`: an in-process stand-in with the same routing and the same lifecycle ladder, no sockets. Build the app around it and drive it with the framework's `TestApp` harness - the handlers and the mount verb are the production ones, and only the broker and its policy change. The harness encodes what it injects and decodes what it asserts on, so a test build adds `Outgoing` and `Serialize` to the input type and `Deserialize` plus `PartialEq` to the reply:
 
 ```rust
-use ruststream::{Broker, OutgoingMessage};
-use ruststream::testing::{TestableBroker, expect_published};
-use ruststream_zeromq::testing::ZmqTestBroker;
+use ruststream::testing::TestApp;
+use ruststream_zeromq::testing::{ZmqTestBroker, ZmqTestPublish};
 
-let broker = ZmqTestBroker::new().connect().await?;
-broker.inject(OutgoingMessage::new("jobs", br#"{"id":1}"#));
-let results = expect_published(&broker, "results", 1, std::time::Duration::from_secs(1)).await;
+let app = RustStream::new(AppInfo::new("worker", "0.1.0"))
+    .with_broker(ZmqTestBroker::new(), |b| {
+        b.include(handle).out(Reply, ZmqTestPublish);
+    });
+let tb = TestApp::start(app).await?;
+
+// A foreign peer's push; the injection returns once the handler has settled.
+tb.broker::<ZmqTestBroker>()
+    .publish("jobs", &Job { id: 1 })
+    .await?;
+
+tb.broker::<ZmqTestBroker>()
+    .published::<Done>("results")
+    .assert_called_once()
+    .with(&Done { id: 1 });
 ```
 
-Socket-level behaviour is covered by the loopback suite: `just test` runs everything, including the wire-layout check driven by a raw foreign-style peer, with no broker to start.
+Socket-level behaviour needs no stand-in and no server: the conformance routing suite, the lifecycle ladder, the batch and request-reply capabilities, and a wire-layout check driven by a raw foreign-style peer all run on loopback sockets, so `just test` covers the whole crate with nothing to start first.
 
 ## Layout
 
@@ -126,6 +149,7 @@ ruststream-zeromq/
 ├── crates/
 │   └── ruststream-zeromq/      the published crate
 │       └── examples/           runnable zmq_* examples
+├── docs/                       the documentation site
 └── Cargo.toml                  workspace
 ```
 
