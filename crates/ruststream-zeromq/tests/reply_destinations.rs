@@ -6,7 +6,8 @@
 
 use ruststream::prelude::*;
 use ruststream::testing::TestApp;
-use ruststream_zeromq::testing::{ZmqTestBroker, ZmqTestPublish};
+use ruststream_zeromq::ZmqQueuePublish;
+use ruststream_zeromq::testing::ZmqTestBroker;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, PartialEq, Serialize, Outgoing)]
@@ -50,7 +51,7 @@ async fn a_reply_type_that_names_its_queue_publishes_there() {
     let app = RustStream::new(AppInfo::new("zmq-declared-reply", "0.0.0")).with_broker(
         ZmqTestBroker::new(),
         |b| {
-            b.include(work).out(Reply, ZmqTestPublish);
+            b.include(work).out(Reply, ZmqQueuePublish);
         },
     );
 
@@ -78,7 +79,7 @@ async fn a_reply_type_without_a_name_publishes_where_the_mount_site_says() {
     let app = RustStream::new(AppInfo::new("zmq-mounted-reply", "0.0.0")).with_broker(
         ZmqTestBroker::new(),
         |b| {
-            b.include(greet).out(Reply, ZmqTestPublish);
+            b.include(greet).out(Reply, ZmqQueuePublish);
         },
     );
 

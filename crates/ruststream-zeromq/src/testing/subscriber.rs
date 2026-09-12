@@ -135,11 +135,18 @@ impl std::fmt::Debug for ZmqTestMessage {
 }
 
 impl ZmqTestMessage {
+    /// Builds a message carrying a harness coordinator clone: a dispatch-driven delivery.
     pub(crate) fn new(delivery: Delivery, coordinator: Option<Coordinator>) -> Self {
         Self {
             delivery: Some(delivery),
             coordinator,
         }
+    }
+
+    /// Builds a message with no coordinator: a reply the requester consumes itself, which the
+    /// router leaves uncounted for the same reason.
+    pub(crate) fn from_reply(delivery: Delivery) -> Self {
+        Self::new(delivery, None)
     }
 }
 

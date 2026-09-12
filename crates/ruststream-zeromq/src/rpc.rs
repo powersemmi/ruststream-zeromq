@@ -89,7 +89,21 @@ use crate::message::ZmqMessage;
 use crate::wire;
 
 /// The prefix of reply destinations minted by the responder subscription.
-const REPLY_PREFIX: &str = "zmq-reply:";
+pub(crate) const REPLY_PREFIX: &str = "zmq-reply:";
+
+/// Builds the reply destination addressing one requesting peer.
+///
+/// The responder's ROUTER derives `identity` from the peer that sent the request; the in-process
+/// stand-in mints one per request. Both go through here, so a publish transform that rewrites a
+/// reply destination reads the same shape under the harness as it does over a socket.
+pub(crate) fn reply_address(identity: &[u8]) -> String {
+    format!("{REPLY_PREFIX}{}", hex_encode(identity))
+}
+
+/// Mints the correlation id a request carries when the caller supplied none.
+pub(crate) fn new_correlation_id() -> String {
+    format!("req-{}-{}", std::process::id(), hex_encode(&rand_suffix()))
+}
 
 fn hex_encode(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
@@ -285,10 +299,7 @@ impl Subscribe for ConnectedZmqRpc {
                             continue;
                         };
                         let item = wire::decode(rest).map(|(name, mut headers, payload)| {
-                            headers.insert(
-                                "reply-to",
-                                format!("{REPLY_PREFIX}{}", hex_encode(&identity)),
-                            );
+                            headers.insert("reply-to", reply_address(&identity));
                             ZmqMessage {
                                 name,
                                 headers,
@@ -396,10 +407,10 @@ impl RequestReply for ZmqRpcPublisher {
             })?;
 
         // Respect a caller-supplied correlation id (an upper layer may match on it too).
-        let correlation = msg.headers().correlation_id().map_or_else(
-            || format!("req-{}-{}", std::process::id(), hex_encode(&rand_suffix())),
-            str::to_owned,
-        );
+        let correlation = msg
+            .headers()
+            .correlation_id()
+            .map_or_else(new_correlation_id, str::to_owned);
         let mut headers = msg.headers().clone();
         headers.insert("correlation-id", correlation.clone());
         let request = wire::encode(msg.name(), &headers, msg.payload());
@@ -425,6 +436,13 @@ impl RequestReply for ZmqRpcPublisher {
             .await
             .unwrap_or(Err(ZmqError::RequestTimeout))
     }
+}
+
+/// Mints a reply address for one in-process request, standing in for the peer identity the
+/// responder's ROUTER supplies over a socket.
+#[cfg(feature = "testing")]
+pub(crate) fn new_reply_address() -> String {
+    reply_address(&rand_suffix())
 }
 
 /// A per-request unique suffix without a randomness dependency: the address of a fresh
