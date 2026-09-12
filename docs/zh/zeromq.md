@@ -123,7 +123,7 @@ serde = { version = "1", features = ["derive"] }
 
 ## 生命周期 { #the-lifecycle }
 
-每种模式都是一串消费自身的状态转移，每个状态都是不同的类型：
+每种模式都是一条消费自身的转移阶梯，每个状态都是不同的类型：
 
 ```text
 ZmqQueue::new(endpoint)     只是配置，同步，无 I/O
@@ -230,7 +230,7 @@ socket.send_multipart([b"jobs", b"content-type: application/json", payload])
 ## 测试 { #testing }
 
 `testing` feature 提供 `ZmqTestBroker`：一个进程内传输，不用套接字、不走网络就复现这个 crate 的
-路由。它遵循与真实模式相同的那串状态转移。它一次投递一条消息，并像 `ZmqQueue` 那样在客户端侧攒
+路由。它遵循与真实模式相同的那条阶梯。它一次投递一条消息，并像 `ZmqQueue` 那样在客户端侧攒
 批次，因此在生产中跑得起来的批量处理器，在测试套件下也跑得起来。
 
 用 `TestApp` 测试套件来驱动它。`TestApp::start(app)` 在进程内连接应用的各个 Broker，已启动的测试
@@ -288,6 +288,6 @@ socket.send_multipart([b"jobs", b"content-type: application/json", payload])
 作用域能启动。在 `ZmqRpc` 上，同样的作用域启动时会被拒绝（[重试](#retries)）。响应方的重试接线，
 要拿真实模式来验证。
 
-套接字层面的行为同样不需要外部服务。`conformance` 的路由套件、生命周期的那串状态转移、批次和
-请求/响应这两项能力，以及由一个扮演外部对端的原始套接字驱动的帧布局检查，全都跑在回环套接字上。
+套接字层面的行为同样不需要外部服务。`conformance` 的路由套件、生命周期阶梯、批次和请求/响应
+这两项能力，以及由一个扮演外部对端的原始套接字驱动的帧布局检查，全都跑在回环套接字上。
 因此 `just test` 覆盖整个 crate，事先不用启动任何东西。
