@@ -8,7 +8,7 @@ subscribers, routing, codecs, middleware), see the
 [RustStream documentation](https://powersemmi.github.io/ruststream/).
 
 ```toml
-ruststream = { version = "0.7", features = ["macros"] }
+ruststream = { version = "0.7", features = ["macros", "json"] }
 ruststream-zeromq = "0.7"
 serde = { version = "1", features = ["derive"] }
 ```
@@ -55,8 +55,11 @@ The mount site names one of those policies: `.out(Reply, policy)` publishes what
 injected `Out<..>` publisher. Each pattern's policy is also the default of its connected form, so a
 handler mounted without `.out` publishes its reply through it anyway.
 
-A subscription is named, and the name is the first frame. On `ZmqFanout` that name is also the
-prefix the subscription filters on, so a subscriber on `events` also receives `events.created`.
+A subscription is named, and the name is the first frame. `ZmqFanout` filters on it: the name is
+the subscription prefix, so a subscriber on `events` also receives `events.created`. `ZmqQueue` and
+`ZmqRpc` hand a subscription every message its socket receives, whatever the first frame says. Two
+`ZmqQueue` subscriptions on one endpoint therefore split one stream of work between them, and a
+second kind of work needs its own endpoint.
 
 Each pattern ships its own prelude, and that is the one import a routes file needs:
 `ruststream_zeromq::queue::prelude::*`, `fanout::prelude::*` or `rpc::prelude::*`. It re-exports the
@@ -161,15 +164,23 @@ frame 1: headers   UTF-8 "name: value" lines separated by \n; may be empty
 frame 2: payload   encoded by the framework's codec
 ```
 
+On `ZmqRpc` a reply is framed differently: frame 0 holds the literal `reply`, and a ROUTER identity
+frame in front of it addresses the peer that asked.
+
 A Python peer pushes work into a `ZmqQueue` consumer with:
 
 ```python
 socket.send_multipart([b"jobs", b"content-type: application/json", payload])
 ```
 
-Headers are text. A message that carries none leaves the header frame empty, and a two-frame message
-from a minimal peer reads as headerless. A subscription returns a wire error for a name frame that
-is not UTF-8.
+Headers are text. A message that carries none leaves the header frame empty, a two-frame message
+from a minimal peer reads as headerless, and a blank line inside the frame is skipped, so a peer
+that ends its lines with a newline interoperates.
+
+Nothing is guessed in either direction. Publishing a header value that is not UTF-8 returns an
+error naming the header, because a text frame has no way to hold it. A header frame that is not
+UTF-8 returns a wire error, and so does a line with no `:` between the name and the value. A name
+frame that is not UTF-8 returns a wire error as well.
 
 The payload frame is whatever the framework's codec produced, so the peer only has to agree on the
 codec: with the default JSON codec, `payload` is the JSON document a handler's input type

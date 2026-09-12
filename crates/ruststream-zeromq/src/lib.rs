@@ -21,6 +21,11 @@
 //! payload. A Python peer sends
 //! `socket.send_multipart([b"orders", b"", payload])`.
 //!
+//! Only [`ZmqFanout`] filters on that name; [`ZmqQueue`] and [`ZmqRpc`] hand a subscription every
+//! message its socket receives, whatever frame 0 says. A reply on the request-reply pattern is
+//! framed differently: frame 0 holds the literal `reply`, behind the ROUTER identity frame that
+//! addresses the peer that asked.
+//!
 //! Scope and limits: delivery is at most once and there is no durability, so acknowledgement
 //! is reported as unsupported rather than emulated; a subscriber that connects after a
 //! publisher has started misses what was sent before it arrived; the implementation has no

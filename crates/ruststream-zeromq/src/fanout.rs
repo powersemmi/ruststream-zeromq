@@ -237,6 +237,8 @@ impl Publisher for ZmqFanoutPublisher {
     async fn publish(&self, msg: OutgoingMessage<'_>) -> Result<(), Self::Error> {
         let lifecycle = self.cell.get().ok_or(ZmqError::NotConnected)?;
         lifecycle.ensure_open()?;
+        // Framed before the socket is touched: a message that cannot be written costs no attach.
+        let frames = wire::encode_to(msg.name(), msg.name(), msg.headers(), msg.payload())?;
         let mut guard = self.socket.lock().await;
         if guard.is_none() {
             let mut socket = PubSocket::new();
@@ -246,12 +248,7 @@ impl Publisher for ZmqFanoutPublisher {
         let socket = guard.as_mut().expect("just attached");
         // PUB never reports "no peers": an unmatched message is dropped by design, so the
         // retry helper only smooths transport-level failures.
-        send_with_retry(
-            socket,
-            msg.name(),
-            wire::encode(msg.name(), msg.headers(), msg.payload()),
-        )
-        .await
+        send_with_retry(socket, msg.name(), frames).await
     }
 }
 
