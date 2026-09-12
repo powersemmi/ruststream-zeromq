@@ -130,7 +130,7 @@ impl Broker for ZmqQueue {
 
 impl DescribeServer for ZmqQueue {
     fn describe_server(&self) -> ServerSpec {
-        ServerSpec::new(self.endpoint.address(), "zeromq")
+        ServerSpec::new(self.endpoint.host(), "zeromq")
     }
 }
 

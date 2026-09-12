@@ -28,7 +28,7 @@ acknowledgement lands:
 | `RequestReply` | Yes, on `ZmqRpc` | `ZmqRpcPublisher` implements it over DEALER/ROUTER: a request goes out on a DEALER socket and the answer is matched by the `correlation-id` header, or the call fails on timeout. `ZmqQueue` and `ZmqFanout` are one-way patterns with no return path, so their publishers do not implement it. See [Request and reply](#request-and-reply). |
 | `Partitioned` | No | There is no broker-side partitioning. PUSH/PULL round-robins across attached peers without consulting a key. |
 | `Seekable` / `Positioned` | No | The transport keeps no history. Nothing is stored, so there is no position to return to. |
-| `DescribeServer` | Yes | Each of the three brokers reports its endpoint address and the `zeromq` protocol, which is what the AsyncAPI schema records. |
+| `DescribeServer` | Yes | Each of the three brokers reports the address a client connects to (`broker:5555` on `tcp://`, the socket path on `ipc://`) and the `zeromq` protocol, which is what the AsyncAPI schema records. |
 
 ## Scope
 
