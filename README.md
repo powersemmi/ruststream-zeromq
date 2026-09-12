@@ -66,6 +66,8 @@ The payload frame is whatever the framework's codec produced, so the peer only h
 - The implementation exposes **no high-water-mark configuration**: a slow reader exerts raw TCP back-pressure on senders.
 - There is **no encryption layer**: use it on trusted networks, or inside an existing tunnel.
 - No consumer groups, no dead-lettering, no retry policies, no transactions.
+- **Nothing settles a delivery**, so a `retry_after` is served only by the copy the runtime publishes through the `retry_via` publisher. The one-way patterns report the subscription name as the address for it; a `ZmqRpc` responder reports none, and a scope that wires a retry over one is refused at startup.
+- **A send takes the frames and nothing else**: no priority, no expiry, no ordering key. Every publisher declares `Options = ()`, this crate adds no publish builder step, and a handler body imports `ruststream::prelude::*` alone.
 
 ## Install
 
@@ -117,15 +119,16 @@ fn app() -> impl App {
 
 ## Test it
 
-The `testing` feature ships `ZmqTestBroker`: an in-process stand-in with the same routing and the same lifecycle ladder, no sockets. Build the app around it and drive it with the framework's `TestApp` harness - the handlers and the mount verb are the production ones, and only the broker and its policy change. The harness encodes what it injects and decodes what it asserts on, so a test build adds `Outgoing` and `Serialize` to the input type and `Deserialize` plus `PartialEq` to the reply:
+The `testing` feature ships `ZmqTestBroker`: an in-process stand-in with the same routing and the same lifecycle ladder, no sockets. Build the app around it and drive it with the framework's `TestApp` harness - the handlers, the mount verb and the publish policy are the production ones, and only the broker changes. The harness encodes what it injects and decodes what it asserts on, so a test build adds `Outgoing` and `Serialize` to the input type and `Deserialize` plus `PartialEq` to the reply:
 
 ```rust
 use ruststream::testing::TestApp;
-use ruststream_zeromq::testing::{ZmqTestBroker, ZmqTestPublish};
+use ruststream_zeromq::ZmqQueuePublish;
+use ruststream_zeromq::testing::ZmqTestBroker;
 
 let app = RustStream::new(AppInfo::new("worker", "0.1.0"))
     .with_broker(ZmqTestBroker::new(), |b| {
-        b.include(handle).out(Reply, ZmqTestPublish);
+        b.include(handle).out(Reply, ZmqQueuePublish);
     });
 let tb = TestApp::start(app).await?;
 

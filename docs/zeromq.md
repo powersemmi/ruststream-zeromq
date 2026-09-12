@@ -20,7 +20,8 @@ Which of the framework's optional capability traits this transport implements:
 | Capability | Native | Reason |
 | --- | --- | --- |
 | `Subscribe` | Yes | All three connected forms subscribe by name. See [The three patterns](#the-three-patterns). |
-| Acknowledgement (`ack` / `nack`) | No | Both return `AckError::Unsupported`. Delivery is at most once: once a socket has handed a message over, no protocol frame settles it and there is no store to redeliver from. |
+| Acknowledgement (`ack` / `nack`) | No | Both return `AckError::Unsupported`. Delivery is at most once: once a socket has handed a message over, no protocol frame settles it and there is no store to redeliver from. A delayed retry is served by the framework's deferred copy instead. See [Retries](#retries). |
+| Per-message settings | None | A send takes the frames and nothing else, so every publisher declares `Options = ()` and this crate adds no publish builder step. See [Publishing](#publishing). |
 | `BatchSubscriber` | Client-side, on the one-way patterns | A socket has no batch receive, so `ZmqQueue` and `ZmqFanout` assemble the batches in the client, to the size the mount site named. `ZmqRpc` does not implement it at all, deliberately: `.batch(..)` on a responder does not compile. See [Batches](#batches). |
 | `TransactionalPublisher` | No | ZeroMQ has no transactions. |
 | `OwnedTransactions` | No | ZeroMQ has no transactions. |
@@ -31,7 +32,9 @@ Which of the framework's optional capability traits this transport implements:
 
 ## Scope
 
-- Delivery is at most once, and nothing is stored.
+- Delivery is at most once, and nothing is stored. A handler asking for a delayed retry is served
+  only by the framework's deferred copy, and a responder cannot be served at all
+  ([Retries](#retries)).
 - A fan-out subscriber that attaches after a publisher has started misses what was sent before it
   arrived (the slow joiner).
 - There is no high-water-mark setting. A slow reader exerts raw TCP back-pressure on senders, and a
@@ -197,6 +200,27 @@ framed them. You wrap them in a `#[derive(Outgoing, Serialized)]` newtype and pu
 the same `message(..)` call. No codec runs on them, and the type names a payload that would
 otherwise be anonymous.
 
+A send carries the frames and nothing else - no priority, no expiry, no ordering key - so every
+publisher here declares `Options = ()` and there is no setting to adjust per message. On a broker
+that has one, a body reaching for a step imports that broker's prelude and names its options type in
+the bound; here a handler file imports `ruststream::prelude::*` alone, whichever pattern it runs on.
+
+## Retries
+
+A delivery is never settled, so a handler that returns `HandlerOutcome::retry_after(..)` is served
+by one thing only: the copy the runtime publishes once the delay is over, through the publisher the
+scope wires with `retry_via`. Wire one on the scope, and the copy goes where the subscription says
+it should.
+
+`ZmqQueue` and `ZmqFanout` say their own subscription name, which is where a publisher on the same
+broker reaches them. A retry on the queue goes back into the queue, so whichever worker is free
+takes it; a retry on the fan-out reaches every subscription whose prefix matches, the same audience
+the original had.
+
+`ZmqRpc` says nothing, because a responder's name is not a publish destination: replies are routed to
+the peer identity a request carried. A scope that wires `retry_via` over a responder is refused at
+startup, and the error names the subscription. Let the requester ask again instead.
+
 ## Request and reply
 
 `ZmqRpc` covers both ends of DEALER/ROUTER.
@@ -213,7 +237,13 @@ request yourself and the transport keeps it, so an upper layer can match on its 
 The responder side is an ordinary reply handler. The ROUTER socket adds a `reply-to` header to each
 request, addressing the peer that sent it, and a publish transform rewrites the reply destination to
 that address. An answer is addressed per request, so its type declares no destination of its own and
-the name in the `publish("..")` clause is the placeholder the transform replaces:
+the name in the `publish("..")` clause is the fallback: what the generated document reports, and
+where a delivery the transform left alone is answered.
+
+A transform that picks the destination declares `Destination = Names`, and a position offers that
+right only where nothing has declared one already. So a reply type that names its own destination
+and a naming transform do not compile together, and the document cannot promise one channel while
+the wire carries another:
 
 ```rust
 --8<-- "crates/ruststream-zeromq/examples/zmq_request_reply.rs:transform"
@@ -290,14 +320,18 @@ delivery reports `AckError::Unsupported` for `ack` and for `nack` and never come
 delivery over a socket does. A handler that settles by retrying is called once here, which is how
 often it runs on deployment; cover redelivery with a broker that has it.
 
-One difference runs the other way - the stand-in offers more than the transport - and it is the test
-author's to keep out of assertions.
+Two differences run the other way - the stand-in offers more than the transport - and both follow
+from the same gap: a subscription is opened by name here, and a name does not say which pattern it
+belongs to. The publish side has no such gap, because there the policy at the mount site names the
+pattern.
 
 **The responder's subscriber.** `ZmqRpcSubscriber` is deliberately not a `BatchSubscriber`, so
-`.batch(..)` on a request-reply mount does not compile in production - but a mount site names only a
-string, so nothing tells the stand-in which pattern a subscription belongs to and the same mount
-compiles under the harness. The publish side has no such gap, because there the policy at the mount
-site names the pattern.
+`.batch(..)` on a request-reply mount does not compile in production, while the same mount compiles
+under the harness.
+
+**The retry address.** Every subscription here reports its own name, the one-way patterns' answer,
+so a scope that wires `retry_via` starts. On `ZmqRpc` the same scope is refused at startup
+([Retries](#retries)). Check a responder's retry wiring against the real pattern.
 
 Socket-level behaviour needs no external service either. The conformance routing suite, the
 lifecycle ladder, the batch and request/reply capabilities, and a wire-layout check driven by a raw
