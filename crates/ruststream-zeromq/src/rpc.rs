@@ -271,6 +271,12 @@ impl Subscriber for ZmqRpcSubscriber {
     }
 }
 
+/// A responder reports no redelivery address, so `redelivery_address` keeps its "cannot say"
+/// default: the name a responder subscribes under is not a publish destination on this pattern.
+/// [`ZmqRpcPublisher`] routes to a peer identity a request carried and refuses a plain name, so a
+/// deferred copy published under the subscription name would reach nothing. A scope that wires
+/// `retry_via` over a responder therefore refuses to start, instead of dropping the retry
+/// silently; ask a requester again rather than retrying its request from the responder side.
 impl Subscribe for ConnectedZmqRpc {
     type Subscriber = ZmqRpcSubscriber;
 
@@ -352,7 +358,22 @@ impl ZmqRpcPublisher {
 impl Publisher for ZmqRpcPublisher {
     type Error = ZmqError;
 
-    async fn publish(&self, msg: OutgoingMessage<'_>) -> Result<(), Self::Error> {
+    /// ZMTP carries no per-message setting: a send takes the frames and nothing else, so there is
+    /// nothing for a call site to adjust. Which peer a reply reaches is a destination, not a
+    /// setting, and a naming publish transform supplies it. See the
+    /// [crate documentation](crate#per-message-settings).
+    type Options = ();
+
+    /// # Cancel safety
+    ///
+    /// Not cancel-safe. Dropping the future can leave the reply half-handed to the ROUTER, and the
+    /// requester then waits out its timeout. Answer from a task of its own rather than inside a
+    /// `select!` arm.
+    async fn publish(
+        &self,
+        msg: OutgoingMessage<'_>,
+        _options: Option<&Self::Options>,
+    ) -> Result<(), Self::Error> {
         let shared = self.shared()?;
         let Some(identity_hex) = msg.name().strip_prefix(REPLY_PREFIX) else {
             return Err(ZmqError::Send {
@@ -386,6 +407,11 @@ impl Publisher for ZmqRpcPublisher {
 impl RequestReply for ZmqRpcPublisher {
     type Reply = ZmqMessage;
 
+    /// # Cancel safety
+    ///
+    /// Not cancel-safe. Dropping the future closes the DEALER this request was issued on, so an
+    /// answer already in flight is lost, and the request itself may have reached the responder
+    /// already. Give up through `timeout` rather than by cancelling.
     async fn request(
         &self,
         msg: OutgoingMessage<'_>,

@@ -14,8 +14,8 @@ use std::time::Duration;
 use futures::StreamExt;
 use ruststream::codec::{Codec, JsonCodec};
 use ruststream::runtime::{
-    AppInfo, DefaultSlot, HandlerOutcome, Out, Outgoing, PublishContext, PublishTransform, Reply,
-    RustStream,
+    AppInfo, DefaultSlot, ForReply, HandlerOutcome, Names, Out, Outgoing, PublishContext,
+    PublishTransform, Reply, RustStream,
 };
 use ruststream::testing::TestApp;
 use ruststream::{
@@ -109,22 +109,25 @@ async fn publishing_after_shutdown_errors() {
         (
             "queue publish",
             queue
-                .publish(OutgoingMessage::new("jobs", b"late".as_slice()))
+                .publish(OutgoingMessage::new("jobs", b"late".as_slice()), None)
                 .await
                 .expect_err("a queue publish after shutdown must fail"),
         ),
         (
             "fan-out publish",
             fanout
-                .publish(OutgoingMessage::new("events", b"late".as_slice()))
+                .publish(OutgoingMessage::new("events", b"late".as_slice()), None)
                 .await
                 .expect_err("a fan-out publish after shutdown must fail"),
         ),
         (
             "reply publish",
-            rpc.publish(OutgoingMessage::new(reply_to.as_str(), b"late".as_slice()))
-                .await
-                .expect_err("a reply after shutdown must fail"),
+            rpc.publish(
+                OutgoingMessage::new(reply_to.as_str(), b"late".as_slice()),
+                None,
+            )
+            .await
+            .expect_err("a reply after shutdown must fail"),
         ),
         (
             "request",
@@ -160,7 +163,7 @@ async fn the_queue_hands_each_message_to_one_consumer_in_turn() {
 
     for payload in [b"one".as_slice(), b"two".as_slice(), b"three".as_slice()] {
         publisher
-            .publish(OutgoingMessage::new("jobs", payload))
+            .publish(OutgoingMessage::new("jobs", payload), None)
             .await
             .expect("the publish succeeds");
     }
@@ -187,7 +190,10 @@ async fn the_fanout_delivers_to_every_prefix_match_and_drops_the_rest() {
     let publisher = broker.fanout_publisher();
 
     publisher
-        .publish(OutgoingMessage::new("orders.eu.1", b"kept".as_slice()))
+        .publish(
+            OutgoingMessage::new("orders.eu.1", b"kept".as_slice()),
+            None,
+        )
         .await
         .expect("the publish succeeds");
 
@@ -201,7 +207,10 @@ async fn the_fanout_delivers_to_every_prefix_match_and_drops_the_rest() {
 
     // Nothing matches this one: the pattern drops it rather than failing the publish.
     publisher
-        .publish(OutgoingMessage::new("unheard.1", b"dropped".as_slice()))
+        .publish(
+            OutgoingMessage::new("unheard.1", b"dropped".as_slice()),
+            None,
+        )
         .await
         .expect("an unmatched fan-out publish is not an error");
     expect_idle(&mut eu, "an unmatched message reaches no subscription").await;
@@ -218,7 +227,7 @@ async fn the_reply_publisher_refuses_a_destination_that_is_not_a_reply_address()
 
     let err = broker
         .rpc_publisher()
-        .publish(OutgoingMessage::new("reply", b"answer".as_slice()))
+        .publish(OutgoingMessage::new("reply", b"answer".as_slice()), None)
         .await
         .expect_err("a literal destination is not a reply address");
 
@@ -274,7 +283,10 @@ async fn a_reply_that_drops_the_correlation_id_never_resolves_the_request() {
             .to_owned();
         // Deliberately no correlation-id: the answer is addressed but unmatched.
         replies
-            .publish(OutgoingMessage::new(reply_to.as_str(), b"pong".as_slice()))
+            .publish(
+                OutgoingMessage::new(reply_to.as_str(), b"pong".as_slice()),
+                None,
+            )
             .await
             .expect("the reply is routed to the address the request carried");
     });
@@ -405,7 +417,9 @@ struct AskFor {
 /// the id it was asked with.
 struct ReplyToRequester;
 
-impl<C> PublishTransform<C> for ReplyToRequester {
+impl<C> PublishTransform<ForReply<C>> for ReplyToRequester {
+    type Destination = Names;
+
     fn apply(&self, out: &mut Outgoing<'_>, cx: &PublishContext<'_, C>) {
         if let Some(reply_to) = cx.headers().reply_to() {
             out.set_name(reply_to.to_owned());

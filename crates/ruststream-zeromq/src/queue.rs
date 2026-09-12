@@ -57,7 +57,8 @@ use std::sync::Arc;
 use futures::Stream;
 use ruststream::{
     BatchSubscriber, Broker, BufferedSubscriber, ConnectedBroker, DefaultPublish, DescribeServer,
-    OutgoingMessage, PairError, PublishPolicy, Publisher, ServerSpec, Subscribe, Subscriber,
+    OutgoingMessage, PairError, PublishPolicy, Publisher, RedeliveryAddress, ServerSpec, Subscribe,
+    Subscriber,
 };
 use tokio::sync::{Mutex, OnceCell, mpsc};
 use zeromq::prelude::*;
@@ -208,6 +209,17 @@ impl Subscribe for ConnectedZmqQueue {
             DriverHandle { task },
         ))
     }
+
+    /// The subscribe name itself: a publisher on this queue reaches the subscription under it.
+    ///
+    /// This is the whole retry path on `ZeroMQ`. Nothing settles a delivery, so a handler asking
+    /// for `retry_after` is served only by the deferred copy the runtime publishes here, and a
+    /// scope wired with `retry_via` over a queue subscription works because of this answer.
+    /// Competing consumers still compete for the copy, so the worker that retries is not
+    /// necessarily the one that asked.
+    fn redelivery_address(&self, name: &str) -> Option<RedeliveryAddress> {
+        Some(RedeliveryAddress::new(name.to_owned()))
+    }
 }
 
 /// A subscription on one of the one-way patterns - PUSH/PULL or PUB/SUB - yielding
@@ -281,10 +293,23 @@ impl std::fmt::Debug for ZmqQueuePublisher {
 impl Publisher for ZmqQueuePublisher {
     type Error = ZmqError;
 
+    /// ZMTP carries no per-message setting: a send takes the frames and nothing else, so there is
+    /// nothing for a call site to adjust. See the [crate documentation](crate#per-message-settings).
+    type Options = ();
+
+    /// # Cancel safety
+    ///
+    /// Not cancel-safe. Dropping the future can leave the message half-handed to the socket: the
+    /// attach and the send share one guard, and a send that has begun is not undone. Publish from
+    /// a task of its own rather than inside a `select!` arm.
     // The socket guard intentionally spans the lazy attach and the send: the socket takes
     // &mut for every operation.
     #[allow(clippy::significant_drop_tightening)]
-    async fn publish(&self, msg: OutgoingMessage<'_>) -> Result<(), Self::Error> {
+    async fn publish(
+        &self,
+        msg: OutgoingMessage<'_>,
+        _options: Option<&Self::Options>,
+    ) -> Result<(), Self::Error> {
         let lifecycle = self.cell.get().ok_or(ZmqError::NotConnected)?;
         lifecycle.ensure_open()?;
         // Framed before the socket is touched: a message that cannot be written costs no attach.

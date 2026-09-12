@@ -3,6 +3,8 @@
 //! There is no server in the middle, so which side listens is a deployment decision, not a
 //! property of the transport; the endpoint states it.
 
+use ruststream::ServerSpec;
+
 use crate::error::ZmqError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,17 +59,17 @@ impl ZmqEndpoint {
     /// on `tcp://`, the socket path on `ipc://`. That is the shape the generated document
     /// specifies for a server's host.
     ///
-    /// On the network form anything before the last `@` is dropped, so userinfo an operator wrote
-    /// into the endpoint stays out of the document. `ZeroMQ` carries no userinfo in its own
-    /// addressing and its CURVE keys are socket options, so this guards a shape the transport
-    /// does not use; an `ipc` path is left whole, because `@` is legal in one.
-    pub(crate) fn host(&self) -> &str {
+    /// The network form is the framework's own URL rule ([`ServerSpec::host_from_url`]), which
+    /// drops the scheme and any userinfo an operator wrote into the endpoint, so a published
+    /// document carries no credential. `ZeroMQ` addresses none of its own that way - its CURVE
+    /// keys are socket options - so this guards a shape the transport does not use.
+    ///
+    /// An `ipc` address names a filesystem path rather than an authority, so it is kept whole: the
+    /// URL rule would cut it at its first separator, and `@` is an ordinary character in a path.
+    pub(crate) fn host(&self) -> String {
         match self.address.split_once("://") {
-            Some(("ipc", path)) => path,
-            Some((_, authority)) => authority
-                .rsplit_once('@')
-                .map_or(authority, |(_, host)| host),
-            None => &self.address,
+            Some(("ipc", path)) => path.to_owned(),
+            _ => ServerSpec::host_from_url(&self.address),
         }
     }
 

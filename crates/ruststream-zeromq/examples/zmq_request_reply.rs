@@ -17,7 +17,7 @@ use ruststream::codec::{Codec, JsonCodec};
 // `ruststream::Outgoing`, and the value a publish transform rewrites is the type
 // `ruststream::runtime::Outgoing`.
 use ruststream::runtime::{
-    App, AppInfo, Outgoing, PublishContext, PublishTransform, Reply, RustStream,
+    App, AppInfo, ForReply, Names, Outgoing, PublishContext, PublishTransform, Reply, RustStream,
 };
 use ruststream::{IncomingMessage, Outgoing, OutgoingMessage, RequestReply, subscriber};
 use ruststream_zeromq::{ZmqEndpoint, ZmqRpc, ZmqRpcPublish};
@@ -41,7 +41,12 @@ struct Answer {
 struct ReplyToRequester;
 
 // --8<-- [start:transform]
-impl<C> PublishTransform<C> for ReplyToRequester {
+// The transform reads the delivery being answered, so it names `ForReply`, and it names the
+// destination per delivery, so it declares `Names`. The reply type declares no destination of its
+// own, which is what leaves the naming right on offer at this position.
+impl<C> PublishTransform<ForReply<C>> for ReplyToRequester {
+    type Destination = Names;
+
     fn apply(&self, out: &mut Outgoing<'_>, cx: &PublishContext<'_, C>) {
         if let Some(reply_to) = cx.headers().reply_to() {
             out.set_name(reply_to.to_owned());

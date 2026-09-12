@@ -32,6 +32,27 @@
 //! encryption layer, so it is for trusted networks or for use inside an existing tunnel; and
 //! it exposes no high-water-mark configuration - a slow reader exerts raw TCP back-pressure
 //! on senders, except in the fan-out pattern, which drops unmatched messages.
+//!
+//! # Per-message settings
+//!
+//! There are none. A ZMTP send takes the frames and nothing else - no priority, no expiry, no
+//! ordering key - so every publisher here declares `Options = ()` and no publish builder step
+//! comes from this crate. A handler body therefore imports `ruststream::prelude::*` alone and
+//! bounds an injected publisher with the capability it needs, with nothing of this crate in its
+//! signature.
+//!
+//! Two things that look like settings are not. Which peer a reply reaches is a destination, and a
+//! publish transform declaring `Destination = Names` supplies it per delivery. How long a send
+//! waits for the ZMTP handshake is a constant of this crate, the same for every message.
+//!
+//! # Retries
+//!
+//! Nothing settles a delivery, so a handler asking for `retry_after` is served only by the copy
+//! the runtime publishes once the delay is over, through the publisher a scope wires with
+//! `retry_via`. The one-way patterns report the subscription name as the address for that copy, so
+//! wiring one works. A responder reports none - the reply publisher routes to a peer identity, not
+//! to a name - and a scope that wires a retry over a responder is refused at startup rather than
+//! publishing copies into nothing.
 
 #![forbid(unsafe_code)]
 

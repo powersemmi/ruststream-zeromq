@@ -35,7 +35,10 @@ async fn queue_roundtrip_preserves_payload_and_headers() {
     headers.insert("x-tenant", "acme");
     let publisher = connected.publisher();
     publisher
-        .publish(OutgoingMessage::new("orders", b"{\"id\":1}".as_slice()).with_headers(headers))
+        .publish(
+            OutgoingMessage::new("orders", b"{\"id\":1}".as_slice()).with_headers(headers),
+            None,
+        )
         .await
         .expect("publish succeeds");
 
@@ -112,11 +115,17 @@ async fn fanout_filters_by_name_prefix() {
     let mut delivered = None;
     for _ in 0..50 {
         publisher
-            .publish(OutgoingMessage::new("orders.us.1", b"skipped".as_slice()))
+            .publish(
+                OutgoingMessage::new("orders.us.1", b"skipped".as_slice()),
+                None,
+            )
             .await
             .expect("publish succeeds");
         publisher
-            .publish(OutgoingMessage::new("orders.eu.1", b"kept".as_slice()))
+            .publish(
+                OutgoingMessage::new("orders.eu.1", b"kept".as_slice()),
+                None,
+            )
             .await
             .expect("publish succeeds");
         if let Ok(Some(next)) =

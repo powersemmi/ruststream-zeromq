@@ -72,13 +72,20 @@ impl ZmqTestPublisher {
 impl Publisher for ZmqTestPublisher {
     type Error = ZmqError;
 
+    /// The transport's own answer: ZMTP has no per-message setting, so neither has the stand-in.
+    type Options = ();
+
     /// Routes `msg` by this publisher's pattern rule.
     ///
     /// # Errors
     ///
     /// Returns [`ZmqError::NotConnected`] once the transport this handle aliases has been shut
     /// down, rather than routing into a dead broker.
-    fn publish(&self, msg: OutgoingMessage<'_>) -> impl Future<Output = Result<(), Self::Error>> {
+    fn publish(
+        &self,
+        msg: OutgoingMessage<'_>,
+        _options: Option<&Self::Options>,
+    ) -> impl Future<Output = Result<(), Self::Error>> {
         ready(self.route(&msg))
     }
 }
@@ -133,6 +140,9 @@ impl ZmqTestRpcPublisher {
 impl Publisher for ZmqTestRpcPublisher {
     type Error = ZmqError;
 
+    /// The transport's own answer: ZMTP has no per-message setting, so neither has the stand-in.
+    type Options = ();
+
     /// Routes a reply to the address the request carried, and refuses anything else.
     ///
     /// The destination check is the socket publisher's, verbatim: over a ROUTER the name is the
@@ -144,7 +154,11 @@ impl Publisher for ZmqTestRpcPublisher {
     ///
     /// Returns [`ZmqError::Send`] when the destination is not a reply address, and
     /// [`ZmqError::NotConnected`] once the transport this handle aliases has been shut down.
-    fn publish(&self, msg: OutgoingMessage<'_>) -> impl Future<Output = Result<(), Self::Error>> {
+    fn publish(
+        &self,
+        msg: OutgoingMessage<'_>,
+        _options: Option<&Self::Options>,
+    ) -> impl Future<Output = Result<(), Self::Error>> {
         ready(self.route_reply(&msg))
     }
 }
