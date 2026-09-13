@@ -26,7 +26,7 @@ serde = { version = "1", features = ["derive"] }
 | `RequestReply` | 是，在 `ZmqRpc` 上 | `ZmqRpcPublisher` 在 DEALER/ROUTER 之上实现了它，按 `correlation-id` 消息头匹配应答。`ZmqQueue` 和 `ZmqFanout` 是单向模式，没有回程，因此它们的发布者不实现它。参见[请求与响应](#request-and-reply)。 |
 | `Partitioned` | 否 | Broker 侧没有分区。PUSH/PULL 在已接上的对端之间轮流分发，不看键。 |
 | `Seekable` / `Positioned` | 否 | 什么都不存，因此也没有可以回到的位置。 |
-| `DescribeServer` | 是 | 每种模式都报出客户端连接的地址（`tcp://` 上是 `broker:5555`，`ipc://` 上是套接字路径）和 `zeromq` 协议，这些正是 AsyncAPI schema 记录的内容。 |
+| `DescribeServer` | 是 | 每种模式都报出客户端连接的地址（`tcp://` 上是 `broker:5555`，`ipc://` 上是套接字路径）、`zeromq` 协议和 ZMTP 3.0。`asyncapi` 特性再加上传输、端点角色和套接字对。见[生成的文档](#the-generated-document)。 |
 
 ## 范围 { #scope }
 
@@ -182,20 +182,39 @@ socket.send_multipart([b"jobs", b"content-type: application/json", payload])
 
 ## 重试 { #retries }
 
-投递从不结算，因此返回 `HandlerOutcome::retry_after(..)` 的处理器只剩一条路：延迟过去之后，运行时
-经由注册用 `.out_retry(policy)` 接上的发布者发布一份副本。在挂载处理器的地方接一个，副本就发往订阅
-报出的地址。
+这里的投递从不结算，因此每一次重试都是本服务自己发布的一份副本。注册对这些副本的声明，在任何
+Broker 上都一样：
 
-重试位置就是一个普通的 `Out` 槽位，因此链条在它之后还能继续。挂在它上面的 `.transform(..)` 作用于
-那份延迟副本：在一个什么都不结算的传输上，这是服务唯一能给重新投递打标记的地方。副本带的是投递自身
-的字节，因此在这个位置点名的编解码器只解析槽位，不做任何编码。
+```rust
+--8<-- "crates/ruststream-zeromq/examples/zmq_retries.rs:declaration"
+```
 
-`ZmqQueue` 和 `ZmqFanout` 报出自己订阅的名字，同一个 Broker 上的发布者正是按它够到它们。队列上的
-重试回到队列里，哪个工作进程空着就归哪个；广播上的重试到达前缀匹配的每一条订阅，也就是原件当初的
-同一批听众。
+`max_attempts(..)` 限定一条消息能得到多少次投递，`dead_letter(..)` 点名次数用完之后它去哪里。传输
+本身两样都不应用：ZMTP 没有投递计数器，也没有死信拓扑，因此框架用自己的 `x-ruststream-retry-count`
+头计数，并把用尽的投递重新发布到你说的地方。只声明目的地，每一次失败的投递就直接去那里。
 
-`ZmqRpc` 什么都不报：响应方的名字不是发布目的地，回复按请求带来的对端身份路由。在响应方上接了
-`.out_retry(..)` 的注册启动时会被拒绝，错误里点出那条订阅。让请求方再问一次就是了。
+`out_retry(policy)` 点名副本经由哪个发布者离开。链条在它之后还能继续，因此副本可以用 `.codec(..)`
+取编解码器，用 `.transform(..)` 取变换，并在模式没有占用目的地时用 `.to(name)` 取自己的目的地。
+
+重试由处理器提出，副本等多久是它的事：
+
+```rust
+--8<-- "crates/ruststream-zeromq/examples/zmq_retries.rs:handler"
+```
+
+副本去哪里是模式的属性，每一种都在自己的类型上声明。
+
+`ZmqQueue` 和 `ZmqFanout` 寻址自己的订阅：按订阅名发布就会回到它上面，因此你只接上发布者，不点名
+任何目的地。队列上的重试回到队列里，哪个工作进程空着就归哪个；广播上的重试到达前缀匹配的每一条
+订阅，也就是原件当初的同一批听众。
+
+`ZmqRpc` 什么都不寻址：请求的副本没有自己的地址，回复按请求带来的对端身份路由，而回复发布者不接受
+普通名字。这里的注册自己点名目的地，用 `.out_retry(policy).to("name")`，或者用一个在每次投递上点名
+的变换；两样都不点名的注册会在订阅打开之前被拒绝。通常更好的答案是让请求方再问一次。
+
+重试位置读的是它正在重试的那次投递，因此挂在它上面的 `.transform(..)` 拿到一个 `PublishContext`：
+投递到达的订阅、它的头和它的上下文。在一个什么都不结算的传输上，这是服务给重新投递打标记的地方。
+副本带的是投递自身的字节，因此在这个位置点名的编解码器只解析槽位，不做任何编码。
 
 ## 请求与响应 { #request-and-reply }
 
@@ -231,6 +250,35 @@ socket.send_multipart([b"jobs", b"content-type: application/json", payload])
 可以直接运行的程序是
 [`examples/zmq_request_reply.rs`](https://github.com/powersemmi/ruststream-zeromq/blob/main/crates/ruststream-zeromq/examples/zmq_request_reply.rs)：
 响应方和请求方在同一个进程里，走一次临时端口绑定。
+
+## 生成的文档 { #the-generated-document }
+
+服务从它挂载的东西生成一份 AsyncAPI 文档，这个 crate 填其中两处。用 `asyncapi` 特性打开：
+
+```toml
+ruststream-zeromq = { version = "0.7", features = ["asyncapi"] }
+```
+
+规范里没有 ZeroMQ 绑定，它的协议键是一个封闭清单，ZeroMQ 不在其中。因此这个 crate 报出的一切都走
+同一个扩展 `x-ruststream-zeromq`：它与标准键并列，读法也一样。
+
+服务器说明怎样接上端点：传输、坐标，以及这个服务占据哪一侧。它同时报出 `3.0`，也就是实现向对端
+问候时用的 ZMTP 版本。模式发布到的每一个信道都点名承载其消息的套接字对。
+
+```json
+--8<-- "crates/ruststream-zeromq/tests/documents/queue.json"
+```
+
+坐标就是服务器描述里那个不含凭据的坐标。运维写进端点 URL 的口令会随协议头一起被丢掉，不会进入
+文档，而文档是要发布和传阅的。
+
+响应方按每个请求寻址答复，因此它的回复信道没有自己的地址。文档转而说明客户端从哪里读到地址：
+
+```json
+--8<-- "crates/ruststream-zeromq/tests/documents/reply-address.json"
+```
+
+这里的订阅本身不带绑定。绑定来自订阅描述符，而三种模式都没有描述符：订阅只需要一个名字。
 
 ## 测试 { #testing }
 

@@ -88,33 +88,11 @@ fn assert_excerpt(app: &RustStream, excerpt: &str) {
     );
 }
 
-// --8<-- [start:queue_document]
 /// A PUSH/PULL worker: the server says how to attach to the endpoint, and the channel the worker
 /// publishes to says which socket pair its messages travel over.
-const QUEUE_DOCUMENT: &str = r#"{
-  "servers": {
-    "jobs": {
-      "host": "worker:5555",
-      "protocol": "zeromq",
-      "protocolVersion": "3.0",
-      "bindings": {
-        "x-ruststream-zeromq": {
-          "transport": "tcp",
-          "endpoint": "worker:5555",
-          "role": "connect"
-        }
-      }
-    }
-  },
-  "channels": {
-    "results": {
-      "bindings": {
-        "x-ruststream-zeromq": { "socketPair": "PUSH/PULL" }
-      }
-    }
-  }
-}"#;
-// --8<-- [end:queue_document]
+///
+/// The documentation shows this file, so it is pinned here rather than written inline.
+const QUEUE_DOCUMENT: &str = include_str!("documents/queue.json");
 
 #[test]
 fn a_queue_service_reports_its_endpoint_and_its_socket_pair() {
@@ -164,27 +142,9 @@ fn a_fan_out_service_reports_its_own_socket_pair() {
     );
 }
 
-// --8<-- [start:reply_address]
 /// A responder addresses each answer per request, so the document reports the reply channel
 /// without an address and points at the header the address travels in.
-const REPLY_ADDRESS: &str = r#"{
-  "channels": {
-    "reply": {
-      "address": null,
-      "bindings": {
-        "x-ruststream-zeromq": { "socketPair": "DEALER/ROUTER" }
-      }
-    }
-  },
-  "operations": {
-    "receive_greeter": {
-      "reply": {
-        "address": { "location": "$message.header#/reply-to" }
-      }
-    }
-  }
-}"#;
-// --8<-- [end:reply_address]
+const REPLY_ADDRESS: &str = include_str!("documents/reply-address.json");
 
 #[test]
 fn a_responder_reports_where_a_client_reads_the_reply_address() {

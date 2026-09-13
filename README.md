@@ -65,8 +65,8 @@ The payload frame is whatever the framework's codec produced, so the peer only h
 - A subscriber that connects after a publisher has started **misses what was sent before it arrived** (the slow joiner), and a fan-out message with no matching subscriber is dropped silently.
 - The implementation exposes **no high-water-mark configuration**: a slow reader exerts raw TCP back-pressure on senders.
 - There is **no encryption layer**: use it on trusted networks, or inside an existing tunnel.
-- No consumer groups, no dead-lettering, no retry policies, no transactions.
-- **Nothing settles a delivery**, so a `retry_after` is served only by the copy the runtime publishes through the publisher the registration binds with `.out_retry(policy)`. The one-way patterns report the subscription name as the address for it; a `ZmqRpc` responder reports none, and a registration that binds a retry over one is refused at startup.
+- No consumer groups, no transactions, and **no native retry mechanism**: a delivery limit and a dead-letter destination declared with `.max_attempts(..)` and `.dead_letter(..)` are counted and applied by the framework, not by the transport.
+- **Nothing settles a delivery**, so a `retry_after` is served only by the copy the runtime publishes through the publisher the registration binds with `.out_retry(policy)`. The one-way patterns address their own subscription, so a mount site there names no destination; a `ZmqRpc` responder addresses nothing, and a registration that names no destination for its copies is refused before the subscription opens.
 - **A send takes the frames and nothing else**: no priority, no expiry, no ordering key. Every publisher declares `Options = ()`, this crate adds no publish builder step, and a handler body imports `ruststream::prelude::*` alone.
 
 ## Install
@@ -80,6 +80,8 @@ serde = { version = "1", features = ["derive"] }
 [dev-dependencies]
 ruststream-zeromq = { version = "0.7", features = ["testing"] }
 ```
+
+The `asyncapi` feature adds what this crate reports in a generated AsyncAPI document: the transport, the endpoint role and the socket pair, in the `x-ruststream-zeromq` extension, because the specification has no ZeroMQ binding.
 
 ## Write a service
 

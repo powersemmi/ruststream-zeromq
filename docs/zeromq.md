@@ -28,7 +28,7 @@ Which of the framework's optional capability traits this transport implements:
 | `RequestReply` | Yes, on `ZmqRpc` | `ZmqRpcPublisher` implements it over DEALER/ROUTER, matching the answer by the `correlation-id` header. `ZmqQueue` and `ZmqFanout` are one-way patterns with no return path, so their publishers do not implement it. See [Request and reply](#request-and-reply). |
 | `Partitioned` | No | There is no broker-side partitioning. PUSH/PULL round-robins across the attached peers without consulting a key. |
 | `Seekable` / `Positioned` | No | Nothing is stored, so there is no position to return to. |
-| `DescribeServer` | Yes | Each pattern reports the address a client connects to (`broker:5555` on `tcp://`, the socket path on `ipc://`) and the `zeromq` protocol, which is what the AsyncAPI schema records. |
+| `DescribeServer` | Yes | Each pattern reports the address a client connects to (`broker:5555` on `tcp://`, the socket path on `ipc://`), the `zeromq` protocol and ZMTP 3.0. The `asyncapi` feature adds the transport, the endpoint role and the socket pair. See [The generated document](#the-generated-document). |
 
 ## Scope
 
@@ -207,24 +207,46 @@ the bound; here a handler file imports `ruststream::prelude::*` alone, whichever
 
 ## Retries
 
-A delivery is never settled, so a handler that returns `HandlerOutcome::retry_after(..)` is served
-by one thing only: the copy the runtime publishes once the delay is over, through the publisher the
-registration binds with `.out_retry(policy)`. Bind one where the handler is mounted, and the copy
-goes where the subscription says it should.
+A delivery is never settled here, so every retry is a copy this service publishes. What a
+registration declares about those copies is the same on every broker:
 
-The retry position is an ordinary `Out` slot, so the chain continues after it. A `.transform(..)`
-there runs on the deferred copy, which is the only place a service can mark a redelivery on a
-transport that settles nothing. The copy carries the delivery's own bytes, so a codec named at the
-position resolves the slot and encodes nothing.
+```rust
+--8<-- "crates/ruststream-zeromq/examples/zmq_retries.rs:declaration"
+```
 
-`ZmqQueue` and `ZmqFanout` say their own subscription name, which is where a publisher on the same
-broker reaches them. A retry on the queue goes back into the queue, so whichever worker is free
-takes it; a retry on the fan-out reaches every subscription whose prefix matches, the same audience
-the original had.
+`max_attempts(..)` caps the deliveries one message gets, and `dead_letter(..)` names where it goes
+once they run out. Neither is applied by the transport: ZMTP has no delivery counter and no
+dead-letter topology, so the framework counts the copies through its own `x-ruststream-retry-count`
+header and republishes the spent delivery where you said. Declaring the destination alone sends
+every failed delivery straight there.
 
-`ZmqRpc` says nothing, because a responder's name is not a publish destination: replies are routed to
-the peer identity a request carried. A registration that binds `.out_retry(..)` over a responder is
-refused at startup, and the error names the subscription. Let the requester ask again instead.
+`out_retry(policy)` names the publisher those copies leave through. The chain continues after it,
+so the copies take a codec with `.codec(..)`, a transform with `.transform(..)`, and a destination
+of their own with `.to(name)` where the pattern leaves one open.
+
+The handler asks for the retry, and how long the copy waits is its business:
+
+```rust
+--8<-- "crates/ruststream-zeromq/examples/zmq_retries.rs:handler"
+```
+
+Where a copy goes is a property of the pattern, and each one states it on its type.
+
+`ZmqQueue` and `ZmqFanout` address their own subscription: a publish under the subscribe name
+arrives on it, so you bind the publisher and name nothing. A retry on the queue goes back into the
+queue, and whichever worker is free takes it; a retry on the fan-out reaches every subscription
+whose prefix matches, the same audience the original had.
+
+`ZmqRpc` addresses nothing, because a copy of a request has no address of its own: replies route to
+the peer identity the request carried, and the reply publisher refuses a plain name. A registration
+there names the destination itself, with `.out_retry(policy).to("name")` or with a transform that
+names one per delivery, and one that names neither is refused before the subscription opens.
+Letting the requester ask again is usually the better answer.
+
+The retry position reads the delivery it is retrying, so a `.transform(..)` there receives a
+`PublishContext`: the subscription the delivery arrived on, its headers, its context. That is where
+a service marks a redelivery on a transport that settles nothing. The copy carries the delivery's
+own bytes, so a codec named at the position resolves the slot and encodes nothing.
 
 ## Request and reply
 
@@ -263,6 +285,41 @@ The mount site names that policy at the reply position and attaches the transfor
 The runnable program is
 [`examples/zmq_request_reply.rs`](https://github.com/powersemmi/ruststream-zeromq/blob/main/crates/ruststream-zeromq/examples/zmq_request_reply.rs) -
 responder and requester in one process, over an ephemeral bind.
+
+## The generated document
+
+A service generates an AsyncAPI document from what it mounts, and this crate fills two parts of it.
+Turn that on with the `asyncapi` feature:
+
+```toml
+ruststream-zeromq = { version = "0.7", features = ["asyncapi"] }
+```
+
+The specification has no ZeroMQ binding, and its protocol keys are a closed list ZeroMQ is not on.
+Everything this crate reports therefore travels in one extension, `x-ruststream-zeromq`, which sits
+beside the standard keys and reads the same way.
+
+The server says how to attach to the endpoint: the transport, the coordinate, and which side of it
+this service takes. It also reports `3.0`, the ZMTP version the implementation greets a peer with.
+Each channel a pattern publishes to says which socket pair carries its messages.
+
+```json
+--8<-- "crates/ruststream-zeromq/tests/documents/queue.json"
+```
+
+The coordinate is the credential-free one the server description already carries. A password an
+operator wrote into the endpoint URL is dropped with the scheme and never reaches the document,
+which is published and shared.
+
+A responder addresses each answer per request, so its reply channel has no address of its own. The
+document says where a client reads one instead:
+
+```json
+--8<-- "crates/ruststream-zeromq/tests/documents/reply-address.json"
+```
+
+A subscription carries no binding of its own here. Bindings come from a subscription descriptor,
+and none of the three patterns has one: a name is all any of them needs to subscribe.
 
 ## Testing
 

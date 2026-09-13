@@ -1,0 +1,23 @@
+{
+  "servers": {
+    "jobs": {
+      "host": "worker:5555",
+      "protocol": "zeromq",
+      "protocolVersion": "3.0",
+      "bindings": {
+        "x-ruststream-zeromq": {
+          "transport": "tcp",
+          "endpoint": "worker:5555",
+          "role": "connect"
+        }
+      }
+    }
+  },
+  "channels": {
+    "results": {
+      "bindings": {
+        "x-ruststream-zeromq": { "socketPair": "PUSH/PULL" }
+      }
+    }
+  }
+}
