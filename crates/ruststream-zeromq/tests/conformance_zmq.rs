@@ -44,6 +44,19 @@ async fn zmq_queue_passes_lifecycle() {
     .await;
 }
 
+/// A queue addresses its own subscription, and this is where that promise is held: a publish to
+/// the address the descriptor reports has to come back on the subscription that reported it.
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zmq_queue_passes_redelivery_address() {
+    harness::redelivery_address(
+        || ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")),
+        |name| Name::new(name.to_owned()),
+        |connected| connected.publisher(),
+    )
+    .await;
+}
+
 /// The batches are assembled on the client, so this is where the size the subscription was opened
 /// with is proved to cap them - the suite opens at a size smaller than the run.
 #[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]

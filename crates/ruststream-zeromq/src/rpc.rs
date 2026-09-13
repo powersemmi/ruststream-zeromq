@@ -74,8 +74,8 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures::Stream;
 use ruststream::{
-    Broker, ConnectedBroker, DefaultPublish, DescribeServer, OutgoingMessage, PairError,
-    PublishPolicy, Publisher, RequestReply, ServerSpec, Subscribe, Subscriber,
+    Broker, ConnectedBroker, DefaultPublish, DescribeServer, NamedCopies, OutgoingMessage,
+    PairError, PublishPolicy, Publisher, RequestReply, ServerSpec, Subscribe, Subscriber,
 };
 use tokio::sync::{Mutex, OnceCell, mpsc};
 use zeromq::prelude::*;
@@ -271,14 +271,19 @@ impl Subscriber for ZmqRpcSubscriber {
     }
 }
 
-/// A responder reports no redelivery address, so `redelivery_address` keeps its "cannot say"
-/// default: the name a responder subscribes under is not a publish destination on this pattern.
-/// [`ZmqRpcPublisher`] routes to a peer identity a request carried and refuses a plain name, so a
-/// deferred copy published under the subscription name would reach nothing. A registration that
-/// binds `.out_retry(..)` over a responder therefore refuses to start, instead of dropping the
-/// retry silently; ask a requester again rather than retrying its request from the responder side.
 impl Subscribe for ConnectedZmqRpc {
     type Subscriber = ZmqRpcSubscriber;
+
+    /// A copy of a request has no address of its own, so the mount site names where one goes.
+    ///
+    /// The name a responder subscribes under is not a publish destination on this pattern:
+    /// [`ZmqRpcPublisher`] routes to the peer identity a request carried and refuses a plain
+    /// name, so a copy published under the subscription name would reach nothing. A registration
+    /// that binds `.out_retry(..)` over a responder therefore has to say where the copies go,
+    /// with `.to("name")` or with a transform that names one per delivery, and one that says
+    /// neither is refused before the subscription opens. Ask a requester again rather than
+    /// retrying its request from the responder side.
+    type Copies = NamedCopies;
 
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
         self.shared.lifecycle.ensure_open()?;

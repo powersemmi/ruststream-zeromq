@@ -7,7 +7,7 @@ use std::sync::{Arc, OnceLock};
 use bytes::Bytes;
 use ruststream::testing::{Coordinator, TestableBroker};
 use ruststream::{
-    Broker, ConnectedBroker, OutgoingMessage, RawMessage, RedeliveryAddress, Subscribe,
+    AddressedCopies, Broker, ConnectedBroker, OutgoingMessage, RawMessage, Subscribe,
 };
 
 use crate::error::ZmqError;
@@ -158,6 +158,17 @@ impl ConnectedBroker for ConnectedZmqTestBroker {
 impl Subscribe for ConnectedZmqTestBroker {
     type Subscriber = ZmqTestSubscriber;
 
+    /// The one-way patterns' answer: a publish under the subscribe name reaches the subscription,
+    /// so a registration that binds `.out_retry(..)` starts here exactly as it starts on a PUSH
+    /// or PUB socket.
+    ///
+    /// A subscription carries no pattern here, so a responder mount gets the same answer while
+    /// [`ConnectedZmqRpc`](crate::ConnectedZmqRpc) declares [`NamedCopies`](ruststream::NamedCopies):
+    /// one more place the stand-in offers what the transport withholds. A retry left unnamed over
+    /// a request-reply mount starts under the harness and is refused on deployment, so name the
+    /// destination on both.
+    type Copies = AddressedCopies;
+
     fn subscribe(&self, name: &str) -> impl Future<Output = Result<Self::Subscriber, Self::Error>> {
         ready(self.state.ensure_open().map(|()| {
             let (id, rx) = self.state.router.subscribe(name.to_owned());
@@ -168,18 +179,6 @@ impl Subscribe for ConnectedZmqTestBroker {
                 self.state.coordinator().cloned(),
             )
         }))
-    }
-
-    /// The subscribe name itself, which is the one-way patterns' answer: a queue or fan-out
-    /// publish under it reaches the subscription, so a registration that binds `.out_retry(..)`
-    /// starts here exactly as it starts on a socket.
-    ///
-    /// A subscription carries no pattern here, so a responder mount gets the same answer while
-    /// [`ConnectedZmqRpc`](crate::ConnectedZmqRpc) reports none: one more place the stand-in
-    /// offers what the transport withholds. A retry wired over a request-reply mount starts under
-    /// the harness and is refused on deployment.
-    fn redelivery_address(&self, name: &str) -> Option<RedeliveryAddress> {
-        Some(RedeliveryAddress::new(name.to_owned()))
     }
 }
 

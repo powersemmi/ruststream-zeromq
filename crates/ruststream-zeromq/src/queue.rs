@@ -56,8 +56,8 @@ use std::sync::Arc;
 
 use futures::Stream;
 use ruststream::{
-    BatchSubscriber, Broker, BufferedSubscriber, ConnectedBroker, DefaultPublish, DescribeServer,
-    OutgoingMessage, PairError, PublishPolicy, Publisher, RedeliveryAddress, ServerSpec, Subscribe,
+    AddressedCopies, BatchSubscriber, Broker, BufferedSubscriber, ConnectedBroker, DefaultPublish,
+    DescribeServer, OutgoingMessage, PairError, PublishPolicy, Publisher, ServerSpec, Subscribe,
     Subscriber,
 };
 use tokio::sync::{Mutex, OnceCell, mpsc};
@@ -175,6 +175,16 @@ impl ConnectedBroker for ConnectedZmqQueue {
 impl Subscribe for ConnectedZmqQueue {
     type Subscriber = ZmqSubscriber;
 
+    /// The subscribe name is the address: a PUSH socket publishing under it reaches the PULL
+    /// subscription opened under it, so the runtime publishes a retry copy to the subscription's
+    /// own name and nothing has to be written at the mount site.
+    ///
+    /// This is the whole retry path on `ZeroMQ`. Nothing settles a delivery, so a handler asking
+    /// for `retry_after` is served only by the deferred copy the runtime publishes here.
+    /// Competing consumers still compete for that copy, so the worker that retries is not
+    /// necessarily the one that asked.
+    type Copies = AddressedCopies;
+
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
         self.lifecycle.ensure_open()?;
         let mut socket = PullSocket::new();
@@ -208,18 +218,6 @@ impl Subscribe for ConnectedZmqQueue {
             rx,
             DriverHandle { task },
         ))
-    }
-
-    /// The subscribe name itself: a publisher on this queue reaches the subscription under it.
-    ///
-    /// This is the whole retry path on `ZeroMQ`. Nothing settles a delivery, so a handler asking
-    /// for `retry_after` is served only by the deferred copy the runtime publishes here, and a
-    /// registration that binds `.out_retry(..)` over a queue subscription works because of this
-    /// answer.
-    /// Competing consumers still compete for the copy, so the worker that retries is not
-    /// necessarily the one that asked.
-    fn redelivery_address(&self, name: &str) -> Option<RedeliveryAddress> {
-        Some(RedeliveryAddress::new(name.to_owned()))
     }
 }
 

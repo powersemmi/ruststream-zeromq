@@ -53,8 +53,8 @@ use std::future::{Future, ready};
 use std::sync::Arc;
 
 use ruststream::{
-    Broker, ConnectedBroker, DefaultPublish, DescribeServer, OutgoingMessage, PairError,
-    PublishPolicy, Publisher, RedeliveryAddress, ServerSpec, Subscribe,
+    AddressedCopies, Broker, ConnectedBroker, DefaultPublish, DescribeServer, OutgoingMessage,
+    PairError, PublishPolicy, Publisher, ServerSpec, Subscribe,
 };
 use tokio::sync::{Mutex, OnceCell, mpsc};
 use zeromq::prelude::*;
@@ -170,6 +170,16 @@ impl ConnectedBroker for ConnectedZmqFanout {
 impl Subscribe for ConnectedZmqFanout {
     type Subscriber = ZmqSubscriber;
 
+    /// The subscribe name is the address, because the two ends of this pattern are the same
+    /// broker: the PUB socket a registration publishes through is attached to the endpoint the
+    /// SUB socket subscribed on, and a name is a prefix of itself, so a publish by this process
+    /// reaches its own subscriber. That is what a retry copy needs.
+    ///
+    /// The pattern's own scope applies to the copy as it does to any other message: every
+    /// subscription whose prefix matches receives it, and a publisher whose filter table has not
+    /// propagated yet drops it (the slow joiner).
+    type Copies = AddressedCopies;
+
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
         self.lifecycle.ensure_open()?;
         let mut socket = SubSocket::new();
@@ -209,17 +219,6 @@ impl Subscribe for ConnectedZmqFanout {
             rx,
             DriverHandle { task },
         ))
-    }
-
-    /// The subscribe name itself: it is the prefix this subscription filters on, and a name is a
-    /// prefix of itself, so a publisher on this fan-out reaches the subscription under it.
-    ///
-    /// This is the whole retry path on `ZeroMQ`, since nothing settles a delivery. The pattern's
-    /// own scope applies to the copy as it does to any other message: every subscription whose
-    /// prefix matches receives it, and a publisher whose filter table has not propagated yet
-    /// drops it (the slow joiner).
-    fn redelivery_address(&self, name: &str) -> Option<RedeliveryAddress> {
-        Some(RedeliveryAddress::new(name.to_owned()))
     }
 }
 
