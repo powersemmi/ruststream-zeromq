@@ -18,10 +18,12 @@ use ruststream::prelude::*;
 use ruststream::runtime::{Bindable, Outgoing, PublishContext, RETRY_COUNT_HEADER};
 use ruststream::testing::TestApp;
 use ruststream::{
-    AddressedCopies, Broker, IncomingMessage, NamedCopies, OutgoingMessage, Publisher,
-    RedeliveryAddress, RedeliveryAddressed, Subscribe, Subscriber,
+    AddressedCopies, BatchSubscriber, Broker, IncomingMessage, NamedCopies, OutgoingMessage,
+    Publisher, RedeliveryAddress, RedeliveryAddressed, Subscribe, Subscriber,
 };
-use ruststream_zeromq::testing::{Fanout, Queue, Rpc, ZmqTestBroker};
+use ruststream_zeromq::testing::{
+    Fanout, Queue, Rpc, ZmqTestBroker, ZmqTestRpcSubscriber, ZmqTestSubscriber,
+};
 use ruststream_zeromq::{ZmqEndpoint, ZmqFanout, ZmqQueue, ZmqQueuePublish, ZmqRpc, ZmqRpcPublish};
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
@@ -69,6 +71,31 @@ fn every_pattern_declares_its_copy_path() {
         declared::<<ZmqTestBroker<Rpc> as Broker>::Connected>(),
     ] {
         assert_eq!(named, type_name::<NamedCopies>());
+    }
+}
+
+/// The responder stand hands out the subscriber that withholds batching, the way `ZmqRpc` does.
+///
+/// `.batch(..)` on a responder mount is a compile error against both, and a compile error cannot
+/// be asserted from a test binary, so what is pinned here is the type the stand yields: the one-way
+/// stands yield the batchable subscriber, the responder yields the one that is not.
+#[test]
+fn the_responder_stand_withholds_batching() {
+    fn subscriber_of<C: Subscribe>() -> &'static str {
+        type_name::<C::Subscriber>()
+    }
+    fn batchable<S: BatchSubscriber>() {}
+
+    batchable::<ZmqTestSubscriber>();
+    assert_eq!(
+        subscriber_of::<<ZmqTestBroker<Rpc> as Broker>::Connected>(),
+        type_name::<ZmqTestRpcSubscriber>(),
+    );
+    for stand in [
+        subscriber_of::<<ZmqTestBroker<Queue> as Broker>::Connected>(),
+        subscriber_of::<<ZmqTestBroker<Fanout> as Broker>::Connected>(),
+    ] {
+        assert_eq!(stand, type_name::<ZmqTestSubscriber>());
     }
 }
 

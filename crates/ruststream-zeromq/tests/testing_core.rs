@@ -411,6 +411,33 @@ async fn auditor(note: &Note) -> HandlerOutcome {
     HandlerOutcome::ack()
 }
 
+/// A mount that names no reply policy takes its own pattern's default, so a fan-out reply still
+/// reaches every prefix match.
+///
+/// A stand that answered the queue's default instead would route this reply to the exact name and
+/// deliver it to nobody, and the mount would only find that out on deployment.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_fan_out_mount_that_names_no_reply_policy_still_fans_out() {
+    let app = RustStream::new(AppInfo::new("watcher", "0.1.0")).with_broker(
+        ZmqTestBroker::fanout(),
+        |b| {
+            b.include(watch);
+            b.include(auditor);
+        },
+    );
+    let tb = TestApp::start(app).await.expect("the app starts");
+
+    tb.publish("events", &Event { id: 5 })
+        .await
+        .expect("the injection drives the reaction to a standstill");
+
+    tb.broker::<ZmqTestBroker<Fanout>>()
+        .subscriber("audit")
+        .assert_called_once();
+
+    tb.shutdown().await.expect("the app shuts down");
+}
+
 /// The production fan-out policy pairs against the stand-in and keeps the pattern's filter: a
 /// subscription on `audit` receives what was published to `audit.high`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
