@@ -43,11 +43,18 @@ struct ReplyToRequester;
 // --8<-- [start:transform]
 // The transform reads the delivery being answered, so it names `ForReply`, and it names the
 // destination per delivery, so it declares `Names`. The reply type declares no destination of its
-// own, which is what leaves the naming right on offer at this position.
-impl<C> PublishTransform<ForReply<C>> for ReplyToRequester {
+// own, which is what leaves the naming right on offer at this position. It sets no per-message
+// setting, so it stays generic over the options type and mounts on any publisher; every publisher
+// here declares `Options = ()` anyway.
+impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
     type Destination = Names;
 
-    fn apply(&self, out: &mut Outgoing<'_>, cx: &PublishContext<'_, C>) {
+    fn apply(
+        &self,
+        out: &mut Outgoing<'_>,
+        _options: &mut Option<Options>,
+        cx: &PublishContext<'_, C>,
+    ) {
         if let Some(reply_to) = cx.headers().reply_to() {
             out.set_name(reply_to.to_owned());
         }

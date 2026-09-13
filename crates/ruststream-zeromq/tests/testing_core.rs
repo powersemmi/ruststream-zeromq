@@ -414,13 +414,19 @@ struct AskFor {
 }
 
 /// The example's transform, verbatim: the reply goes to the address the request carried, under
-/// the id it was asked with.
+/// the id it was asked with. It writes no per-message setting, so it is generic over the options
+/// type.
 struct ReplyToRequester;
 
-impl<C> PublishTransform<ForReply<C>> for ReplyToRequester {
+impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
     type Destination = Names;
 
-    fn apply(&self, out: &mut Outgoing<'_>, cx: &PublishContext<'_, C>) {
+    fn apply(
+        &self,
+        out: &mut Outgoing<'_>,
+        _options: &mut Option<Options>,
+        cx: &PublishContext<'_, C>,
+    ) {
         if let Some(reply_to) = cx.headers().reply_to() {
             out.set_name(reply_to.to_owned());
         }
