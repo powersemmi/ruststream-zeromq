@@ -7,7 +7,7 @@
 use ruststream::prelude::*;
 use ruststream::testing::TestApp;
 use ruststream_zeromq::ZmqQueuePublish;
-use ruststream_zeromq::testing::ZmqTestBroker;
+use ruststream_zeromq::testing::{Queue, ZmqTestBroker};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, PartialEq, Serialize, Outgoing)]
@@ -49,26 +49,26 @@ async fn greet(request: &Greeting) -> Answer {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reply_type_that_names_its_queue_publishes_there() {
     let app = RustStream::new(AppInfo::new("zmq-declared-reply", "0.0.0")).with_broker(
-        ZmqTestBroker::new(),
+        ZmqTestBroker::queue(),
         |b| {
             b.include(work).out(Reply, ZmqQueuePublish);
         },
     );
 
     let tb = TestApp::start(app).await.expect("the harness starts");
-    tb.broker::<ZmqTestBroker>()
+    tb.broker::<ZmqTestBroker<Queue>>()
         .message(&Job { id: 7 })
         .to("jobs")
         .publish()
         .await
         .expect("the job is published");
 
-    tb.broker::<ZmqTestBroker>()
+    tb.broker::<ZmqTestBroker<Queue>>()
         .subscriber("jobs")
         .assert_called_once()
         .with(&Job { id: 7 });
     // No name appears at the mount site, so this one can only come from the reply type.
-    tb.broker::<ZmqTestBroker>()
+    tb.broker::<ZmqTestBroker<Queue>>()
         .published::<Done>("results")
         .assert_called_once()
         .with(&Done { id: 7 });
@@ -77,14 +77,14 @@ async fn a_reply_type_that_names_its_queue_publishes_there() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reply_type_without_a_name_publishes_where_the_mount_site_says() {
     let app = RustStream::new(AppInfo::new("zmq-mounted-reply", "0.0.0")).with_broker(
-        ZmqTestBroker::new(),
+        ZmqTestBroker::queue(),
         |b| {
             b.include(greet).out(Reply, ZmqQueuePublish);
         },
     );
 
     let tb = TestApp::start(app).await.expect("the harness starts");
-    tb.broker::<ZmqTestBroker>()
+    tb.broker::<ZmqTestBroker<Queue>>()
         .message(&Greeting {
             who: "world".to_owned(),
         })
@@ -93,14 +93,14 @@ async fn a_reply_type_without_a_name_publishes_where_the_mount_site_says() {
         .await
         .expect("the request is published");
 
-    tb.broker::<ZmqTestBroker>()
+    tb.broker::<ZmqTestBroker<Queue>>()
         .subscriber("greeter")
         .assert_called_once()
         .with(&Greeting {
             who: "world".to_owned(),
         });
     // `Answer` declares nothing, so this name is the one the `publish("answers")` clause supplied.
-    tb.broker::<ZmqTestBroker>()
+    tb.broker::<ZmqTestBroker<Queue>>()
         .published::<Answer>("answers")
         .assert_called_once()
         .with(&Answer {

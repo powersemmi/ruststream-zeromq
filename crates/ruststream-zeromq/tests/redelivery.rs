@@ -15,13 +15,13 @@ use futures::StreamExt;
 use ruststream::prelude::*;
 // The two `Outgoing` names live in different namespaces: the prelude's is the derive on a reply
 // type, and the value a publish transform rewrites is the type `ruststream::runtime::Outgoing`.
-use ruststream::runtime::{Outgoing, PublishContext, RETRY_COUNT_HEADER};
+use ruststream::runtime::{Bindable, Outgoing, PublishContext, RETRY_COUNT_HEADER};
 use ruststream::testing::TestApp;
 use ruststream::{
     AddressedCopies, Broker, IncomingMessage, NamedCopies, OutgoingMessage, Publisher,
     RedeliveryAddress, RedeliveryAddressed, Subscribe, Subscriber,
 };
-use ruststream_zeromq::testing::ZmqTestBroker;
+use ruststream_zeromq::testing::{Fanout, Queue, Rpc, ZmqTestBroker};
 use ruststream_zeromq::{ZmqEndpoint, ZmqFanout, ZmqQueue, ZmqQueuePublish, ZmqRpc, ZmqRpcPublish};
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
@@ -58,15 +58,18 @@ fn every_pattern_declares_its_copy_path() {
     for addressed in [
         declared::<<ZmqQueue as Broker>::Connected>(),
         declared::<<ZmqFanout as Broker>::Connected>(),
-        declared::<<ZmqTestBroker as Broker>::Connected>(),
+        declared::<<ZmqTestBroker<Queue> as Broker>::Connected>(),
+        declared::<<ZmqTestBroker<Fanout> as Broker>::Connected>(),
     ] {
         assert_eq!(addressed, type_name::<AddressedCopies>());
     }
 
-    assert_eq!(
+    for named in [
         declared::<<ZmqRpc as Broker>::Connected>(),
-        type_name::<NamedCopies>(),
-    );
+        declared::<<ZmqTestBroker<Rpc> as Broker>::Connected>(),
+    ] {
+        assert_eq!(named, type_name::<NamedCopies>());
+    }
 }
 
 /// The address the one-way patterns report: the subscription's own name.
@@ -164,45 +167,110 @@ async fn a_queue_scope_wires_the_deferred_retry() {
 
 /// A responder's name is not a publish destination: the reply publisher routes to the peer
 /// identity a request carried and refuses a plain name. The descriptor therefore addresses
-/// nothing, and a registration that names no destination for its copies is refused at startup,
-/// with the subscription and the copy path in the message.
+/// nothing, and every registration on it owes a destination for its copies - not only one that
+/// binds a retry publisher, because the runtime pairs one from the broker's default either way.
+///
+/// The stand refuses the same mount with the same words. That is the point of the assertion: a
+/// responder mount that starts under the harness and refuses on deployment is the failure mode
+/// this parity exists to prevent.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_responder_scope_refuses_an_unnamed_retry_destination() {
-    let broker = ZmqRpc::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"));
-    let app = RustStream::new(AppInfo::new("zmq-retry-rpc", "0.0.0")).with_broker(broker, |b| {
-        b.include(answer).out_retry(ZmqRpcPublish);
-    });
+async fn a_responder_refuses_a_mount_that_names_no_destination() {
+    let socket = RustStream::new(AppInfo::new("zmq-retry-rpc", "0.0.0")).with_broker(
+        ZmqRpc::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")),
+        |b| {
+            b.include(answer);
+        },
+    );
+    let stand = RustStream::new(AppInfo::new("zmq-retry-rpc", "0.0.0")).with_broker(
+        ZmqTestBroker::rpc(),
+        |b| {
+            b.include(answer);
+        },
+    );
 
-    let error = app
+    let on_socket = socket
         .start()
         .await
-        .expect_err("a responder addresses no copies, so the scope must not start");
-    let message = error.to_string();
+        .expect_err("a responder addresses no copies, so the scope must not start")
+        .to_string();
+    let on_stand = stand
+        .start()
+        .await
+        .expect_err("the stand must refuse what the socket refuses")
+        .to_string();
+
     assert!(
-        message.contains("greeter") && message.contains("NamedCopies"),
-        "the refusal must name the subscription and the copy path, got: {message}",
+        on_socket.contains("greeter") && on_socket.contains("NamedCopies"),
+        "the refusal must name the subscription and the copy path, got: {on_socket}",
     );
+    assert_eq!(
+        on_socket, on_stand,
+        "the stand must refuse in the words the socket uses, or a test read against it teaches \
+         the wrong fix",
+    );
+}
+
+/// Naming the destination is what makes a responder mount start, and the stand starts on the
+/// same spelling.
+///
+/// A copy published under a plain name reaches nothing on this pattern - the reply publisher
+/// routes by peer identity - so the destination that carries a responder's copies belongs to a
+/// broker that has destinations. Both forms are shown: the plain name a service writes when it
+/// only wants the mount to be explicit, and the queue token a service binds when it means the
+/// copies to arrive somewhere.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_responder_mount_that_names_a_destination_runs() {
+    let named = RustStream::new(AppInfo::new("zmq-retry-named", "0.0.0")).with_broker(
+        ZmqTestBroker::rpc(),
+        |b| {
+            b.include(answer)
+                .out_retry(ZmqRpcPublish)
+                .to("greeter.retry");
+        },
+    );
+    named
+        .start()
+        .await
+        .expect("a named retry destination starts the responder")
+        .shutdown()
+        .await
+        .expect("the app shuts down");
+
+    let queue = Bindable::new(ZmqTestBroker::queue());
+    let token = queue.bind(ZmqQueuePublish);
+    let crossed = RustStream::new(AppInfo::new("zmq-retry-crossed", "0.0.0"))
+        .with_broker(ZmqTestBroker::rpc(), |b| {
+            b.include(answer).out_retry(token).to("greeter.retry");
+        })
+        .with_broker(queue, |_b| {});
+    crossed
+        .start()
+        .await
+        .expect("copies bound to a queue on another broker start the responder")
+        .shutdown()
+        .await
+        .expect("the app shuts down");
 }
 
 /// The stand-in answers the one-way patterns' way for every subscription, so a routes file that
 /// composes with the fallback in production composes with it under the harness too.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_stand_in_wires_the_deferred_retry() {
-    let broker = ZmqTestBroker::new();
+    let broker = ZmqTestBroker::queue();
     let app =
         RustStream::new(AppInfo::new("zmq-retry-harness", "0.0.0")).with_broker(broker, |b| {
             b.include(work).out_retry(ZmqQueuePublish);
         });
 
     let tb = TestApp::start(app).await.expect("the harness starts");
-    tb.broker::<ZmqTestBroker>()
+    tb.broker::<ZmqTestBroker<Queue>>()
         .message(&Job { id: 1 })
         .to("jobs")
         .publish()
         .await
         .expect("the job is published");
 
-    tb.broker::<ZmqTestBroker>()
+    tb.broker::<ZmqTestBroker<Queue>>()
         .subscriber("jobs")
         .assert_called_once()
         .with(&Job { id: 1 });
@@ -247,7 +315,7 @@ async fn defer_once(_job: &Job, ctx: &mut Context) -> HandlerOutcome {
 #[tokio::test(start_paused = true)]
 async fn a_transform_on_the_retry_position_stamps_the_deferred_copy() {
     let app = RustStream::new(AppInfo::new("zmq-retry-stamp", "0.0.0")).with_broker(
-        ZmqTestBroker::new(),
+        ZmqTestBroker::queue(),
         |b| {
             b.include(defer_once)
                 .out_retry(ZmqQueuePublish)
@@ -256,7 +324,7 @@ async fn a_transform_on_the_retry_position_stamps_the_deferred_copy() {
     );
     let tb = TestApp::start(app).await.expect("the harness starts");
 
-    tb.broker::<ZmqTestBroker>()
+    tb.broker::<ZmqTestBroker<Queue>>()
         .message(&Job { id: 2 })
         .to("deferred")
         .publish()
@@ -264,10 +332,10 @@ async fn a_transform_on_the_retry_position_stamps_the_deferred_copy() {
         .expect("the job is published");
     tb.advance(RETRY_DELAY).await.expect("the delay elapses");
 
-    tb.broker::<ZmqTestBroker>()
+    tb.broker::<ZmqTestBroker<Queue>>()
         .published::<Job>("deferred")
         .with_header("x-retried-from", "deferred");
-    tb.broker::<ZmqTestBroker>()
+    tb.broker::<ZmqTestBroker<Queue>>()
         .subscriber("deferred")
         .assert_called(2)
         .with(&Job { id: 2 });
@@ -286,7 +354,7 @@ async fn never_succeeds(_job: &Job) -> HandlerOutcome {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_declared_cap_sends_a_spent_delivery_to_the_dead_letter_destination() {
     let app = RustStream::new(AppInfo::new("zmq-retry-cap", "0.0.0")).with_broker(
-        ZmqTestBroker::new(),
+        ZmqTestBroker::queue(),
         |b| {
             b.include(never_succeeds)
                 .max_attempts(nonzero!(3u32))
@@ -296,7 +364,7 @@ async fn the_declared_cap_sends_a_spent_delivery_to_the_dead_letter_destination(
     );
     let tb = TestApp::start(app).await.expect("the harness starts");
 
-    tb.broker::<ZmqTestBroker>()
+    tb.broker::<ZmqTestBroker<Queue>>()
         .message(&Job { id: 3 })
         .to("capped")
         .publish()
@@ -304,11 +372,11 @@ async fn the_declared_cap_sends_a_spent_delivery_to_the_dead_letter_destination(
         .expect("the job is published");
     tb.settle().await.expect("the copies settle");
 
-    tb.broker::<ZmqTestBroker>()
+    tb.broker::<ZmqTestBroker<Queue>>()
         .subscriber("capped")
         .assert_called(3)
         .with(&Job { id: 3 });
-    tb.broker::<ZmqTestBroker>()
+    tb.broker::<ZmqTestBroker<Queue>>()
         .published::<Job>("capped.dead")
         .with(&Job { id: 3 });
 }

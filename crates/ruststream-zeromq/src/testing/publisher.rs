@@ -1,10 +1,11 @@
 //! The in-process publish pairs.
 //!
-//! The stand-in has no policy of its own: the three production policies ([`ZmqQueuePublish`],
+//! A stand has no policy of its own: the three production policies ([`ZmqQueuePublish`],
 //! [`ZmqFanoutPublish`], [`ZmqRpcPublish`]) pair against it, so a mount site keeps the policy the
-//! service ships and a routes file compiles unchanged against either broker. Which live publisher
-//! a policy pairs to is what carries the pattern's capability set: the one-way patterns publish,
-//! and only the DEALER/ROUTER policy answers and asks.
+//! service ships and a routes file compiles unchanged against either broker. Each pairs against
+//! the stand of its own pattern and no other, the way it pairs against one connected form in
+//! production, and which live publisher it pairs to carries that pattern's capability set: the
+//! one-way patterns publish, and only the DEALER/ROUTER policy answers and asks.
 
 use std::future::{Future, ready};
 use std::sync::Arc;
@@ -23,7 +24,7 @@ use crate::error::ZmqError;
 #[cfg(feature = "asyncapi")]
 use crate::rpc::REPLY_ADDRESS_LOCATION;
 use crate::rpc::{REPLY_PREFIX, REPLY_TO_HEADER, new_correlation_id, new_reply_address};
-use crate::testing::broker::{ConnectedZmqTestBroker, TestState};
+use crate::testing::broker::{ConnectedZmqTestBroker, Fanout, Queue, Rpc, TestState};
 use crate::testing::router::Routing;
 use crate::testing::subscriber::ZmqTestMessage;
 use crate::{ZmqFanoutPublish, ZmqQueuePublish, ZmqRpcPublish};
@@ -106,8 +107,8 @@ impl Publisher for ZmqTestPublisher {
 /// use ruststream_zeromq::testing::ZmqTestBroker;
 ///
 /// # async fn demo() -> Result<(), Box<dyn std::error::Error>> {
-/// let connected = ZmqTestBroker::new().connect().await?;
-/// let requester = connected.rpc_publisher();
+/// let connected = ZmqTestBroker::rpc().connect().await?;
+/// let requester = connected.publisher();
 /// # let _ = requester;
 /// # Ok(())
 /// # }
@@ -233,18 +234,20 @@ impl RequestReply for ZmqTestRpcPublisher {
     }
 }
 
-/// The PUSH/PULL policy pairs against the stand-in, so a `ZmqQueue` mount site runs under the
-/// harness as written, and competing consumers still compete: each message is worked once.
-impl PublishPolicy<ConnectedZmqTestBroker> for ZmqQueuePublish {
+/// The PUSH/PULL policy pairs against the queue stand and against no other, exactly as it pairs
+/// against [`ConnectedZmqQueue`](crate::ConnectedZmqQueue) alone in production: competing
+/// consumers still compete, so each message is worked once.
+impl PublishPolicy<ConnectedZmqTestBroker<Queue>> for ZmqQueuePublish {
     type Live = ZmqTestPublisher;
 
     fn pair(
         self,
-        connected: &ConnectedZmqTestBroker,
+        connected: &ConnectedZmqTestBroker<Queue>,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
-        ready(Ok(connected.queue_publisher()))
+        ready(Ok(connected.publisher()))
     }
-    /// The stand-in describes the channel the pattern it stands in for describes, so a document
+
+    /// The stand describes the channel the pattern it stands in for describes, so a document
     /// built under the harness is the document the service ships.
     #[cfg(feature = "asyncapi")]
     fn channel_bindings(&self) -> Bindings {
@@ -252,18 +255,19 @@ impl PublishPolicy<ConnectedZmqTestBroker> for ZmqQueuePublish {
     }
 }
 
-/// The PUB/SUB policy pairs against the stand-in, keeping the pattern's prefix filter: a
+/// The PUB/SUB policy pairs against the fan-out stand, keeping the pattern's prefix filter: a
 /// subscription on `orders` sees `orders.eu.1`, and a message nothing matches is dropped.
-impl PublishPolicy<ConnectedZmqTestBroker> for ZmqFanoutPublish {
+impl PublishPolicy<ConnectedZmqTestBroker<Fanout>> for ZmqFanoutPublish {
     type Live = ZmqTestPublisher;
 
     fn pair(
         self,
-        connected: &ConnectedZmqTestBroker,
+        connected: &ConnectedZmqTestBroker<Fanout>,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
-        ready(Ok(connected.fanout_publisher()))
+        ready(Ok(connected.publisher()))
     }
-    /// The stand-in describes the channel the pattern it stands in for describes, so a document
+
+    /// The stand describes the channel the pattern it stands in for describes, so a document
     /// built under the harness is the document the service ships.
     #[cfg(feature = "asyncapi")]
     fn channel_bindings(&self) -> Bindings {
@@ -271,42 +275,44 @@ impl PublishPolicy<ConnectedZmqTestBroker> for ZmqFanoutPublish {
     }
 }
 
-/// The DEALER/ROUTER policy pairs to the one live publisher that answers and asks, so the
-/// capability split the real forms have survives into the harness: a handler binding
-/// `Out<impl RequestReply, ..>` mounts on this policy and on no other, exactly as in production.
-impl PublishPolicy<ConnectedZmqTestBroker> for ZmqRpcPublish {
+/// The DEALER/ROUTER policy pairs against the responder stand, to the one live publisher that
+/// answers and asks, so the capability split the real forms have survives into the harness: a
+/// handler binding `Out<impl RequestReply, ..>` mounts on this policy and on no other.
+impl PublishPolicy<ConnectedZmqTestBroker<Rpc>> for ZmqRpcPublish {
     type Live = ZmqTestRpcPublisher;
 
     fn pair(
         self,
-        connected: &ConnectedZmqTestBroker,
+        connected: &ConnectedZmqTestBroker<Rpc>,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
-        ready(Ok(connected.rpc_publisher()))
+        ready(Ok(connected.publisher()))
     }
 
-    /// The stand-in describes the channel the pattern it stands in for describes, so a document
+    /// The stand describes the channel the pattern it stands in for describes, so a document
     /// built under the harness is the document the service ships.
     #[cfg(feature = "asyncapi")]
     fn channel_bindings(&self) -> Bindings {
         bindings::channel(SocketPair::DealerRouter)
     }
 
-    /// The stand-in mints a reply address per request the way the ROUTER does, and carries it in
-    /// the same header, so the document reports the same expression on both.
+    /// The stand mints a reply address per request the way the ROUTER does, and carries it in the
+    /// same header, so the document reports the same expression on both.
     #[cfg(feature = "asyncapi")]
     fn reply_address_location(&self) -> Option<&'static str> {
         Some(REPLY_ADDRESS_LOCATION)
     }
 }
 
-/// The reply of a mount that names no policy takes the queue rule.
-///
-/// One stand-in covers three patterns but a connected broker names one default, so this is the
-/// single place the harness cannot follow the pattern a service actually runs on: a fan-out
-/// service whose mount omits `.out_reply(..)` gets its own policy in production and this one
-/// here. Dropping the impl instead would be worse - a mount that compiles in production would
-/// stop compiling under the harness - so the fix at a mount site is to name
-/// [`ZmqFanoutPublish`], which is what a fan-out reply wants stated anyway.
-impl DefaultPublish for ConnectedZmqTestBroker {
+/// Each stand names the default its pattern names, so a mount that omits `.out_reply(..)` takes
+/// the publisher it would take in production rather than the queue's for want of anything better.
+impl DefaultPublish for ConnectedZmqTestBroker<Queue> {
     type Policy = ZmqQueuePublish;
+}
+
+impl DefaultPublish for ConnectedZmqTestBroker<Fanout> {
+    type Policy = ZmqFanoutPublish;
+}
+
+impl DefaultPublish for ConnectedZmqTestBroker<Rpc> {
+    type Policy = ZmqRpcPublish;
 }

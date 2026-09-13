@@ -12,7 +12,7 @@ use futures::StreamExt;
 use ruststream::prelude::*;
 use ruststream::testing::{TestApp, TestableBroker};
 use ruststream::{AckError, IncomingMessage, OutgoingMessage, Subscribe, Subscriber};
-use ruststream_zeromq::testing::ZmqTestBroker;
+use ruststream_zeromq::testing::{Queue, ZmqTestBroker};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, PartialEq, Serialize, Outgoing)]
@@ -28,14 +28,14 @@ async fn always_retry(_job: &Job) -> HandlerOutcome {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_retrying_handler_is_not_called_again() {
     let app = RustStream::new(AppInfo::new("zmq-settlement", "0.0.0")).with_broker(
-        ZmqTestBroker::new(),
+        ZmqTestBroker::queue(),
         |b| {
             b.include(always_retry);
         },
     );
 
     let tb = TestApp::start(app).await.expect("the harness starts");
-    tb.broker::<ZmqTestBroker>()
+    tb.broker::<ZmqTestBroker<Queue>>()
         .message(&Job { id: 1 })
         .to("jobs")
         .publish()
@@ -44,7 +44,7 @@ async fn a_retrying_handler_is_not_called_again() {
 
     // The transport cannot redeliver, so the retry the handler asked for never happens. A
     // stand-in that requeued would report two calls and promise a guarantee production lacks.
-    tb.broker::<ZmqTestBroker>()
+    tb.broker::<ZmqTestBroker<Queue>>()
         .subscriber("jobs")
         .assert_called_once()
         .with(&Job { id: 1 });
@@ -54,7 +54,7 @@ async fn a_retrying_handler_is_not_called_again() {
 /// rather than through the harness.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_delivery_refuses_to_settle() {
-    let connected = ZmqTestBroker::new().connect().await.expect("connects");
+    let connected = ZmqTestBroker::queue().connect().await.expect("connects");
     let mut subscriber = connected.subscribe("jobs").await.expect("subscribes");
     connected.inject(OutgoingMessage::new("jobs", b"{\"id\":1}".as_slice()));
 

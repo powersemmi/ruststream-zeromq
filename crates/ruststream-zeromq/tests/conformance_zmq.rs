@@ -9,21 +9,48 @@ use ruststream::conformance::{capabilities, harness};
 use ruststream_zeromq::testing::ZmqTestBroker;
 use ruststream_zeromq::{ZmqEndpoint, ZmqQueue, ZmqRpc};
 
+/// Every stand answers the routing contract, so a pattern cannot drift from it while the crate
+/// only ever tested one of the three.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn zmq_test_broker_passes_conformance_suite() {
-    harness::run_suite(ZmqTestBroker::new).await;
+async fn every_stand_passes_the_conformance_suite() {
+    harness::run_suite(ZmqTestBroker::queue).await;
+    harness::run_suite(ZmqTestBroker::fanout).await;
+    harness::run_suite(ZmqTestBroker::rpc).await;
 }
 
-/// The stand-in answers the same request-reply contract the sockets do, the leg where nobody
-/// answers included, so a handler that binds the capability is testable in process.
+/// A publish under the subscribe name has to come back on the subscription that reported it, on
+/// the two stands that declare they address their own copies.
+///
+/// The real PUB/SUB socket is left out of this suite - it drops what it sends before the
+/// subscriber's filter has propagated - but its stand has no filter table and no slow joiner, so
+/// the promise is checked here.
 #[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn zmq_test_broker_passes_request_reply_suite() {
-    capabilities::request_reply(
-        ZmqTestBroker::new,
+async fn the_addressed_stands_pass_redelivery_address() {
+    harness::redelivery_address(
+        ZmqTestBroker::queue,
         |name| Name::new(name.to_owned()),
-        |connected| connected.rpc_publisher(),
-        |connected| connected.rpc_publisher(),
+        |connected| connected.publisher(),
+    )
+    .await;
+    harness::redelivery_address(
+        ZmqTestBroker::fanout,
+        |name| Name::new(name.to_owned()),
+        |connected| connected.publisher(),
+    )
+    .await;
+}
+
+/// The responder stand answers the same request-reply contract the sockets do, the leg where
+/// nobody answers included, so a handler that binds the capability is testable in process.
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_responder_stand_passes_the_request_reply_suite() {
+    capabilities::request_reply(
+        ZmqTestBroker::rpc,
+        |name| Name::new(name.to_owned()),
+        |connected| connected.publisher(),
+        |connected| connected.publisher(),
     )
     .await;
 }

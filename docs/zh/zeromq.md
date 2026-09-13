@@ -209,8 +209,10 @@ Broker 上都一样：
 订阅，也就是原件当初的同一批听众。
 
 `ZmqRpc` 什么都不寻址：请求的副本没有自己的地址，回复按请求带来的对端身份路由，而回复发布者不接受
-普通名字。这里的注册自己点名目的地，用 `.out_retry(policy).to("name")`，或者用一个在每次投递上点名
-的变换；两样都不点名的注册会在订阅打开之前被拒绝。通常更好的答案是让请求方再问一次。
+普通名字。因此响应方上的每一条注册都自己点名目的地，用 `.out_retry(policy).to("name")`，或者用一个
+在每次投递上点名的变换；两样都不点名的注册会在订阅打开之前被拒绝，从不请求重试的注册也一样，因为
+运行时无论如何都会给它配好发布者。按普通名字在这个模式上什么都够不到，所以真要副本落地的服务会在
+这里接上另一个 Broker 的队列；不要副本的服务则点名目的地把这件事说明白，并让请求方再问一次。
 
 重试位置读的是它正在重试的那次投递，因此挂在它上面的 `.transform(..)` 拿到一个 `PublishContext`：
 投递到达的订阅、它的头和它的上下文。在一个什么都不结算的传输上，这是服务给重新投递打标记的地方。
@@ -283,26 +285,26 @@ ruststream-zeromq = { version = "0.7", features = ["asyncapi"] }
 ## 测试 { #testing }
 
 `testing` feature 提供 `ZmqTestBroker`：一个进程内传输，不用套接字、不走网络就复现这个 crate 的
-路由。它遵循与真实模式相同的那条阶梯。它一次投递一条消息，并像 `ZmqQueue` 那样在客户端侧攒
-批次，因此在生产中跑得起来的批量处理器，在测试套件下也跑得起来。
+路由。每种模式各有一个替身，由构造函数挑选：`ZmqTestBroker::queue()`、`ZmqTestBroker::fanout()`、
+`ZmqTestBroker::rpc()`。每一个的回答都与它自己的那个 Broker 一致，因此在测试套件下编得过、起得来
+的路由文件，在套接字之上同样编得过、起得来。
 
 用 `TestApp` 测试套件来驱动它。`TestApp::start(app).await?` 在进程内连接应用的各个 Broker，并返回
-已启动的测试套件，也就是下面的 `tb`；它上面的 `tb.broker::<ZmqTestBroker>()` 就是这个传输的句柄。
-从这个句柄出发，`.message(&job).to("jobs").publish()` 送进一个任务，
+已启动的测试套件，也就是下面的 `tb`；它上面的 `tb.broker::<ZmqTestBroker<Queue>>()` 就是那个替身的
+句柄，`Queue`、`Fanout` 和 `Rpc` 点名模式。从这个句柄出发，
+`.message(&job).to("jobs").publish()` 送进一个任务，
 `.subscriber("jobs").assert_called_once().with(&job)` 断言处理器收到了什么，
 `.published::<Done>("results").assert_called_once().with(&done)` 断言发布型处理器发出了什么。参见
 [用 TestApp 对服务做单元测试](https://powersemmi.github.io/ruststream/latest/guides/testing/#unit-testing-a-service-with-testapp)。
 
 ### 挂载点保留自己的策略 { #mount-sites-keep-their-policy }
 
-三个生产策略在这个进程内传输上同样能构造出发布者，因此测试套件下的路由文件就是服务实际发布的那一
-份：`ZmqQueuePublish`、`ZmqFanoutPublish` 和 `ZmqRpcPublish` 都能挂到 `ZmqTestBroker` 的挂载点上。
-绑定 `Out<impl RequestReply, ..>` 的处理器在这里挂到 rpc 策略上，和它在套接字之上的做法一模一样；
-并且和生产中一样，只能挂到这一个策略上。
+每个生产策略只在自己那种模式的替身上构造发布者，别的一概不行，正如它在生产中只对着一个已连接形态
+构造发布者：`ZmqQueuePublish` 对队列，`ZmqFanoutPublish` 对广播，`ZmqRpcPublish` 对响应方。挂错了
+就是编译错误，和在套接字之上一样；绑定 `Out<impl RequestReply, ..>` 的处理器也只挂得上 rpc 策略。
 
-一个进程内传输覆盖三种模式，但一个 Broker 只点名一个默认发布策略。因此，省略 `.out_reply(..)` 的
-挂载在这里一律走队列规则，不论服务实际跑在哪种模式上。在挂载点点名策略
-（`.out_reply(ZmqFanoutPublish)`），测试套件和部署就会以同样的方式发布。
+省略 `.out_reply(..)` 的挂载取它自己那种模式的默认值，因此广播服务在测试套件下也按广播的方式发布
+回复。
 
 ### 每种模式在进程内保留了什么 { #what-each-pattern-keeps-in-process }
 
@@ -331,15 +333,9 @@ ruststream-zeromq = { version = "0.7", features = ["asyncapi"] }
 `AckError::Unsupported`，并且再也不回来，与经由套接字的投递完全一样。靠重试来结算的处理器在这里
 只被调用一次，它在部署之后运行的次数也是这么多；重新投递要拿有这项能力的 Broker 来覆盖。
 
-有两处差别是反过来的，也就是进程内传输给的比真实传输多。两者都源自同一个缺口：这里的订阅按名字
-给出，而名字并不说明它属于哪种模式。发布这一侧没有这个缺口，因为那里由挂载点上的策略点名模式。
-
-**响应方的订阅者。** `ZmqRpcSubscriber` 刻意不是 `BatchSubscriber`，因此请求-响应挂载上的
-`.batch(..)` 在生产中无法通过编译，而同一个挂载在测试套件下却能编译。
-
-**重试地址。** 这里的每条订阅都报出自己的名字，也就是两种单向模式的答案，因此接了
-`.out_retry(..)` 的注册能启动。在 `ZmqRpc` 上，同样的注册启动时会被拒绝（[重试](#retries)）。
-响应方的重试接线，要拿真实模式来验证。
+替身不给的东西，是跟着模式不给的。响应方的订阅者不是 `BatchSubscriber`，因此请求-响应挂载上的
+`.batch(..)` 在它上面编不过，在 `ZmqRpc` 上同样编不过。响应方的订阅不寻址重试副本，因此没有点名
+目的地的挂载会在启动时被拒绝，用词与套接字上的一模一样（[重试](#retries)）。
 
 套接字层面的行为同样不需要外部服务。`conformance` 的路由套件、生命周期阶梯、批次和请求/响应
 这两项能力，以及由一个扮演外部对端的原始套接字驱动的帧布局检查，全都跑在回环套接字上。

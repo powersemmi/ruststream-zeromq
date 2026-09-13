@@ -105,6 +105,40 @@ impl BatchSubscriber for ZmqTestSubscriber {
     }
 }
 
+/// Subscriber of the responder stand: one request at a time, and no batches.
+///
+/// It wraps [`ZmqTestSubscriber`] and withholds
+/// [`BatchSubscriber`](ruststream::BatchSubscriber), because
+/// [`ZmqRpcSubscriber`](crate::ZmqRpcSubscriber) withholds it: a batch carries one publish context
+/// for the whole batch, so a batch of requests could not be answered peer by peer. Keeping the
+/// capability off the type makes `.batch(..)` on a responder mount a compile error under the
+/// harness, where production rejects it.
+pub struct ZmqTestRpcSubscriber {
+    inner: ZmqTestSubscriber,
+}
+
+impl std::fmt::Debug for ZmqTestRpcSubscriber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ZmqTestRpcSubscriber")
+            .finish_non_exhaustive()
+    }
+}
+
+impl ZmqTestRpcSubscriber {
+    pub(crate) fn new(inner: ZmqTestSubscriber) -> Self {
+        Self { inner }
+    }
+}
+
+impl Subscriber for ZmqTestRpcSubscriber {
+    type Message = ZmqTestMessage;
+    type Error = ZmqError;
+
+    fn stream(&mut self) -> impl Stream<Item = Result<Self::Message, Self::Error>> + Send + '_ {
+        self.inner.stream()
+    }
+}
+
 /// Message handed to handlers from an [`ZmqTestSubscriber`].
 ///
 /// Settlement answers what [`ZmqMessage`](crate::ZmqMessage) answers over a socket: `ZeroMQ`

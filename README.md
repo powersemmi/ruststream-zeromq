@@ -66,7 +66,7 @@ The payload frame is whatever the framework's codec produced, so the peer only h
 - The implementation exposes **no high-water-mark configuration**: a slow reader exerts raw TCP back-pressure on senders.
 - There is **no encryption layer**: use it on trusted networks, or inside an existing tunnel.
 - No consumer groups, no transactions, and **no native retry mechanism**: a delivery limit and a dead-letter destination declared with `.max_attempts(..)` and `.dead_letter(..)` are counted and applied by the framework, not by the transport.
-- **Nothing settles a delivery**, so a `retry_after` is served only by the copy the runtime publishes through the publisher the registration binds with `.out_retry(policy)`. The one-way patterns address their own subscription, so a mount site there names no destination; a `ZmqRpc` responder addresses nothing, and a registration that names no destination for its copies is refused before the subscription opens.
+- **Nothing settles a delivery**, so a `retry_after` is served only by the copy the runtime publishes through the publisher the registration binds with `.out_retry(policy)`. The one-way patterns address their own subscription, so a mount site there names no destination; a `ZmqRpc` responder addresses nothing, so every registration on one names where its copies go or is refused before the subscription opens.
 - **A send takes the frames and nothing else**: no priority, no expiry, no ordering key. Every publisher declares `Options = ()`, this crate adds no publish builder step, and a handler body imports `ruststream::prelude::*` alone.
 
 ## Install
@@ -121,25 +121,25 @@ fn app() -> impl App {
 
 ## Test it
 
-The `testing` feature ships `ZmqTestBroker`: an in-process stand-in with the same routing and the same lifecycle ladder, no sockets. Build the app around it and drive it with the framework's `TestApp` harness - the handlers, the mount verb and the publish policy are the production ones, and only the broker changes. The harness encodes what it injects and decodes what it asserts on, so a test build adds `Outgoing` and `Serialize` to the input type and `Deserialize` plus `PartialEq` to the reply:
+The `testing` feature ships `ZmqTestBroker`: an in-process stand with the same routing and the same lifecycle ladder, no sockets. There is one stand per pattern - `ZmqTestBroker::queue()`, `::fanout()`, `::rpc()` - and each answers what its own broker answers, so a routes file that starts under the harness starts against the socket. Build the app around it and drive it with the framework's `TestApp` harness: the handlers, the mount verb and the publish policy are the production ones, and only the broker changes. The harness encodes what it injects and decodes what it asserts on, so a test build adds `Outgoing` and `Serialize` to the input type and `Deserialize` plus `PartialEq` to the reply:
 
 ```rust
 use ruststream::testing::TestApp;
 use ruststream_zeromq::ZmqQueuePublish;
-use ruststream_zeromq::testing::ZmqTestBroker;
+use ruststream_zeromq::testing::{Queue, ZmqTestBroker};
 
 let app = RustStream::new(AppInfo::new("worker", "0.1.0"))
-    .with_broker(ZmqTestBroker::new(), |b| {
+    .with_broker(ZmqTestBroker::queue(), |b| {
         b.include(handle).out_reply(ZmqQueuePublish);
     });
 let tb = TestApp::start(app).await?;
 
 // A foreign peer's push; the injection returns once the handler has settled.
-tb.broker::<ZmqTestBroker>()
+tb.broker::<ZmqTestBroker<Queue>>()
     .publish("jobs", &Job { id: 1 })
     .await?;
 
-tb.broker::<ZmqTestBroker>()
+tb.broker::<ZmqTestBroker<Queue>>()
     .published::<Done>("results")
     .assert_called_once()
     .with(&Done { id: 1 });

@@ -238,10 +238,13 @@ queue, and whichever worker is free takes it; a retry on the fan-out reaches eve
 whose prefix matches, the same audience the original had.
 
 `ZmqRpc` addresses nothing, because a copy of a request has no address of its own: replies route to
-the peer identity the request carried, and the reply publisher refuses a plain name. A registration
-there names the destination itself, with `.out_retry(policy).to("name")` or with a transform that
-names one per delivery, and one that names neither is refused before the subscription opens.
-Letting the requester ask again is usually the better answer.
+the peer identity the request carried, and the reply publisher refuses a plain name. Every
+registration on a responder therefore names the destination itself, with
+`.out_retry(policy).to("name")` or with a transform that names one per delivery, and one that names
+neither is refused before the subscription opens - a registration that never asks for a retry
+included, because the runtime pairs the publisher either way. A plain name reaches nothing on this
+pattern, so a service that means the copies to arrive binds a queue on another broker there; a
+service that does not, names the destination to say so and lets the requester ask again.
 
 The retry position reads the delivery it is retrying, so a `.transform(..)` there receives a
 `PublishContext`: the subscription the delivery arrived on, its headers, its context. That is where
@@ -323,14 +326,16 @@ and none of the three patterns has one: a name is all any of them needs to subsc
 
 ## Testing
 
-The `testing` feature ships `ZmqTestBroker`: an in-process stand-in that reproduces the crate's
-routing with no sockets and no network. It follows the same ladder as the real patterns. It delivers
-one message at a time and assembles batches in the client exactly as `ZmqQueue` does, so a batch
-handler that runs in production also runs under the harness.
+The `testing` feature ships `ZmqTestBroker`: an in-process stand that reproduces the crate's routing
+with no sockets and no network. There is one stand per pattern, and the constructor picks it:
+`ZmqTestBroker::queue()`, `ZmqTestBroker::fanout()`, `ZmqTestBroker::rpc()`. Each answers what its
+own broker answers, so a routes file that compiles and starts under the harness compiles and starts
+against the socket.
 
 Drive it through the `TestApp` harness. `TestApp::start(app).await?` connects the app's brokers in
-process and returns the started harness, `tb` below; `tb.broker::<ZmqTestBroker>()` on it is this
-transport's handle. From that handle, `.message(&job).to("jobs").publish()` puts a job in,
+process and returns the started harness, `tb` below; `tb.broker::<ZmqTestBroker<Queue>>()` on it is
+that stand's handle, with `Queue`, `Fanout` and `Rpc` naming the pattern. From that handle,
+`.message(&job).to("jobs").publish()` puts a job in,
 `.subscriber("jobs").assert_called_once().with(&job)` asserts what the handler received, and
 `.published::<Done>("results").assert_called_once().with(&done)` asserts what a publishing handler
 sent. See
@@ -338,15 +343,13 @@ sent. See
 
 ### Mount sites keep their policy
 
-The three production policies pair against the stand-in, so a routes file under the harness is the
-one the service ships: `ZmqQueuePublish`, `ZmqFanoutPublish` and `ZmqRpcPublish` all attach to a
-mount on `ZmqTestBroker`. A handler that binds `Out<impl RequestReply, ..>` mounts on the rpc
-policy here exactly as it does over a socket - and, as in production, on that policy alone.
+Each production policy pairs against the stand of its own pattern and no other, the way it pairs
+against one connected form in production: `ZmqQueuePublish` on the queue stand, `ZmqFanoutPublish`
+on the fan-out, `ZmqRpcPublish` on the responder. Mounting the wrong one is the compile error it is
+on a socket, and a handler that binds `Out<impl RequestReply, ..>` mounts on the rpc policy alone.
 
-One stand-in covers three patterns, but a broker names one default publish policy, so a mount that
-omits `.out_reply(..)` takes the queue rule here whichever pattern the service runs on. Name the
-policy at the mount site - `.out_reply(ZmqFanoutPublish)` - and the harness and the deployment
-publish the same way.
+A mount that omits `.out_reply(..)` takes the default its own pattern names, so a fan-out service
+publishes its replies the fan-out way under the harness too.
 
 ### What each pattern keeps in process
 
@@ -382,18 +385,10 @@ delivery reports `AckError::Unsupported` for `ack` and for `nack` and never come
 delivery over a socket does. A handler that settles by retrying is called once here, which is how
 often it runs on deployment; cover redelivery with a broker that has it.
 
-Two differences run the other way - the stand-in offers more than the transport - and both follow
-from the same gap: a subscription is opened by name here, and a name does not say which pattern it
-belongs to. The publish side has no such gap, because there the policy at the mount site names the
-pattern.
-
-**The responder's subscriber.** `ZmqRpcSubscriber` is deliberately not a `BatchSubscriber`, so
-`.batch(..)` on a request-reply mount does not compile in production, while the same mount compiles
-under the harness.
-
-**The retry address.** Every subscription here reports its own name, the one-way patterns' answer,
-so a registration that binds `.out_retry(..)` starts. On `ZmqRpc` the same registration is refused
-at startup ([Retries](#retries)). Check a responder's retry wiring against the real pattern.
+What the stand withholds, it withholds because the pattern does. The responder's subscriber is no
+`BatchSubscriber`, so `.batch(..)` on a request-reply mount fails to compile against the stand as it
+fails against `ZmqRpc`. The responder's subscriptions address no retry copies, so a mount that names
+no destination is refused at startup with the words the socket uses ([Retries](#retries)).
 
 Socket-level behaviour needs no external service either. The conformance routing suite, the
 lifecycle ladder, the batch and request/reply capabilities, and a wire-layout check driven by a raw

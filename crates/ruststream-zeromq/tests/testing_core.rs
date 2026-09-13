@@ -22,7 +22,9 @@ use ruststream::{
     Broker, ConnectedBroker, IncomingMessage, Outgoing, OutgoingMessage, Publisher, RequestReply,
     Subscribe, Subscriber, subscriber,
 };
-use ruststream_zeromq::testing::{ConnectedZmqTestBroker, ZmqTestBroker, ZmqTestSubscriber};
+use ruststream_zeromq::testing::{
+    ConnectedZmqTestBroker, Fanout, Queue, Rpc, ZmqTestBroker, ZmqTestSubscriber,
+};
 use ruststream_zeromq::{ZmqError, ZmqFanoutPublish, ZmqQueuePublish, ZmqRpcPublish};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -34,11 +36,25 @@ const WAIT: Duration = Duration::from_secs(1);
 /// was never routed here. Short enough to keep the negative cases quick.
 const NOTHING: Duration = Duration::from_millis(100);
 
-async fn connected() -> ConnectedZmqTestBroker {
-    ZmqTestBroker::new()
+async fn queue() -> ConnectedZmqTestBroker<Queue> {
+    ZmqTestBroker::queue()
         .connect()
         .await
-        .expect("the in-process broker connects")
+        .expect("the queue stand connects")
+}
+
+async fn fanout() -> ConnectedZmqTestBroker<Fanout> {
+    ZmqTestBroker::fanout()
+        .connect()
+        .await
+        .expect("the fan-out stand connects")
+}
+
+async fn rpc() -> ConnectedZmqTestBroker<Rpc> {
+    ZmqTestBroker::rpc()
+        .connect()
+        .await
+        .expect("the responder stand connects")
 }
 
 /// Takes the next payload, or fails the test rather than hanging.
@@ -67,18 +83,58 @@ async fn expect_idle(subscriber: &mut ZmqTestSubscriber, why: &str) {
 /// way the real ones do, so a service can match on the error it would really see.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn publishing_after_shutdown_errors() {
-    let broker = connected().await;
-    let queue = broker.queue_publisher();
-    let fanout = broker.fanout_publisher();
-    let rpc = broker.rpc_publisher();
+    let queue_stand = queue().await;
+    let queue_publisher = queue_stand.publisher();
     // Subscribing after the shutdown cannot be reached through the owner - the ladder consumed it -
     // so the aliased clone stands in for the handle a service kept.
-    let alias = broker.clone();
+    let alias = queue_stand.clone();
+    queue_stand.shutdown().await.expect("the stand shuts down");
+
+    let fanout_stand = fanout().await;
+    let fanout_publisher = fanout_stand.publisher();
+    fanout_stand.shutdown().await.expect("the stand shuts down");
+
+    for (label, error) in [
+        (
+            "queue publish",
+            queue_publisher
+                .publish(OutgoingMessage::new("jobs", b"late".as_slice()), None)
+                .await
+                .expect_err("a queue publish after shutdown must fail"),
+        ),
+        (
+            "fan-out publish",
+            fanout_publisher
+                .publish(OutgoingMessage::new("events", b"late".as_slice()), None)
+                .await
+                .expect_err("a fan-out publish after shutdown must fail"),
+        ),
+    ] {
+        assert!(
+            matches!(error, ZmqError::NotConnected),
+            "{label} through a closed transport must report NotConnected, got: {error}",
+        );
+    }
+
+    let subscribing = alias
+        .subscribe("jobs")
+        .await
+        .expect_err("subscribing on a closed transport must fail");
+    assert!(
+        matches!(subscribing, ZmqError::NotConnected),
+        "a subscription opened after shutdown must report NotConnected, got: {subscribing}",
+    );
+}
+
+/// The responder's two directions answer the same way, and a reply address minted while the
+/// transport was live keeps the refusal about the shutdown rather than about the destination.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn answering_after_shutdown_errors() {
+    let broker = rpc().await;
+    let responder_publisher = broker.publisher();
     let reply_to = {
-        // A reply address minted while the transport was live, so the refusal below is about the
-        // shutdown and not about the destination.
         let mut responder = broker.subscribe("echo").await.expect("the responder");
-        let asking = broker.rpc_publisher();
+        let asking = broker.publisher();
         let request = tokio::spawn(async move {
             let _ = asking
                 .request(OutgoingMessage::new("echo", b"ping".as_slice()), NOTHING)
@@ -103,35 +159,23 @@ async fn publishing_after_shutdown_errors() {
         address
     };
 
-    broker.shutdown().await.expect("the broker shuts down");
+    broker.shutdown().await.expect("the stand shuts down");
 
     for (label, error) in [
         (
-            "queue publish",
-            queue
-                .publish(OutgoingMessage::new("jobs", b"late".as_slice()), None)
-                .await
-                .expect_err("a queue publish after shutdown must fail"),
-        ),
-        (
-            "fan-out publish",
-            fanout
-                .publish(OutgoingMessage::new("events", b"late".as_slice()), None)
-                .await
-                .expect_err("a fan-out publish after shutdown must fail"),
-        ),
-        (
             "reply publish",
-            rpc.publish(
-                OutgoingMessage::new(reply_to.as_str(), b"late".as_slice()),
-                None,
-            )
-            .await
-            .expect_err("a reply after shutdown must fail"),
+            responder_publisher
+                .publish(
+                    OutgoingMessage::new(reply_to.as_str(), b"late".as_slice()),
+                    None,
+                )
+                .await
+                .expect_err("a reply after shutdown must fail"),
         ),
         (
             "request",
-            rpc.request(OutgoingMessage::new("echo", b"late".as_slice()), NOTHING)
+            responder_publisher
+                .request(OutgoingMessage::new("echo", b"late".as_slice()), NOTHING)
                 .await
                 .expect_err("a request after shutdown must fail"),
         ),
@@ -141,25 +185,16 @@ async fn publishing_after_shutdown_errors() {
             "{label} through a closed transport must report NotConnected, got: {error}",
         );
     }
-
-    let subscribing = alias
-        .subscribe("jobs")
-        .await
-        .expect_err("subscribing on a closed transport must fail");
-    assert!(
-        matches!(subscribing, ZmqError::NotConnected),
-        "a subscription opened after shutdown must report NotConnected, got: {subscribing}",
-    );
 }
 
 /// PUSH hands each message to one of the peers connected to it, so mounting a second worker
 /// spreads the load instead of doubling the work. The stand-in picks in subscription order.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_queue_hands_each_message_to_one_consumer_in_turn() {
-    let broker = connected().await;
+    let broker = queue().await;
     let mut first = broker.subscribe("jobs").await.expect("the first worker");
     let mut second = broker.subscribe("jobs").await.expect("the second worker");
-    let publisher = broker.queue_publisher();
+    let publisher = broker.publisher();
 
     for payload in [b"one".as_slice(), b"two".as_slice(), b"three".as_slice()] {
         publisher
@@ -183,11 +218,11 @@ async fn the_queue_hands_each_message_to_one_consumer_in_turn() {
 /// PUB/SUB filters by name prefix on the publisher side, and drops what no subscription matches.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_fanout_delivers_to_every_prefix_match_and_drops_the_rest() {
-    let broker = connected().await;
+    let broker = fanout().await;
     let mut eu = broker.subscribe("orders.eu").await.expect("the eu watcher");
     let mut all = broker.subscribe("orders").await.expect("the broad watcher");
     let mut other = broker.subscribe("shipments").await.expect("the outsider");
-    let publisher = broker.fanout_publisher();
+    let publisher = broker.publisher();
 
     publisher
         .publish(
@@ -223,10 +258,10 @@ async fn the_fanout_delivers_to_every_prefix_match_and_drops_the_rest() {
 /// as it would fail on deployment.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_reply_publisher_refuses_a_destination_that_is_not_a_reply_address() {
-    let broker = connected().await;
+    let broker = rpc().await;
 
     let err = broker
-        .rpc_publisher()
+        .publisher()
         .publish(OutgoingMessage::new("reply", b"answer".as_slice()), None)
         .await
         .expect_err("a literal destination is not a reply address");
@@ -241,10 +276,10 @@ async fn the_reply_publisher_refuses_a_destination_that_is_not_a_reply_address()
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_request_times_out_when_nothing_answers() {
-    let broker = connected().await;
+    let broker = rpc().await;
 
     let err = broker
-        .rpc_publisher()
+        .publisher()
         .request(
             OutgoingMessage::new("nobody.home", b"ping".as_slice()),
             NOTHING,
@@ -265,9 +300,9 @@ async fn a_request_times_out_when_nothing_answers() {
 /// hanging in production.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reply_that_drops_the_correlation_id_never_resolves_the_request() {
-    let broker = connected().await;
+    let broker = rpc().await;
     let mut responder = broker.subscribe("echo").await.expect("the responder");
-    let replies = broker.rpc_publisher();
+    let replies = broker.publisher();
 
     let answering = tokio::spawn(async move {
         let mut stream = pin!(responder.stream());
@@ -292,7 +327,7 @@ async fn a_reply_that_drops_the_correlation_id_never_resolves_the_request() {
     });
 
     let err = broker
-        .rpc_publisher()
+        .publisher()
         .request(OutgoingMessage::new("echo", b"ping".as_slice()), NOTHING)
         .await
         .expect_err("an uncorrelated answer must not resolve the request");
@@ -347,7 +382,7 @@ async fn second_worker(done: &Done) -> HandlerOutcome {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_queue_policy_mounts_and_a_result_is_worked_once() {
     let app =
-        RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(ZmqTestBroker::new(), |b| {
+        RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(ZmqTestBroker::queue(), |b| {
             b.include(work).out(Reply, ZmqQueuePublish);
             b.include(first_worker);
             b.include(second_worker);
@@ -358,7 +393,7 @@ async fn the_queue_policy_mounts_and_a_result_is_worked_once() {
         .await
         .expect("the injection drives the reaction to a standstill");
 
-    tb.broker::<ZmqTestBroker>()
+    tb.broker::<ZmqTestBroker<Queue>>()
         .subscriber("results")
         .assert_called_once();
 
@@ -380,18 +415,20 @@ async fn auditor(note: &Note) -> HandlerOutcome {
 /// subscription on `audit` receives what was published to `audit.high`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_fanout_policy_mounts_and_the_prefix_subscription_receives() {
-    let app =
-        RustStream::new(AppInfo::new("watcher", "0.1.0")).with_broker(ZmqTestBroker::new(), |b| {
+    let app = RustStream::new(AppInfo::new("watcher", "0.1.0")).with_broker(
+        ZmqTestBroker::fanout(),
+        |b| {
             b.include(watch).out(Reply, ZmqFanoutPublish);
             b.include(auditor);
-        });
+        },
+    );
     let tb = TestApp::start(app).await.expect("the app starts");
 
     tb.publish("events", &Event { id: 3 })
         .await
         .expect("the injection drives the reaction to a standstill");
 
-    tb.broker::<ZmqTestBroker>()
+    tb.broker::<ZmqTestBroker<Fanout>>()
         .subscriber("audit")
         .assert_called_once();
 
@@ -485,11 +522,20 @@ async fn a_request_reply_pair_runs_under_the_harness() {
     ANSWERS.set(tx).expect("one request-reply app per binary");
 
     let app =
-        RustStream::new(AppInfo::new("greeter", "0.1.0")).with_broker(ZmqTestBroker::new(), |b| {
+        RustStream::new(AppInfo::new("greeter", "0.1.0")).with_broker(ZmqTestBroker::rpc(), |b| {
+            // A responder addresses no retry copies, so every mount on it names where they go -
+            // the same line the deployment writes, and the stand asks for it because the socket
+            // does.
             b.include(greet)
                 .out(Reply, ZmqRpcPublish)
-                .transform(ReplyToRequester);
-            b.include(ask).out(DefaultSlot, ZmqRpcPublish).build();
+                .transform(ReplyToRequester)
+                .out_retry(ZmqRpcPublish)
+                .to("greeter.retry");
+            b.include(ask)
+                .out(DefaultSlot, ZmqRpcPublish)
+                .out_retry(ZmqRpcPublish)
+                .to("asks.retry")
+                .build();
         });
     let tb = TestApp::start(app).await.expect("the app starts");
 

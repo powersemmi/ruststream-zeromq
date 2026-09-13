@@ -81,9 +81,14 @@ fn app() -> impl App {
         ZmqRpc::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")),
         |b| {
             // --8<-- [start:responder]
+            // A responder addresses no retry copies of its own, so the mount names where they go.
+            // A plain name reaches nothing on this pattern, so a service that means the copies to
+            // arrive binds a queue on another broker here.
             b.include(greet)
                 .out_reply(ZmqRpcPublish)
-                .transform(ReplyToRequester);
+                .transform(ReplyToRequester)
+                .out_retry(ZmqRpcPublish)
+                .to("greeter.retry");
             // --8<-- [end:responder]
 
             // --8<-- [start:request]
