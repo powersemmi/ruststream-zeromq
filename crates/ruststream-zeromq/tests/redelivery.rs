@@ -3,16 +3,24 @@
 //! `ZeroMQ` settles nothing, so a handler asking for a delayed retry is served only by the copy
 //! the runtime publishes after the delay, and every pattern has to say whether a publish reaches
 //! its subscription again. The one-way patterns do and say so; the responder does not, and the
-//! service that wires a retry over one is stopped at startup rather than losing the message.
+//! registration that binds a retry over one is stopped at startup rather than losing the message.
 
 #![cfg(feature = "testing")]
 
+use std::time::Duration;
+
 use ruststream::prelude::*;
+// The two `Outgoing` names live in different namespaces: the prelude's is the derive on a reply
+// type, and the value a publish transform rewrites is the type `ruststream::runtime::Outgoing`.
+use ruststream::runtime::{Outgoing, RETRY_COUNT_HEADER, SlotContext};
 use ruststream::testing::TestApp;
 use ruststream::{Broker, RedeliveryAddress, Subscribe};
 use ruststream_zeromq::testing::ZmqTestBroker;
-use ruststream_zeromq::{ZmqEndpoint, ZmqFanout, ZmqQueue, ZmqRpc};
+use ruststream_zeromq::{ZmqEndpoint, ZmqFanout, ZmqQueue, ZmqQueuePublish, ZmqRpc, ZmqRpcPublish};
 use serde::{Deserialize, Serialize};
+
+/// Long enough that the copy is visibly deferred on a paused clock.
+const RETRY_DELAY: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Deserialize, PartialEq, Serialize, Outgoing)]
 struct Job {
@@ -61,15 +69,13 @@ async fn every_pattern_reports_where_a_retry_reaches_it() {
     assert_eq!(rpc.redelivery_address("greeter"), None);
 }
 
-/// A queue subscription answers with its own name, so a scope that wires the fallback starts and
-/// the runtime has somewhere to publish a delayed copy.
+/// A queue subscription answers with its own name, so a registration that binds the fallback
+/// starts and the runtime has somewhere to publish a delayed copy.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_queue_scope_wires_the_deferred_retry() {
     let broker = ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"));
-    let retry = broker.publisher();
     let app = RustStream::new(AppInfo::new("zmq-retry", "0.0.0")).with_broker(broker, |b| {
-        b.retry_via(retry);
-        b.include(work);
+        b.include(work).out_retry(ZmqQueuePublish);
     });
 
     let running = app
@@ -80,15 +86,13 @@ async fn a_queue_scope_wires_the_deferred_retry() {
 }
 
 /// A responder's name is not a publish destination: the reply publisher routes to the peer
-/// identity a request carried and refuses a plain name. The scope is refused at startup, and the
-/// error names the subscription so the operator knows which mount to change.
+/// identity a request carried and refuses a plain name. The registration is refused at startup,
+/// and the error names the subscription so the operator knows which mount to change.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_responder_scope_refuses_the_deferred_retry() {
     let broker = ZmqRpc::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"));
-    let retry = broker.publisher();
     let app = RustStream::new(AppInfo::new("zmq-retry-rpc", "0.0.0")).with_broker(broker, |b| {
-        b.retry_via(retry);
-        b.include(answer);
+        b.include(answer).out_retry(ZmqRpcPublish);
     });
 
     let error = app
@@ -107,11 +111,9 @@ async fn a_responder_scope_refuses_the_deferred_retry() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_stand_in_wires_the_deferred_retry() {
     let broker = ZmqTestBroker::new();
-    let retry = broker.queue_publisher();
     let app =
         RustStream::new(AppInfo::new("zmq-retry-harness", "0.0.0")).with_broker(broker, |b| {
-            b.retry_via(retry);
-            b.include(work);
+            b.include(work).out_retry(ZmqQueuePublish);
         });
 
     let tb = TestApp::start(app).await.expect("the harness starts");
@@ -126,4 +128,63 @@ async fn the_stand_in_wires_the_deferred_retry() {
         .subscriber("jobs")
         .assert_called_once()
         .with(&Job { id: 1 });
+}
+
+/// Stamps every message leaving the slot it is mounted on with that slot's name.
+///
+/// It sets no per-message setting, so it is generic over the options type and mounts on any
+/// publisher. On this transport that is the only shape available: every publisher here declares
+/// `Options = ()`.
+#[derive(Debug, Clone, Copy)]
+struct StampSlot;
+
+impl<Options> PublishTransform<ForSlot, Options> for StampSlot {
+    type Destination = Reads;
+
+    fn apply(&self, out: &mut Outgoing<'_>, _options: &mut Option<Options>, cx: &SlotContext<'_>) {
+        out.headers_mut()
+            .insert("x-left-through", cx.slot().to_owned());
+    }
+}
+
+/// Defers the first delivery and acks the copy that comes back.
+#[subscriber("deferred")]
+async fn defer_once(_job: &Job, ctx: &mut Context) -> HandlerOutcome {
+    if ctx.headers().get_str(RETRY_COUNT_HEADER).is_some() {
+        HandlerOutcome::ack()
+    } else {
+        HandlerOutcome::retry_after(RETRY_DELAY)
+    }
+}
+
+/// The retry position is an ordinary slot, so a transform mounted on it runs on the deferred copy
+/// and nothing else sees that copy. This is where a service marks a redelivery on a transport
+/// that settles nothing.
+#[tokio::test(start_paused = true)]
+async fn a_transform_on_the_retry_slot_stamps_the_deferred_copy() {
+    let app = RustStream::new(AppInfo::new("zmq-retry-stamp", "0.0.0")).with_broker(
+        ZmqTestBroker::new(),
+        |b| {
+            b.include(defer_once)
+                .out_retry(ZmqQueuePublish)
+                .transform(StampSlot);
+        },
+    );
+    let tb = TestApp::start(app).await.expect("the harness starts");
+
+    tb.broker::<ZmqTestBroker>()
+        .message(&Job { id: 2 })
+        .to("deferred")
+        .publish()
+        .await
+        .expect("the job is published");
+    tb.advance(RETRY_DELAY).await.expect("the delay elapses");
+
+    tb.broker::<ZmqTestBroker>()
+        .published::<Job>("deferred")
+        .with_header("x-left-through", "Retry");
+    tb.broker::<ZmqTestBroker>()
+        .subscriber("deferred")
+        .assert_called(2)
+        .with(&Job { id: 2 });
 }

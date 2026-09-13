@@ -66,7 +66,7 @@ The payload frame is whatever the framework's codec produced, so the peer only h
 - The implementation exposes **no high-water-mark configuration**: a slow reader exerts raw TCP back-pressure on senders.
 - There is **no encryption layer**: use it on trusted networks, or inside an existing tunnel.
 - No consumer groups, no dead-lettering, no retry policies, no transactions.
-- **Nothing settles a delivery**, so a `retry_after` is served only by the copy the runtime publishes through the `retry_via` publisher. The one-way patterns report the subscription name as the address for it; a `ZmqRpc` responder reports none, and a scope that wires a retry over one is refused at startup.
+- **Nothing settles a delivery**, so a `retry_after` is served only by the copy the runtime publishes through the publisher the registration binds with `.out_retry(policy)`. The one-way patterns report the subscription name as the address for it; a `ZmqRpc` responder reports none, and a registration that binds a retry over one is refused at startup.
 - **A send takes the frames and nothing else**: no priority, no expiry, no ordering key. Every publisher declares `Options = ()`, this crate adds no publish builder step, and a handler body imports `ruststream::prelude::*` alone.
 
 ## Install
@@ -109,13 +109,13 @@ fn app() -> impl App {
     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
         |b| {
-            b.include(handle).out(Reply, Publish);
+            b.include(handle).out_reply(Publish);
         },
     )
 }
 ```
 
-`.out(marker, policy)` is the one mount verb: `Reply` names the position the handler's return value goes to, and a slot marker names an injected `Out<..>` publisher. A handler file needs none of this - it imports `ruststream::prelude::*` alone and bounds an injected publisher with a capability trait - which is what leaves the bare `Publish` free for the routes file. A file that mounts two patterns imports `ruststream_zeromq::prelude::*` instead, where the policies keep their prefixed names (`ZmqQueuePublish`, `ZmqFanoutPublish`, `ZmqRpcPublish`), because three of them cannot share one bare name.
+`.out_reply(policy)` names where the handler's return value is published, `.out_retry(policy)` the deferred copy of a `retry_after`, and `.out(marker, policy)` an injected `Out<..>` publisher. A handler file needs none of this - it imports `ruststream::prelude::*` alone and bounds an injected publisher with a capability trait - which is what leaves the bare `Publish` free for the routes file. A file that mounts two patterns imports `ruststream_zeromq::prelude::*` instead, where the policies keep their prefixed names (`ZmqQueuePublish`, `ZmqFanoutPublish`, `ZmqRpcPublish`), because three of them cannot share one bare name.
 
 ## Test it
 
@@ -128,7 +128,7 @@ use ruststream_zeromq::testing::ZmqTestBroker;
 
 let app = RustStream::new(AppInfo::new("worker", "0.1.0"))
     .with_broker(ZmqTestBroker::new(), |b| {
-        b.include(handle).out(Reply, ZmqQueuePublish);
+        b.include(handle).out_reply(ZmqQueuePublish);
     });
 let tb = TestApp::start(app).await?;
 

@@ -47,9 +47,9 @@ serde = { version = "1", features = ["derive"] }
 | `ZmqFanout` | PUB/SUB | 广播：每条消息到达名字前缀匹配的每个订阅者。 | `ZmqFanoutPublish` |
 | `ZmqRpc` | DEALER/ROUTER | 请求与响应。 | `ZmqRpcPublish` |
 
-挂载点点名其中一个策略：`.out(Reply, policy)` 发布带 `#[subscriber(.., publish)]` 的处理器返回的
+挂载点点名其中一个策略：`.out_reply(policy)` 发布带 `#[subscriber(.., publish)]` 的处理器返回的
 值，`.out(marker, policy)` 对注入的 `Out<..>` 发布者做同样的事。每种模式的策略同时也是它已连接形态
-的默认值，因此不写 `.out` 挂载的处理器，回复照样经由它发布。
+的默认值，因此不写发布位置挂载的处理器，回复照样经由它发布。
 
 订阅有名字，这个名字就是第一个帧。`ZmqFanout` 按它过滤：名字就是订阅前缀，因此订阅 `events` 的一方
 也会收到 `events.created`。`ZmqQueue` 和 `ZmqRpc` 把套接字收到的每条消息都交给订阅，不管第一个帧写
@@ -183,14 +183,19 @@ socket.send_multipart([b"jobs", b"content-type: application/json", payload])
 ## 重试 { #retries }
 
 投递从不结算，因此返回 `HandlerOutcome::retry_after(..)` 的处理器只剩一条路：延迟过去之后，运行时
-经由作用域用 `retry_via` 接上的发布者发布一份副本。在作用域上接一个，副本就发往订阅报出的地址。
+经由注册用 `.out_retry(policy)` 接上的发布者发布一份副本。在挂载处理器的地方接一个，副本就发往订阅
+报出的地址。
+
+重试位置就是一个普通的 `Out` 槽位，因此链条在它之后还能继续。挂在它上面的 `.transform(..)` 作用于
+那份延迟副本：在一个什么都不结算的传输上，这是服务唯一能给重新投递打标记的地方。副本带的是投递自身
+的字节，因此在这个位置点名的编解码器只解析槽位，不做任何编码。
 
 `ZmqQueue` 和 `ZmqFanout` 报出自己订阅的名字，同一个 Broker 上的发布者正是按它够到它们。队列上的
 重试回到队列里，哪个工作进程空着就归哪个；广播上的重试到达前缀匹配的每一条订阅，也就是原件当初的
 同一批听众。
 
 `ZmqRpc` 什么都不报：响应方的名字不是发布目的地，回复按请求带来的对端身份路由。在响应方上接了
-`retry_via` 的作用域启动时会被拒绝，错误里点出那条订阅。让请求方再问一次就是了。
+`.out_retry(..)` 的注册启动时会被拒绝，错误里点出那条订阅。让请求方再问一次就是了。
 
 ## 请求与响应 { #request-and-reply }
 
@@ -247,9 +252,9 @@ socket.send_multipart([b"jobs", b"content-type: application/json", payload])
 绑定 `Out<impl RequestReply, ..>` 的处理器在这里挂到 rpc 策略上，和它在套接字之上的做法一模一样；
 并且和生产中一样，只能挂到这一个策略上。
 
-一个进程内传输覆盖三种模式，但一个 Broker 只点名一个默认发布策略。因此，省略 `.out(Reply, ..)` 的
+一个进程内传输覆盖三种模式，但一个 Broker 只点名一个默认发布策略。因此，省略 `.out_reply(..)` 的
 挂载在这里一律走队列规则，不论服务实际跑在哪种模式上。在挂载点点名策略
-（`.out(Reply, ZmqFanoutPublish)`），测试套件和部署就会以同样的方式发布。
+（`.out_reply(ZmqFanoutPublish)`），测试套件和部署就会以同样的方式发布。
 
 ### 每种模式在进程内保留了什么 { #what-each-pattern-keeps-in-process }
 
@@ -284,9 +289,9 @@ socket.send_multipart([b"jobs", b"content-type: application/json", payload])
 **响应方的订阅者。** `ZmqRpcSubscriber` 刻意不是 `BatchSubscriber`，因此请求-响应挂载上的
 `.batch(..)` 在生产中无法通过编译，而同一个挂载在测试套件下却能编译。
 
-**重试地址。** 这里的每条订阅都报出自己的名字，也就是两种单向模式的答案，因此接了 `retry_via` 的
-作用域能启动。在 `ZmqRpc` 上，同样的作用域启动时会被拒绝（[重试](#retries)）。响应方的重试接线，
-要拿真实模式来验证。
+**重试地址。** 这里的每条订阅都报出自己的名字，也就是两种单向模式的答案，因此接了
+`.out_retry(..)` 的注册能启动。在 `ZmqRpc` 上，同样的注册启动时会被拒绝（[重试](#retries)）。
+响应方的重试接线，要拿真实模式来验证。
 
 套接字层面的行为同样不需要外部服务。`conformance` 的路由套件、生命周期阶梯、批次和请求/响应
 这两项能力，以及由一个扮演外部对端的原始套接字驱动的帧布局检查，全都跑在回环套接字上。

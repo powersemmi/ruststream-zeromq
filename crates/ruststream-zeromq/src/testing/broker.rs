@@ -171,8 +171,8 @@ impl Subscribe for ConnectedZmqTestBroker {
     }
 
     /// The subscribe name itself, which is the one-way patterns' answer: a queue or fan-out
-    /// publish under it reaches the subscription, so a scope wired with `retry_via` starts here
-    /// exactly as it starts on a socket.
+    /// publish under it reaches the subscription, so a registration that binds `.out_retry(..)`
+    /// starts here exactly as it starts on a socket.
     ///
     /// A subscription carries no pattern here, so a responder mount gets the same answer while
     /// [`ConnectedZmqRpc`](crate::ConnectedZmqRpc) reports none: one more place the stand-in

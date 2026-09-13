@@ -48,11 +48,11 @@
 //! # Retries
 //!
 //! Nothing settles a delivery, so a handler asking for `retry_after` is served only by the copy
-//! the runtime publishes once the delay is over, through the publisher a scope wires with
-//! `retry_via`. The one-way patterns report the subscription name as the address for that copy, so
-//! wiring one works. A responder reports none - the reply publisher routes to a peer identity, not
-//! to a name - and a scope that wires a retry over a responder is refused at startup rather than
-//! publishing copies into nothing.
+//! the runtime publishes once the delay is over, through the publisher a registration binds with
+//! `.out_retry(policy)`. The one-way patterns report the subscription name as the address for that
+//! copy, so binding one works. A responder reports none - the reply publisher routes to a peer
+//! identity, not to a name - and a registration that binds a retry over a responder is refused at
+//! startup rather than publishing copies into nothing.
 
 #![forbid(unsafe_code)]
 

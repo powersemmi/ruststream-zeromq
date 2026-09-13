@@ -34,7 +34,7 @@ pub use self::ZmqQueuePublish as Publish;
 ///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
 ///         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
 ///         |b| {
-///             b.include(handle).out(Reply, Publish);
+///             b.include(handle).out_reply(Publish);
 ///         },
 ///     )
 /// }
@@ -214,7 +214,8 @@ impl Subscribe for ConnectedZmqQueue {
     ///
     /// This is the whole retry path on `ZeroMQ`. Nothing settles a delivery, so a handler asking
     /// for `retry_after` is served only by the deferred copy the runtime publishes here, and a
-    /// scope wired with `retry_via` over a queue subscription works because of this answer.
+    /// registration that binds `.out_retry(..)` over a queue subscription works because of this
+    /// answer.
     /// Competing consumers still compete for the copy, so the worker that retries is not
     /// necessarily the one that asked.
     fn redelivery_address(&self, name: &str) -> Option<RedeliveryAddress> {

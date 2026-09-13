@@ -17,7 +17,7 @@ use ruststream::codec::{Codec, JsonCodec};
 // `ruststream::Outgoing`, and the value a publish transform rewrites is the type
 // `ruststream::runtime::Outgoing`.
 use ruststream::runtime::{
-    App, AppInfo, ForReply, Names, Outgoing, PublishContext, PublishTransform, Reply, RustStream,
+    App, AppInfo, ForReply, Names, Outgoing, PublishContext, PublishTransform, RustStream,
 };
 use ruststream::{IncomingMessage, Outgoing, OutgoingMessage, RequestReply, subscriber};
 use ruststream_zeromq::{ZmqEndpoint, ZmqRpc, ZmqRpcPublish};
@@ -82,7 +82,7 @@ fn app() -> impl App {
         |b| {
             // --8<-- [start:responder]
             b.include(greet)
-                .out(Reply, ZmqRpcPublish)
+                .out_reply(ZmqRpcPublish)
                 .transform(ReplyToRequester);
             // --8<-- [end:responder]
 

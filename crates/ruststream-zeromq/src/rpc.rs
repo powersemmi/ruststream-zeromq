@@ -48,7 +48,7 @@ pub use self::ZmqRpcPublish as Publish;
 ///     RustStream::new(AppInfo::new("greeter", "0.1.0")).with_broker(
 ///         ZmqRpc::new(ZmqEndpoint::bind("tcp://0.0.0.0:5557")),
 ///         |b| {
-///             b.include(greet).out(Reply, Publish);
+///             b.include(greet).out_reply(Publish);
 ///         },
 ///     )
 /// }
@@ -274,9 +274,9 @@ impl Subscriber for ZmqRpcSubscriber {
 /// A responder reports no redelivery address, so `redelivery_address` keeps its "cannot say"
 /// default: the name a responder subscribes under is not a publish destination on this pattern.
 /// [`ZmqRpcPublisher`] routes to a peer identity a request carried and refuses a plain name, so a
-/// deferred copy published under the subscription name would reach nothing. A scope that wires
-/// `retry_via` over a responder therefore refuses to start, instead of dropping the retry
-/// silently; ask a requester again rather than retrying its request from the responder side.
+/// deferred copy published under the subscription name would reach nothing. A registration that
+/// binds `.out_retry(..)` over a responder therefore refuses to start, instead of dropping the
+/// retry silently; ask a requester again rather than retrying its request from the responder side.
 impl Subscribe for ConnectedZmqRpc {
     type Subscriber = ZmqRpcSubscriber;
 

@@ -53,10 +53,10 @@ publisher, and its own subscriber.
 | `ZmqFanout` | PUB/SUB | Broadcast: each message reaches every subscriber whose name prefix matches. | `ZmqFanoutPublish` |
 | `ZmqRpc` | DEALER/ROUTER | Request and reply. | `ZmqRpcPublish` |
 
-The mount site names one of those policies: `.out(Reply, policy)` publishes what a
+The mount site names one of those policies: `.out_reply(policy)` publishes what a
 `#[subscriber(.., publish)]` handler returns, and `.out(marker, policy)` does the same for an
 injected `Out<..>` publisher. Each pattern's policy is also the default of its connected form, so a
-handler mounted without `.out` publishes its reply through it anyway.
+handler mounted without a publish position publishes its reply through it anyway.
 
 A subscription is named, and the name is the first frame. `ZmqFanout` filters on it: the name is
 the subscription prefix, so a subscriber on `events` also receives `events.created`. `ZmqQueue` and
@@ -209,8 +209,13 @@ the bound; here a handler file imports `ruststream::prelude::*` alone, whichever
 
 A delivery is never settled, so a handler that returns `HandlerOutcome::retry_after(..)` is served
 by one thing only: the copy the runtime publishes once the delay is over, through the publisher the
-scope wires with `retry_via`. Wire one on the scope, and the copy goes where the subscription says
-it should.
+registration binds with `.out_retry(policy)`. Bind one where the handler is mounted, and the copy
+goes where the subscription says it should.
+
+The retry position is an ordinary `Out` slot, so the chain continues after it. A `.transform(..)`
+there runs on the deferred copy, which is the only place a service can mark a redelivery on a
+transport that settles nothing. The copy carries the delivery's own bytes, so a codec named at the
+position resolves the slot and encodes nothing.
 
 `ZmqQueue` and `ZmqFanout` say their own subscription name, which is where a publisher on the same
 broker reaches them. A retry on the queue goes back into the queue, so whichever worker is free
@@ -218,8 +223,8 @@ takes it; a retry on the fan-out reaches every subscription whose prefix matches
 the original had.
 
 `ZmqRpc` says nothing, because a responder's name is not a publish destination: replies are routed to
-the peer identity a request carried. A scope that wires `retry_via` over a responder is refused at
-startup, and the error names the subscription. Let the requester ask again instead.
+the peer identity a request carried. A registration that binds `.out_retry(..)` over a responder is
+refused at startup, and the error names the subscription. Let the requester ask again instead.
 
 ## Request and reply
 
@@ -282,8 +287,8 @@ mount on `ZmqTestBroker`. A handler that binds `Out<impl RequestReply, ..>` moun
 policy here exactly as it does over a socket - and, as in production, on that policy alone.
 
 One stand-in covers three patterns, but a broker names one default publish policy, so a mount that
-omits `.out(Reply, ..)` takes the queue rule here whichever pattern the service runs on. Name the
-policy at the mount site - `.out(Reply, ZmqFanoutPublish)` - and the harness and the deployment
+omits `.out_reply(..)` takes the queue rule here whichever pattern the service runs on. Name the
+policy at the mount site - `.out_reply(ZmqFanoutPublish)` - and the harness and the deployment
 publish the same way.
 
 ### What each pattern keeps in process
@@ -330,8 +335,8 @@ pattern.
 under the harness.
 
 **The retry address.** Every subscription here reports its own name, the one-way patterns' answer,
-so a scope that wires `retry_via` starts. On `ZmqRpc` the same scope is refused at startup
-([Retries](#retries)). Check a responder's retry wiring against the real pattern.
+so a registration that binds `.out_retry(..)` starts. On `ZmqRpc` the same registration is refused
+at startup ([Retries](#retries)). Check a responder's retry wiring against the real pattern.
 
 Socket-level behaviour needs no external service either. The conformance routing suite, the
 lifecycle ladder, the batch and request/reply capabilities, and a wire-layout check driven by a raw

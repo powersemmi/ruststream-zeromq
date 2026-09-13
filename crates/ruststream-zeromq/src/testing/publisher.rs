@@ -271,7 +271,7 @@ impl PublishPolicy<ConnectedZmqTestBroker> for ZmqRpcPublish {
 ///
 /// One stand-in covers three patterns but a connected broker names one default, so this is the
 /// single place the harness cannot follow the pattern a service actually runs on: a fan-out
-/// service whose mount omits `.out(Reply, ..)` gets its own policy in production and this one
+/// service whose mount omits `.out_reply(..)` gets its own policy in production and this one
 /// here. Dropping the impl instead would be worse - a mount that compiles in production would
 /// stop compiling under the harness - so the fix at a mount site is to name
 /// [`ZmqFanoutPublish`], which is what a fan-out reply wants stated anyway.
