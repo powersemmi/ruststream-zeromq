@@ -73,6 +73,8 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures::Stream;
+#[cfg(feature = "asyncapi")]
+use ruststream::asyncapi::Bindings;
 use ruststream::{
     Broker, ConnectedBroker, DefaultPublish, DescribeServer, NamedCopies, OutgoingMessage,
     PairError, PublishPolicy, Publisher, RequestReply, ServerSpec, Subscribe, Subscriber,
@@ -82,6 +84,8 @@ use zeromq::prelude::*;
 use zeromq::util::PeerIdentity;
 use zeromq::{DealerSocket, RouterSendHalf, RouterSocket, SocketOptions};
 
+#[cfg(feature = "asyncapi")]
+use crate::bindings::{self, SocketPair};
 use crate::common::{DriverHandle, Lifecycle, SharedLifecycle, WireSubscriber, send_with_retry};
 use crate::endpoint::ZmqEndpoint;
 use crate::error::ZmqError;
@@ -90,6 +94,16 @@ use crate::wire;
 
 /// The prefix of reply destinations minted by the responder subscription.
 pub(crate) const REPLY_PREFIX: &str = "zmq-reply:";
+
+/// The header a request carries the address of its answer in.
+pub(crate) const REPLY_TO_HEADER: &str = "reply-to";
+
+/// Where a client reads that address, as the specification's runtime expression.
+///
+/// A reply on this pattern is addressed per request, so the generated document reports the reply
+/// channel without an address and points here instead.
+#[cfg(feature = "asyncapi")]
+pub(crate) const REPLY_ADDRESS_LOCATION: &str = "$message.header#/reply-to";
 
 /// Builds the reply destination addressing one requesting peer.
 ///
@@ -198,7 +212,7 @@ impl Broker for ZmqRpc {
 
 impl DescribeServer for ZmqRpc {
     fn describe_server(&self) -> ServerSpec {
-        ServerSpec::new(self.endpoint.host(), "zeromq")
+        self.endpoint.server_spec()
     }
 }
 
@@ -310,7 +324,7 @@ impl Subscribe for ConnectedZmqRpc {
                             continue;
                         };
                         let item = wire::decode(rest).map(|(name, mut headers, payload)| {
-                            headers.insert("reply-to", reply_address(&identity));
+                            headers.insert(REPLY_TO_HEADER, reply_address(&identity));
                             ZmqMessage {
                                 name,
                                 headers,
@@ -509,6 +523,16 @@ impl PublishPolicy<ConnectedZmqRpc> for ZmqRpcPublish {
         connected: &ConnectedZmqRpc,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(connected.publisher()))
+    }
+
+    #[cfg(feature = "asyncapi")]
+    fn channel_bindings(&self) -> Bindings {
+        bindings::channel(SocketPair::DealerRouter)
+    }
+
+    #[cfg(feature = "asyncapi")]
+    fn reply_address_location(&self) -> Option<&'static str> {
+        Some(REPLY_ADDRESS_LOCATION)
     }
 }
 

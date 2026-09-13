@@ -11,12 +11,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
+#[cfg(feature = "asyncapi")]
+use ruststream::asyncapi::Bindings;
 use ruststream::{
     DefaultPublish, OutgoingMessage, PairError, PublishPolicy, Publisher, RequestReply,
 };
 
+#[cfg(feature = "asyncapi")]
+use crate::bindings::{self, SocketPair};
 use crate::error::ZmqError;
-use crate::rpc::{REPLY_PREFIX, new_correlation_id, new_reply_address};
+#[cfg(feature = "asyncapi")]
+use crate::rpc::REPLY_ADDRESS_LOCATION;
+use crate::rpc::{REPLY_PREFIX, REPLY_TO_HEADER, new_correlation_id, new_reply_address};
 use crate::testing::broker::{ConnectedZmqTestBroker, TestState};
 use crate::testing::router::Routing;
 use crate::testing::subscriber::ZmqTestMessage;
@@ -195,7 +201,7 @@ impl RequestReply for ZmqTestRpcPublisher {
             .correlation_id()
             .map_or_else(new_correlation_id, str::to_owned);
         let mut headers = msg.headers().clone();
-        headers.insert("reply-to", inbox);
+        headers.insert(REPLY_TO_HEADER, inbox);
         headers.insert("correlation-id", correlation.clone());
         // A request reaches one responder, the way a DEALER picks one connected ROUTER.
         self.state.publish(
@@ -238,6 +244,12 @@ impl PublishPolicy<ConnectedZmqTestBroker> for ZmqQueuePublish {
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(connected.queue_publisher()))
     }
+    /// The stand-in describes the channel the pattern it stands in for describes, so a document
+    /// built under the harness is the document the service ships.
+    #[cfg(feature = "asyncapi")]
+    fn channel_bindings(&self) -> Bindings {
+        bindings::channel(SocketPair::PushPull)
+    }
 }
 
 /// The PUB/SUB policy pairs against the stand-in, keeping the pattern's prefix filter: a
@@ -250,6 +262,12 @@ impl PublishPolicy<ConnectedZmqTestBroker> for ZmqFanoutPublish {
         connected: &ConnectedZmqTestBroker,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(connected.fanout_publisher()))
+    }
+    /// The stand-in describes the channel the pattern it stands in for describes, so a document
+    /// built under the harness is the document the service ships.
+    #[cfg(feature = "asyncapi")]
+    fn channel_bindings(&self) -> Bindings {
+        bindings::channel(SocketPair::PubSub)
     }
 }
 
@@ -264,6 +282,20 @@ impl PublishPolicy<ConnectedZmqTestBroker> for ZmqRpcPublish {
         connected: &ConnectedZmqTestBroker,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(connected.rpc_publisher()))
+    }
+
+    /// The stand-in describes the channel the pattern it stands in for describes, so a document
+    /// built under the harness is the document the service ships.
+    #[cfg(feature = "asyncapi")]
+    fn channel_bindings(&self) -> Bindings {
+        bindings::channel(SocketPair::DealerRouter)
+    }
+
+    /// The stand-in mints a reply address per request the way the ROUTER does, and carries it in
+    /// the same header, so the document reports the same expression on both.
+    #[cfg(feature = "asyncapi")]
+    fn reply_address_location(&self) -> Option<&'static str> {
+        Some(REPLY_ADDRESS_LOCATION)
     }
 }
 

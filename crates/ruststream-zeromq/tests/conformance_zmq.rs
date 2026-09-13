@@ -57,6 +57,18 @@ async fn zmq_queue_passes_redelivery_address() {
     .await;
 }
 
+/// An operator who writes a password into the endpoint URL must not publish it. The document a
+/// service generates is shared, so the scan covers both halves this crate contributes: the server
+/// coordinate and the bindings on it.
+#[test]
+fn zmq_describes_itself_without_credentials() {
+    harness::describes_without_credentials(
+        &ZmqQueue::new(ZmqEndpoint::connect("tcp://ops:hunter2@broker:5555")),
+        &Name::new("jobs"),
+        "hunter2",
+    );
+}
+
 /// The batches are assembled on the client, so this is where the size the subscription was opened
 /// with is proved to cap them - the suite opens at a size smaller than the run.
 #[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]

@@ -56,6 +56,8 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "asyncapi")]
+mod bindings;
 mod common;
 mod endpoint;
 mod error;

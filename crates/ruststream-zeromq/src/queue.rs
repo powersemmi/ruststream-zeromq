@@ -55,6 +55,8 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use futures::Stream;
+#[cfg(feature = "asyncapi")]
+use ruststream::asyncapi::Bindings;
 use ruststream::{
     AddressedCopies, BatchSubscriber, Broker, BufferedSubscriber, ConnectedBroker, DefaultPublish,
     DescribeServer, OutgoingMessage, PairError, PublishPolicy, Publisher, ServerSpec, Subscribe,
@@ -64,6 +66,8 @@ use tokio::sync::{Mutex, OnceCell, mpsc};
 use zeromq::prelude::*;
 use zeromq::{PullSocket, PushSocket};
 
+#[cfg(feature = "asyncapi")]
+use crate::bindings::{self, SocketPair};
 use crate::common::{
     BATCH_MAX_WAIT, DriverHandle, Lifecycle, SharedLifecycle, WireSubscriber, send_with_retry,
 };
@@ -131,7 +135,7 @@ impl Broker for ZmqQueue {
 
 impl DescribeServer for ZmqQueue {
     fn describe_server(&self) -> ServerSpec {
-        ServerSpec::new(self.endpoint.host(), "zeromq")
+        self.endpoint.server_spec()
     }
 }
 
@@ -346,6 +350,11 @@ impl PublishPolicy<ConnectedZmqQueue> for ZmqQueuePublish {
         connected: &ConnectedZmqQueue,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(connected.publisher()))
+    }
+
+    #[cfg(feature = "asyncapi")]
+    fn channel_bindings(&self) -> Bindings {
+        bindings::channel(SocketPair::PushPull)
     }
 }
 

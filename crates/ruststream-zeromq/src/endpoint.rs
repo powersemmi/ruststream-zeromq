@@ -5,7 +5,16 @@
 
 use ruststream::ServerSpec;
 
+#[cfg(feature = "asyncapi")]
+use crate::bindings;
 use crate::error::ZmqError;
+
+/// The ZMTP version the underlying implementation greets a peer with.
+///
+/// The [`zeromq`](https://docs.rs/zeromq) crate sends `3.0` in every greeting and negotiates no
+/// other, so this is a fact of the client rather than a configured value; the generated document
+/// reports it as the server's protocol version.
+const ZMTP_VERSION: &str = "3.0";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Role {
@@ -71,6 +80,18 @@ impl ZmqEndpoint {
             Some(("ipc", path)) => path.to_owned(),
             _ => ServerSpec::host_from_url(&self.address),
         }
+    }
+
+    /// How every pattern of this crate describes itself: the coordinate a client connects to, the
+    /// protocol, the ZMTP version the implementation greets with, and this crate's own binding.
+    ///
+    /// One place rather than three, because the answer does not depend on the socket pair: what a
+    /// pattern adds of its own goes on its channels, through its publish policy.
+    pub(crate) fn server_spec(&self) -> ServerSpec {
+        let spec = ServerSpec::new(self.host(), "zeromq").protocol_version(ZMTP_VERSION);
+        #[cfg(feature = "asyncapi")]
+        let spec = spec.bindings(bindings::server(self));
+        spec
     }
 
     /// Rejects endpoints the implementation cannot serve, before any I/O.

@@ -52,6 +52,8 @@ pub mod prelude {
 use std::future::{Future, ready};
 use std::sync::Arc;
 
+#[cfg(feature = "asyncapi")]
+use ruststream::asyncapi::Bindings;
 use ruststream::{
     AddressedCopies, Broker, ConnectedBroker, DefaultPublish, DescribeServer, OutgoingMessage,
     PairError, PublishPolicy, Publisher, ServerSpec, Subscribe,
@@ -60,6 +62,8 @@ use tokio::sync::{Mutex, OnceCell, mpsc};
 use zeromq::prelude::*;
 use zeromq::{PubSocket, SubSocket};
 
+#[cfg(feature = "asyncapi")]
+use crate::bindings::{self, SocketPair};
 use crate::common::{DriverHandle, Lifecycle, SharedLifecycle, send_with_retry};
 use crate::endpoint::ZmqEndpoint;
 use crate::error::ZmqError;
@@ -126,7 +130,7 @@ impl Broker for ZmqFanout {
 
 impl DescribeServer for ZmqFanout {
     fn describe_server(&self) -> ServerSpec {
-        ServerSpec::new(self.endpoint.host(), "zeromq")
+        self.endpoint.server_spec()
     }
 }
 
@@ -297,6 +301,11 @@ impl PublishPolicy<ConnectedZmqFanout> for ZmqFanoutPublish {
         connected: &ConnectedZmqFanout,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(connected.publisher()))
+    }
+
+    #[cfg(feature = "asyncapi")]
+    fn channel_bindings(&self) -> Bindings {
+        bindings::channel(SocketPair::PubSub)
     }
 }
 
