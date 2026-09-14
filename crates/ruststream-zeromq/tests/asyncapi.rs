@@ -9,6 +9,7 @@
 use ruststream::asyncapi::build_spec;
 use ruststream::prelude::*;
 use ruststream::runtime::{Outgoing, PublishContext};
+use ruststream_zeromq::testing::ZmqTestBroker;
 use ruststream_zeromq::{
     ZmqEndpoint, ZmqFanout, ZmqFanoutPublish, ZmqQueue, ZmqQueuePublish, ZmqRpc, ZmqRpcPublish,
 };
@@ -88,6 +89,16 @@ fn assert_excerpt(app: &RustStream, excerpt: &str) {
     );
 }
 
+/// The two documents with their `servers` block removed, plus the stand's own server block.
+///
+/// The coordinate is the one thing a stand cannot report, so it is lifted out and asserted on its
+/// own; everything else must match, field for field.
+fn without_servers(app: &RustStream) -> Value {
+    let mut document = document(app);
+    document["servers"] = Value::Null;
+    document
+}
+
 /// A PUSH/PULL worker: the server says how to attach to the endpoint, and the channel the worker
 /// publishes to says which socket pair its messages travel over and what their name frame holds.
 ///
@@ -165,6 +176,77 @@ fn a_responder_reports_where_a_client_reads_the_reply_address() {
     );
 
     assert_excerpt(&app, REPLY_ADDRESS);
+}
+
+/// A stand describes itself, so a document builds over it, and what it says below the server is
+/// what the pattern it stands in for says: the channel bindings a peer reads and the reply address
+/// a client follows.
+#[test]
+fn the_queue_stand_builds_the_document_the_queue_builds() {
+    let real = RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker_labeled(
+        "jobs",
+        ZmqQueue::new(ZmqEndpoint::connect("tcp://worker:5555")),
+        |b| {
+            b.include(work).out_reply(ZmqQueuePublish);
+        },
+    );
+    let stand = RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker_labeled(
+        "jobs",
+        ZmqTestBroker::queue(),
+        |b| {
+            b.include(work).out_reply(ZmqQueuePublish);
+        },
+    );
+
+    assert_eq!(without_servers(&stand), without_servers(&real));
+}
+
+#[test]
+fn the_responder_stand_builds_the_document_the_responder_builds() {
+    let real = RustStream::new(AppInfo::new("greeter", "0.1.0")).with_broker_labeled(
+        "rpc",
+        ZmqRpc::new(ZmqEndpoint::bind("tcp://0.0.0.0:5557")),
+        |b| {
+            b.include(greet)
+                .out_reply(ZmqRpcPublish)
+                .transform(ReplyToRequester);
+        },
+    );
+    let stand = RustStream::new(AppInfo::new("greeter", "0.1.0")).with_broker_labeled(
+        "rpc",
+        ZmqTestBroker::rpc(),
+        |b| {
+            b.include(greet)
+                .out_reply(ZmqRpcPublish)
+                .transform(ReplyToRequester);
+        },
+    );
+
+    assert_eq!(without_servers(&stand), without_servers(&real));
+}
+
+/// The coordinate is where the two part: a stand has no host to attach to, names itself instead
+/// of a transport address, and takes no side of an endpoint, while still greeting with the ZMTP
+/// version the real implementation greets with.
+#[test]
+fn a_stand_reports_itself_where_a_deployment_reports_a_coordinate() {
+    let app = RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker_labeled(
+        "jobs",
+        ZmqTestBroker::queue(),
+        |b| {
+            b.include(work).out_reply(ZmqQueuePublish);
+        },
+    );
+
+    let document = document(&app);
+    let server = &document["servers"]["jobs"];
+    assert_eq!(server.get("host"), None);
+    assert_eq!(server["protocol"], "zeromq");
+    assert_eq!(server["protocolVersion"], "3.0");
+    assert_eq!(
+        server["bindings"]["x-ruststream-zeromq"],
+        serde_json::json!({ "transport": "in-process", "endpoint": "ZmqTestBroker::queue" }),
+    );
 }
 
 /// A reply travels to the identity the ROUTER supplies, so the responder's channel reports no

@@ -14,7 +14,7 @@ use crate::error::ZmqError;
 /// The [`zeromq`](https://docs.rs/zeromq) crate sends `3.0` in every greeting and negotiates no
 /// other, so this is a fact of the client rather than a configured value; the generated document
 /// reports it as the server's protocol version.
-const ZMTP_VERSION: &str = "3.0";
+pub(crate) const ZMTP_VERSION: &str = "3.0";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Role {

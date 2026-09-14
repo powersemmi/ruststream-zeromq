@@ -9,9 +9,13 @@ use std::sync::{Arc, OnceLock};
 use bytes::Bytes;
 use ruststream::testing::{Coordinator, TestableBroker};
 use ruststream::{
-    AddressedCopies, Broker, ConnectedBroker, NamedCopies, OutgoingMessage, RawMessage, Subscribe,
+    AddressedCopies, Broker, ConnectedBroker, DescribeServer, NamedCopies, OutgoingMessage,
+    RawMessage, ServerSpec, Subscribe,
 };
 
+#[cfg(feature = "asyncapi")]
+use crate::bindings;
+use crate::endpoint::ZMTP_VERSION;
 use crate::error::ZmqError;
 use crate::testing::publisher::{ZmqTestPublisher, ZmqTestRpcPublisher};
 use crate::testing::router::{AddressRouter, Routing};
@@ -74,7 +78,11 @@ mod sealed {
 ///
 /// Sealed, and the set is the crate's own: a fourth pattern would need a transport behind it
 /// before it could have a stand.
-pub trait TestPattern: sealed::Sealed + Send + Sync + 'static {}
+pub trait TestPattern: sealed::Sealed + Send + Sync + 'static {
+    /// How this pattern's stand names itself where a deployment names a coordinate, so a document
+    /// built over a stand says which of the three it was built over.
+    const STAND: &'static str;
+}
 
 /// PUSH/PULL, the pattern of [`ZmqQueue`](crate::ZmqQueue).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -91,9 +99,17 @@ pub struct Rpc;
 impl sealed::Sealed for Queue {}
 impl sealed::Sealed for Fanout {}
 impl sealed::Sealed for Rpc {}
-impl TestPattern for Queue {}
-impl TestPattern for Fanout {}
-impl TestPattern for Rpc {}
+impl TestPattern for Queue {
+    const STAND: &'static str = "ZmqTestBroker::queue";
+}
+
+impl TestPattern for Fanout {
+    const STAND: &'static str = "ZmqTestBroker::fanout";
+}
+
+impl TestPattern for Rpc {
+    const STAND: &'static str = "ZmqTestBroker::rpc";
+}
 
 /// An in-process stand-in for one of the crate's three patterns: no server, no sockets, and that
 /// pattern's own answers.
@@ -184,6 +200,22 @@ impl<Pattern> Clone for ZmqTestBroker<Pattern> {
 impl<Pattern> fmt::Debug for ZmqTestBroker<Pattern> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ZmqTestBroker").finish_non_exhaustive()
+    }
+}
+
+impl<Pattern: TestPattern> DescribeServer for ZmqTestBroker<Pattern> {
+    /// A stand has no coordinate to attach to, so it describes itself as an in-process server
+    /// over the `zeromq` protocol its pattern speaks, greeting with the ZMTP version the real
+    /// implementation greets with.
+    ///
+    /// Everything below the server comes from the pattern itself, so a document built over a
+    /// stand is the document the service ships apart from where it says to attach. That is what
+    /// makes a document worth asserting under the harness.
+    fn describe_server(&self) -> ServerSpec {
+        let spec = ServerSpec::in_process("zeromq").protocol_version(ZMTP_VERSION);
+        #[cfg(feature = "asyncapi")]
+        let spec = spec.bindings(bindings::in_process_server(Pattern::STAND));
+        spec
     }
 }
 

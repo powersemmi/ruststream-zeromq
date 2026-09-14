@@ -248,7 +248,8 @@ impl PublishPolicy<ConnectedZmqTestBroker<Queue>> for ZmqQueuePublish {
     }
 
     /// The stand describes the channel the pattern it stands in for describes, so a document
-    /// built under the harness is the document the service ships.
+    /// built under the harness is the document the service ships apart from the server
+    /// coordinate, which a stand has none of.
     #[cfg(feature = "asyncapi")]
     fn channel_bindings(&self, channel: &str) -> Bindings {
         bindings::channel(SocketPair::PushPull, channel)
@@ -268,7 +269,8 @@ impl PublishPolicy<ConnectedZmqTestBroker<Fanout>> for ZmqFanoutPublish {
     }
 
     /// The stand describes the channel the pattern it stands in for describes, so a document
-    /// built under the harness is the document the service ships.
+    /// built under the harness is the document the service ships apart from the server
+    /// coordinate, which a stand has none of.
     #[cfg(feature = "asyncapi")]
     fn channel_bindings(&self, channel: &str) -> Bindings {
         bindings::channel(SocketPair::PubSub, channel)
@@ -289,7 +291,8 @@ impl PublishPolicy<ConnectedZmqTestBroker<Rpc>> for ZmqRpcPublish {
     }
 
     /// The stand describes the channel the pattern it stands in for describes, so a document
-    /// built under the harness is the document the service ships.
+    /// built under the harness is the document the service ships apart from the server
+    /// coordinate, which a stand has none of.
     #[cfg(feature = "asyncapi")]
     fn channel_bindings(&self, channel: &str) -> Bindings {
         bindings::channel(SocketPair::DealerRouter, channel)
