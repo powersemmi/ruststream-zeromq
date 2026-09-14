@@ -466,7 +466,9 @@ crate's routing with no sockets and no network. There is one stand per pattern, 
 picks it: `ZmqTestBroker::queue()`, `ZmqTestBroker::fanout()`, `ZmqTestBroker::rpc()`. Each answers
 what its own broker answers, so a routes file that compiles and starts under the harness compiles
 and starts against the socket, and each production policy pairs against the stand of its own
-pattern and no other.
+pattern and no other. A stand describes itself as an in-process server over the protocol and ZMTP
+version its pattern reports, so a document generated under the harness is the one the service ships
+apart from where it says to attach.
 
 Drive it through the framework's
 [`TestApp`](https://docs.rs/ruststream/latest/ruststream/testing/index.html) harness:
