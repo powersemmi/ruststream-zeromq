@@ -297,8 +297,8 @@ ruststream-zeromq = { version = "0.7", features = ["asyncapi"] }
 句柄，`Queue`、`Fanout` 和 `Rpc` 点名模式。从这个句柄出发，
 `.message(&job).to("jobs").publish()` 送进一个任务，
 `.subscriber("jobs").assert_called_once().with(&job)` 断言处理器收到了什么，
-`.published::<Done>("results").assert_called_once().with(&done)` 断言发布型处理器发出了什么。参见
-[用 TestApp 对服务做单元测试](https://powersemmi.github.io/ruststream/latest/guides/testing/#unit-testing-a-service-with-testapp)。
+`.published::<Done>("results").assert_called_once().with(&done)` 断言发布型处理器发出了什么。参见框架
+自身的 [`testing` 模块](https://docs.rs/ruststream/latest/ruststream/testing/index.html#examples)。
 
 ### 挂载点保留自己的策略 { #mount-sites-keep-their-policy }
 

@@ -341,8 +341,8 @@ that stand's handle, with `Queue`, `Fanout` and `Rpc` naming the pattern. From t
 `.message(&job).to("jobs").publish()` puts a job in,
 `.subscriber("jobs").assert_called_once().with(&job)` asserts what the handler received, and
 `.published::<Done>("results").assert_called_once().with(&done)` asserts what a publishing handler
-sent. See
-[Unit-testing a service with TestApp](https://powersemmi.github.io/ruststream/latest/guides/testing/#unit-testing-a-service-with-testapp).
+sent. See the framework's own
+[`testing` module](https://docs.rs/ruststream/latest/ruststream/testing/index.html#examples).
 
 ### Mount sites keep their policy
 

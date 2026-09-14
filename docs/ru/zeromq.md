@@ -348,8 +348,9 @@ URL конечной точки, отбрасывается вместе со с
 дескриптора `.message(&job).to("jobs").publish()` кладёт задание,
 `.subscriber("jobs").assert_called_once().with(&job)` проверяет, что получил обработчик, а
 `.published::<Done>("results").assert_called_once().with(&done)` проверяет, что опубликовал
-публикующий обработчик. См.
-[Юнит-тестирование сервиса через TestApp](https://powersemmi.github.io/ruststream/latest/guides/testing/#unit-testing-a-service-with-testapp).
+публикующий обработчик. См. модуль
+[`testing`](https://docs.rs/ruststream/latest/ruststream/testing/index.html#examples) самого
+фреймворка.
 
 ### Точки монтирования сохраняют свою политику {#mount-sites-keep-their-policy}
 
