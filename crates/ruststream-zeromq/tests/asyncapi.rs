@@ -89,7 +89,10 @@ fn assert_excerpt(app: &RustStream, excerpt: &str) {
 }
 
 /// A PUSH/PULL worker: the server says how to attach to the endpoint, and the channel the worker
-/// publishes to says which socket pair its messages travel over.
+/// publishes to says which socket pair its messages travel over and what their name frame holds.
+///
+/// The name frame is `results`, the destination the mount site declared, not `jobs`, the name the
+/// handler subscribes under.
 ///
 /// The documentation shows this file, so it is pinned here rather than written inline.
 const QUEUE_DOCUMENT: &str = include_str!("documents/queue.json");
@@ -107,6 +110,7 @@ fn a_queue_service_reports_its_endpoint_and_its_socket_pair() {
     assert_excerpt(&app, QUEUE_DOCUMENT);
 }
 
+/// The prefix a SUB peer subscribes with is the destination, so it travels in the binding.
 #[test]
 fn a_fan_out_service_reports_its_own_socket_pair() {
     let app = RustStream::new(AppInfo::new("watcher", "0.1.0")).with_broker_labeled(
@@ -135,7 +139,9 @@ fn a_fan_out_service_reports_its_own_socket_pair() {
           },
           "channels": {
             "audit": {
-              "bindings": { "x-ruststream-zeromq": { "socketPair": "PUB/SUB" } }
+              "bindings": {
+                "x-ruststream-zeromq": { "socketPair": "PUB/SUB", "nameFrame": "audit" }
+              }
             }
           }
         }"#,
@@ -159,6 +165,29 @@ fn a_responder_reports_where_a_client_reads_the_reply_address() {
     );
 
     assert_excerpt(&app, REPLY_ADDRESS);
+}
+
+/// A reply travels to the identity the ROUTER supplies, so the responder's channel reports no
+/// name frame: a peer that sent the channel's own name would reach nobody.
+#[test]
+fn a_responder_channel_reports_no_name_frame() {
+    let app = RustStream::new(AppInfo::new("greeter", "0.1.0")).with_broker_labeled(
+        "rpc",
+        ZmqRpc::new(ZmqEndpoint::bind("tcp://0.0.0.0:5557")),
+        |b| {
+            b.include(greet)
+                .out_reply(ZmqRpcPublish)
+                .transform(ReplyToRequester);
+        },
+    );
+
+    let document = document(&app);
+    let binding = &document["channels"]["reply"]["bindings"]["x-ruststream-zeromq"];
+    assert_eq!(binding["socketPair"], "DEALER/ROUTER");
+    assert!(
+        binding.get("nameFrame").is_none(),
+        "the responder claims an address a peer cannot send to: {binding:#}",
+    );
 }
 
 /// An `ipc` endpoint names a filesystem path rather than an authority, and the binding keeps it

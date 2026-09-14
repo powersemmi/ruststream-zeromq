@@ -303,9 +303,11 @@ impl PublishPolicy<ConnectedZmqFanout> for ZmqFanoutPublish {
         ready(Ok(connected.publisher()))
     }
 
+    /// The destination reaches the binding, because on this pattern it is both frame 0 of every
+    /// message on the channel and the prefix a SUB peer subscribes with to receive it.
     #[cfg(feature = "asyncapi")]
-    fn channel_bindings(&self) -> Bindings {
-        bindings::channel(SocketPair::PubSub)
+    fn channel_bindings(&self, channel: &str) -> Bindings {
+        bindings::channel(SocketPair::PubSub, channel)
     }
 }
 

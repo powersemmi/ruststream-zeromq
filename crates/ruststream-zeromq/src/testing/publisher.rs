@@ -250,8 +250,8 @@ impl PublishPolicy<ConnectedZmqTestBroker<Queue>> for ZmqQueuePublish {
     /// The stand describes the channel the pattern it stands in for describes, so a document
     /// built under the harness is the document the service ships.
     #[cfg(feature = "asyncapi")]
-    fn channel_bindings(&self) -> Bindings {
-        bindings::channel(SocketPair::PushPull)
+    fn channel_bindings(&self, channel: &str) -> Bindings {
+        bindings::channel(SocketPair::PushPull, channel)
     }
 }
 
@@ -270,8 +270,8 @@ impl PublishPolicy<ConnectedZmqTestBroker<Fanout>> for ZmqFanoutPublish {
     /// The stand describes the channel the pattern it stands in for describes, so a document
     /// built under the harness is the document the service ships.
     #[cfg(feature = "asyncapi")]
-    fn channel_bindings(&self) -> Bindings {
-        bindings::channel(SocketPair::PubSub)
+    fn channel_bindings(&self, channel: &str) -> Bindings {
+        bindings::channel(SocketPair::PubSub, channel)
     }
 }
 
@@ -291,8 +291,8 @@ impl PublishPolicy<ConnectedZmqTestBroker<Rpc>> for ZmqRpcPublish {
     /// The stand describes the channel the pattern it stands in for describes, so a document
     /// built under the harness is the document the service ships.
     #[cfg(feature = "asyncapi")]
-    fn channel_bindings(&self) -> Bindings {
-        bindings::channel(SocketPair::DealerRouter)
+    fn channel_bindings(&self, channel: &str) -> Bindings {
+        bindings::channel(SocketPair::DealerRouter, channel)
     }
 
     /// The stand mints a reply address per request the way the ROUTER does, and carries it in the

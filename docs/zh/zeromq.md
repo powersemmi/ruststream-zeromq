@@ -265,7 +265,9 @@ ruststream-zeromq = { version = "0.7", features = ["asyncapi"] }
 同一个扩展 `x-ruststream-zeromq`：它与标准键并列，读法也一样。
 
 服务器说明怎样接上端点：传输、坐标，以及这个服务占据哪一侧。它同时报出 `3.0`，也就是实现向对端
-问候时用的 ZMTP 版本。模式发布到的每一个信道都点名承载其消息的套接字对。
+问候时用的 ZMTP 版本。模式发布到的每一个信道都点名承载其消息的套接字对，而
+`nameFrame` 点名它们的第一帧里放什么：对端要送到这个信道就发这个值，在 PUB/SUB 上它还是对端订阅
+时用的前缀。
 
 ```json
 --8<-- "crates/ruststream-zeromq/tests/documents/queue.json"
@@ -274,7 +276,8 @@ ruststream-zeromq = { version = "0.7", features = ["asyncapi"] }
 坐标就是服务器描述里那个不含凭据的坐标。运维写进端点 URL 的口令会随协议头一起被丢掉，不会进入
 文档，而文档是要发布和传阅的。
 
-响应方按每个请求寻址答复，因此它的回复信道没有自己的地址。文档转而说明客户端从哪里读到地址：
+响应方按每个请求寻址答复，因此它的回复信道既没有自己的地址，也没有名字帧：对端发出信道的名字谁
+也到不了。文档转而说明客户端从哪里读到地址：
 
 ```json
 --8<-- "crates/ruststream-zeromq/tests/documents/reply-address.json"

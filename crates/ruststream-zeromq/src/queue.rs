@@ -352,9 +352,11 @@ impl PublishPolicy<ConnectedZmqQueue> for ZmqQueuePublish {
         ready(Ok(connected.publisher()))
     }
 
+    /// The destination reaches the binding, because on this pattern it is also what frame 0 of
+    /// every message on the channel holds.
     #[cfg(feature = "asyncapi")]
-    fn channel_bindings(&self) -> Bindings {
-        bindings::channel(SocketPair::PushPull)
+    fn channel_bindings(&self, channel: &str) -> Bindings {
+        bindings::channel(SocketPair::PushPull, channel)
     }
 }
 

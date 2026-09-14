@@ -525,9 +525,11 @@ impl PublishPolicy<ConnectedZmqRpc> for ZmqRpcPublish {
         ready(Ok(connected.publisher()))
     }
 
+    /// The destination reaches the binding and stays out of it: a reply travels to the identity
+    /// the ROUTER supplies, so no name on this channel is an address a peer can send to.
     #[cfg(feature = "asyncapi")]
-    fn channel_bindings(&self) -> Bindings {
-        bindings::channel(SocketPair::DealerRouter)
+    fn channel_bindings(&self, channel: &str) -> Bindings {
+        bindings::channel(SocketPair::DealerRouter, channel)
     }
 
     #[cfg(feature = "asyncapi")]

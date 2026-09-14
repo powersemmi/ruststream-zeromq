@@ -16,7 +16,7 @@
   "channels": {
     "results": {
       "bindings": {
-        "x-ruststream-zeromq": { "socketPair": "PUSH/PULL" }
+        "x-ruststream-zeromq": { "socketPair": "PUSH/PULL", "nameFrame": "results" }
       }
     }
   }

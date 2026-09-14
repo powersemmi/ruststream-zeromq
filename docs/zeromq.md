@@ -304,7 +304,9 @@ beside the standard keys and reads the same way.
 
 The server says how to attach to the endpoint: the transport, the coordinate, and which side of it
 this service takes. It also reports `3.0`, the ZMTP version the implementation greets a peer with.
-Each channel a pattern publishes to says which socket pair carries its messages.
+Each channel a pattern publishes to says which socket pair carries its messages, and
+`nameFrame` says what their first frame holds: the value a peer sends to reach that channel, and
+on PUB/SUB the prefix a peer subscribes with.
 
 ```json
 --8<-- "crates/ruststream-zeromq/tests/documents/queue.json"
@@ -314,8 +316,9 @@ The coordinate is the credential-free one the server description already carries
 operator wrote into the endpoint URL is dropped with the scheme and never reaches the document,
 which is published and shared.
 
-A responder addresses each answer per request, so its reply channel has no address of its own. The
-document says where a client reads one instead:
+A responder addresses each answer per request, so its reply channel has neither an address of its
+own nor a name frame: a peer that sent the channel's name would reach nobody. The document says
+where a client reads the address instead:
 
 ```json
 --8<-- "crates/ruststream-zeromq/tests/documents/reply-address.json"

@@ -7,7 +7,8 @@
 //!
 //! Two levels carry one. The server says how to attach to the endpoint: which transport, which
 //! coordinate, and which side of it this service is. The channel says which socket pair the
-//! messages on it travel over, which is what a peer needs before it can open the other end.
+//! messages on it travel over and what their name frame holds, which is what a peer needs before
+//! it can open the other end and read from it.
 //!
 //! Nothing here reads a connection, and nothing here is a credential: the coordinate is the same
 //! one [`DescribeServer`](ruststream::DescribeServer) reports, with the scheme and any userinfo
@@ -40,6 +41,19 @@ impl SocketPair {
             Self::DealerRouter => "DEALER/ROUTER",
         }
     }
+
+    /// Whether frame 0 of a message on this channel holds the channel's own name.
+    ///
+    /// The one-way patterns put the destination there, and a SUB peer filters on that very
+    /// prefix. A reply on DEALER/ROUTER is addressed by the requester's identity instead, and
+    /// its frame 0 holds the constant the wire layout documents, so the channel's name never
+    /// reaches the peer and the binding does not claim it does.
+    const fn addresses_by_name(self) -> bool {
+        match self {
+            Self::PushPull | Self::PubSub => true,
+            Self::DealerRouter => false,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -53,6 +67,8 @@ struct ServerBody {
 struct ChannelBody {
     #[serde(rename = "socketPair")]
     socket_pair: &'static str,
+    #[serde(rename = "nameFrame", skip_serializing_if = "Option::is_none")]
+    name_frame: Option<String>,
 }
 
 /// The transport scheme, as this binding names it.
@@ -80,10 +96,17 @@ pub(crate) fn server(endpoint: &ZmqEndpoint) -> Bindings {
     wrap(&body)
 }
 
-/// The channel binding: the socket pair the messages on this channel travel over.
-pub(crate) fn channel(pair: SocketPair) -> Bindings {
+/// The channel binding: the socket pair the messages on this channel travel over, and the name
+/// their first frame holds.
+///
+/// `destination` is what the document reports as the channel's address, so a peer reads the value
+/// it must put in frame 0 to reach this channel, and on PUB/SUB the prefix it subscribes with.
+/// Which patterns say it is [`SocketPair::addresses_by_name`]'s decision, not the caller's, so the
+/// three publish policies and the three stands cannot drift apart.
+pub(crate) fn channel(pair: SocketPair, destination: &str) -> Bindings {
     wrap(&ChannelBody {
         socket_pair: pair.as_str(),
+        name_frame: pair.addresses_by_name().then(|| destination.to_owned()),
     })
 }
 
@@ -96,6 +119,8 @@ fn wrap<T: Serialize>(body: &T) -> Bindings {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::Value;
+
     use super::*;
 
     #[test]
@@ -140,8 +165,29 @@ mod tests {
             (SocketPair::PubSub, "PUB/SUB"),
             (SocketPair::DealerRouter, "DEALER/ROUTER"),
         ] {
-            let json = serde_json::to_value(channel(pair)).expect("the binding serializes");
+            let json =
+                serde_json::to_value(channel(pair, "orders")).expect("the binding serializes");
             assert_eq!(json[EXTENSION]["socketPair"], expected);
         }
+    }
+
+    /// A peer that reads the document learns what to put in frame 0, and what to subscribe with
+    /// on PUB/SUB, without being told the wire layout separately.
+    #[test]
+    fn the_one_way_patterns_report_the_destination_as_their_name_frame() {
+        for pair in [SocketPair::PushPull, SocketPair::PubSub] {
+            let json =
+                serde_json::to_value(channel(pair, "orders")).expect("the binding serializes");
+            assert_eq!(json[EXTENSION]["nameFrame"], "orders");
+        }
+    }
+
+    /// A reply travels to the identity the ROUTER supplies, so the channel's name is not an
+    /// address a peer can use, and the binding stays silent rather than inventing one.
+    #[test]
+    fn a_responder_reports_no_name_frame() {
+        let json = serde_json::to_value(channel(SocketPair::DealerRouter, "reply"))
+            .expect("the binding serializes");
+        assert_eq!(json[EXTENSION]["nameFrame"], Value::Null);
     }
 }
