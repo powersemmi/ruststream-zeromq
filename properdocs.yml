@@ -71,6 +71,13 @@ hooks:
 
 plugins:
   - search
+  # The guide page moved into the crate's own rustdoc, where the items it teaches live. External
+  # targets resolve under the i18n folder layout, so each language redirects to the same overview.
+  - redirects:
+      redirect_maps:
+        zeromq.md: https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html
+        ru/zeromq.md: https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html
+        zh/zeromq.md: https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html
   # Versioned docs are published with `mike` (see the Docs workflow and the version switcher).
   # Translations live under `docs/<locale>/`; English stays at the docs root as the default.
   - i18n:
@@ -88,7 +95,6 @@ plugins:
           build: true
           nav_translations:
             Home: Главная
-            Guide: Руководство
             RustStream docs: Документация RustStream
             API reference: Справочник API
         - locale: zh
@@ -96,7 +102,6 @@ plugins:
           build: true
           nav_translations:
             Home: 首页
-            Guide: 指南
             RustStream docs: RustStream 文档
             API reference: API 参考
 
@@ -109,7 +114,5 @@ extra:
 
 nav:
   - Home: index.md
-  - Guide:
-      - zeromq.md
   - RustStream docs: https://powersemmi.github.io/ruststream/
   - API reference: https://docs.rs/ruststream-zeromq

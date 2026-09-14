@@ -19,11 +19,17 @@ serde = { version = "1", features = ["derive"] }
 --8<-- "crates/ruststream-zeromq/examples/zmq_pipeline.rs:app"
 ```
 
+这个 crate 的参考手册和指南现在是同一页：[docs.rs 上的 `ruststream-zeromq` 总览](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html)
+讲了[三种模式](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#the-three-patterns)、[端点](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#endpoints)、[订阅](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#subscribing)
+及其批量与重试、[发布](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#publishing)、非 Rust 对端据以拼装消息的
+[传输契约](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#the-wire-contract)、[生成的文档](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#the-generated-document)、
+[测试](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#testing) 和[运维](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#operations)。
+
 ## 接下来读什么 { #where-to-go-next }
 
 <div class="grid cards" markdown>
 
-- :material-transit-connection-horizontal: **[ZeroMQ 指南](zeromq.md)** - 三种模式、端点、传输契约、请求与响应，以及测试。
+- :material-transit-connection-horizontal: **[ZeroMQ 传输](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html)** - 三种模式、端点、传输契约、请求与响应，以及测试。
 - :material-book-open-variant: **[RustStream 文档](https://powersemmi.github.io/ruststream/)** - 框架本身：订阅者、路由、编解码器、中间件和 CLI。
 - :material-language-rust: **[API 参考](https://docs.rs/ruststream-zeromq)** - docs.rs 上这个 crate 的 rustdoc。
 

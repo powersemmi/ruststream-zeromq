@@ -8,5 +8,7 @@ properdocs>=1.6
 mkdocs-material>=9.5
 # Loads unchanged under `properdocs build`: properdocs aliases the `mkdocs` package.
 mkdocs-static-i18n>=1.3
+# Serves the redirect stubs that keep the retired guide page's URLs working.
+mkdocs-redirects>=1.2.3
 pymdown-extensions>=10.7
 mike>=2.2
