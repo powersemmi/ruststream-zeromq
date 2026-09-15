@@ -1,0 +1,14 @@
+{
+  "rules": [
+    "Import the pattern's own prelude in a routes file (`ruststream_zeromq::queue::prelude::*`, `fanout::prelude::*` or `rpc::prelude::*`), which offers that pattern's publish policy as the bare `Publish`; a file mounting more than one pattern imports `ruststream_zeromq::prelude::*` and writes `ZmqQueuePublish`, `ZmqFanoutPublish` or `ZmqRpcPublish`.",
+    "Pick the broker by shape: `ZmqQueue` (PUSH/PULL) for competing consumers, `ZmqFanout` (PUB/SUB) for broadcast filtered by name prefix, `ZmqRpc` (DEALER/ROUTER) for request and reply.",
+    "A subscription is a plain name written as `#[subscriber(\"jobs\")]`: this crate ships no subscription descriptor, and that name is frame 0 of every message on the channel.",
+    "State the listening side on the endpoint with `ZmqEndpoint::bind(addr)` or `ZmqEndpoint::connect(addr)`, on the `tcp://` and `ipc://` transports only.",
+    "There are no per-message settings here: every publisher declares `Options = ()`, this crate adds no publish builder step, and a handler body imports `ruststream::prelude::*` alone.",
+    "Nothing settles a delivery, so `ack` and `nack` report `AckError::Unsupported` and the `.max_attempts(n)` and `.dead_letter(name)` declared at the mount site are counted and republished by the framework, not by the transport; a dead-letter name on `ZmqQueue` or `ZmqFanout` is frame 0 rather than an address, so bind the copies to a publisher on another endpoint for them to leave the subscription.",
+    "Bind the retry publisher with `.out_retry(Publish)` on `ZmqQueue` and `ZmqFanout`, which address their own subscription; on `ZmqRpc` add `.to(\"name\")` or a naming transform, or the registration is refused before the subscription opens.",
+    "Address a reply on `ZmqRpc` with a publish transform declaring `Destination = Names` that reads the request's `reply-to` header; the reply type names no destination of its own, and `publish(\"..\")` at the mount site is the documented fallback.",
+    "Batch only the one-way patterns with `.batch(n)`, assembled on the client behind a 20 ms deadline; `.batch(..)` on a `ZmqRpc` responder does not compile, and no pattern is seekable, partitioned or transactional.",
+    "Test with `ruststream::testing::TestApp` against `ZmqTestBroker::queue()`, `::fanout()` or `::rpc()` behind the `testing` feature, mounting the production policy; do not mock the broker traits."
+  ]
+}

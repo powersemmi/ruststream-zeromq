@@ -52,14 +52,18 @@ pub mod prelude {
 use std::future::{Future, ready};
 use std::sync::Arc;
 
+#[cfg(feature = "asyncapi")]
+use ruststream::asyncapi::Bindings;
 use ruststream::{
-    Broker, ConnectedBroker, DefaultPublish, DescribeServer, OutgoingMessage, PairError,
-    PublishPolicy, Publisher, ServerSpec, Subscribe,
+    AddressedCopies, Broker, ConnectedBroker, DefaultPublish, DescribeServer, OutgoingMessage,
+    PairError, PublishPolicy, Publisher, ServerSpec, Subscribe,
 };
 use tokio::sync::{Mutex, OnceCell, mpsc};
 use zeromq::prelude::*;
 use zeromq::{PubSocket, SubSocket};
 
+#[cfg(feature = "asyncapi")]
+use crate::bindings::{self, SocketPair};
 use crate::common::{DriverHandle, Lifecycle, SharedLifecycle, send_with_retry};
 use crate::endpoint::ZmqEndpoint;
 use crate::error::ZmqError;
@@ -126,7 +130,7 @@ impl Broker for ZmqFanout {
 
 impl DescribeServer for ZmqFanout {
     fn describe_server(&self) -> ServerSpec {
-        ServerSpec::new(self.endpoint.address(), "zeromq")
+        self.endpoint.server_spec()
     }
 }
 
@@ -169,6 +173,16 @@ impl ConnectedBroker for ConnectedZmqFanout {
 
 impl Subscribe for ConnectedZmqFanout {
     type Subscriber = ZmqSubscriber;
+
+    /// The subscribe name is the address, because the two ends of this pattern are the same
+    /// broker: the PUB socket a registration publishes through is attached to the endpoint the
+    /// SUB socket subscribed on, and a name is a prefix of itself, so a publish by this process
+    /// reaches its own subscriber. That is what a retry copy needs.
+    ///
+    /// The pattern's own scope applies to the copy as it does to any other message: every
+    /// subscription whose prefix matches receives it, and a publisher whose filter table has not
+    /// propagated yet drops it (the slow joiner).
+    type Copies = AddressedCopies;
 
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
         self.lifecycle.ensure_open()?;
@@ -231,12 +245,27 @@ impl std::fmt::Debug for ZmqFanoutPublisher {
 impl Publisher for ZmqFanoutPublisher {
     type Error = ZmqError;
 
+    /// ZMTP carries no per-message setting: a send takes the frames and nothing else, so there is
+    /// nothing for a call site to adjust. See the [crate documentation](crate#per-message-settings).
+    type Options = ();
+
+    /// # Cancel safety
+    ///
+    /// Not cancel-safe. Dropping the future can leave the message half-handed to the socket: the
+    /// attach and the send share one guard, and a send that has begun is not undone. Publish from
+    /// a task of its own rather than inside a `select!` arm.
     // The socket guard intentionally spans the lazy attach and the send: the socket takes
     // &mut for every operation.
     #[allow(clippy::significant_drop_tightening)]
-    async fn publish(&self, msg: OutgoingMessage<'_>) -> Result<(), Self::Error> {
+    async fn publish(
+        &self,
+        msg: OutgoingMessage<'_>,
+        _options: Option<&Self::Options>,
+    ) -> Result<(), Self::Error> {
         let lifecycle = self.cell.get().ok_or(ZmqError::NotConnected)?;
         lifecycle.ensure_open()?;
+        // Framed before the socket is touched: a message that cannot be written costs no attach.
+        let frames = wire::encode_to(msg.name(), msg.name(), msg.headers(), msg.payload())?;
         let mut guard = self.socket.lock().await;
         if guard.is_none() {
             let mut socket = PubSocket::new();
@@ -246,12 +275,7 @@ impl Publisher for ZmqFanoutPublisher {
         let socket = guard.as_mut().expect("just attached");
         // PUB never reports "no peers": an unmatched message is dropped by design, so the
         // retry helper only smooths transport-level failures.
-        send_with_retry(
-            socket,
-            msg.name(),
-            wire::encode(msg.name(), msg.headers(), msg.payload()),
-        )
-        .await
+        send_with_retry(socket, msg.name(), frames).await
     }
 }
 
@@ -277,6 +301,13 @@ impl PublishPolicy<ConnectedZmqFanout> for ZmqFanoutPublish {
         connected: &ConnectedZmqFanout,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(connected.publisher()))
+    }
+
+    /// The destination reaches the binding, because on this pattern it is both frame 0 of every
+    /// message on the channel and the prefix a SUB peer subscribes with to receive it.
+    #[cfg(feature = "asyncapi")]
+    fn channel_bindings(&self, channel: &str) -> Bindings {
+        bindings::channel(SocketPair::PubSub, channel)
     }
 }
 

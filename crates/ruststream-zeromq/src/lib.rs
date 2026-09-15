@@ -1,35 +1,8 @@
-//! `ZeroMQ` transport implementation of the `RustStream` broker contract, for bridging to
-//! non-Rust peers.
-//!
-//! Unlike the other `RustStream` broker crates, this one has no server in the middle: which
-//! side listens is a deployment decision, stated explicitly on the [`ZmqEndpoint`]. Three
-//! socket patterns cover three messaging shapes, over the pure-Rust
-//! [`zeromq`](https://docs.rs/zeromq) implementation (TCP and IPC transports):
-//!
-//! - [`ZmqQueue`] - PUSH/PULL: competing consumers, round-robin.
-//! - [`ZmqFanout`] - PUB/SUB: broadcast, prefix filtering by name.
-//! - [`ZmqRpc`] - DEALER/ROUTER: request and reply.
-//!
-//! A receive yields one multipart message, so the two one-way patterns serve a `&[T]` handler by
-//! assembling its batches on the client, to the size the mount site names. The request-reply form
-//! deliberately does not - see [`ZmqRpcSubscriber`] for why a batch of requests cannot be
-//! answered.
-//!
-//! The frame layout is part of the public contract, because the peer on the other side
-//! composes messages by hand: frame 0 is the name (also the subscription prefix for the
-//! fan-out pattern), frame 1 the headers (`"name: value"` lines; may be empty), frame 2 the
-//! payload. A Python peer sends
-//! `socket.send_multipart([b"orders", b"", payload])`.
-//!
-//! Scope and limits: delivery is at most once and there is no durability, so acknowledgement
-//! is reported as unsupported rather than emulated; a subscriber that connects after a
-//! publisher has started misses what was sent before it arrived; the implementation has no
-//! encryption layer, so it is for trusted networks or for use inside an existing tunnel; and
-//! it exposes no high-water-mark configuration - a slow reader exerts raw TCP back-pressure
-//! on senders, except in the fan-out pattern, which drops unmatched messages.
-
+#![doc = include_str!("README.md")]
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "asyncapi")]
+mod bindings;
 mod common;
 mod endpoint;
 mod error;
