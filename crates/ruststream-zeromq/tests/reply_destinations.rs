@@ -249,3 +249,41 @@ async fn the_reply_publisher_refuses_what_it_cannot_route() {
         .await
         .expect("the responder shuts down");
 }
+
+/// An answer whose requester has gone.
+///
+/// The address still parses, so the refusal comes from the ROUTER rather than from the
+/// publisher, and it is a refusal rather than a silent drop: a responder learns that its answer
+/// reached nobody. That is the opposite of the fan-out, where an unmatched broadcast is dropped
+/// without a word.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_answer_to_a_peer_that_is_gone_is_refused_rather_than_dropped() {
+    let connected = ZmqRpc::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"))
+        .connect()
+        .await
+        .expect("the responder connects");
+    let _subscriber = connected
+        .subscribe("greeter")
+        .await
+        .expect("the responder subscription opens");
+
+    let err = connected
+        .publisher()
+        .publish(
+            // Well formed, and no peer ever carried this identity.
+            OutgoingMessage::new("zmq-reply:deadbeef", b"{}".as_slice()),
+            None,
+        )
+        .await
+        .expect_err("no peer carries this identity")
+        .to_string();
+    assert!(
+        err.contains("zmq-reply:deadbeef"),
+        "the failure must name the reply address it could not reach, got: {err}",
+    );
+
+    connected
+        .shutdown()
+        .await
+        .expect("the responder shuts down");
+}

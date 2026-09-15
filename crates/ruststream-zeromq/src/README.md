@@ -199,6 +199,12 @@ and no dead-letter topology, so the framework counts the copies through its own
 [`ZmqMessage`] reports no `redelivery_count` for the same reason. Declaring the dead-letter
 destination alone sends every failed delivery straight there.
 
+A destination is a name, and on the one-way patterns a name is frame 0 rather than an address. A
+copy published to `jobs.dead` through the publisher the subscription itself reads from therefore
+arrives on that same subscription, and a handler that keeps failing keeps making copies. Bind the
+copies to a publisher on another endpoint - `.out_retry(token)` over a second broker - when the
+dead-lettered delivery has to leave the consumers that gave up on it.
+
 Where a copy goes is a property of the pattern, and each pattern states it on its type.
 [`ZmqQueue`] and [`ZmqFanout`] address their own subscription, so `.out_retry(policy)` binds the
 publisher and names nothing: a retry on the queue goes back into the queue and whichever worker is
@@ -305,6 +311,11 @@ The requester uses the [`RequestReply`](ruststream::RequestReply) capability on
 answer, matched by the `correlation-id` header. A correlation id set on the request is kept, so an
 upper layer can match on its own identifier. Nothing answering in time is a timeout error, not a
 hang.
+
+An answer whose requester has gone is refused as well, naming the reply address it could not
+reach: the ROUTER holds no peer under that identity. A responder therefore learns that its answer
+arrived nowhere, which is the opposite of the fan-out, where an unmatched message is dropped
+without a word.
 
 ```
 use std::io;
