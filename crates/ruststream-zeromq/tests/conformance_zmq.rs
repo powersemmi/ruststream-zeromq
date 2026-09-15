@@ -7,7 +7,7 @@
 use ruststream::Name;
 use ruststream::conformance::{capabilities, harness};
 use ruststream_zeromq::testing::ZmqTestBroker;
-use ruststream_zeromq::{ZmqEndpoint, ZmqQueue, ZmqRpc};
+use ruststream_zeromq::{ZmqEndpoint, ZmqFanout, ZmqQueue, ZmqRpc};
 
 /// Every stand answers the routing contract, so a pattern cannot drift from it while the crate
 /// only ever tested one of the three.
@@ -89,9 +89,20 @@ async fn zmq_queue_passes_redelivery_address() {
 /// coordinate and the bindings on it.
 #[test]
 fn zmq_describes_itself_without_credentials() {
+    let endpoint = || ZmqEndpoint::connect("tcp://ops:hunter2@broker:5555");
     harness::describes_without_credentials(
-        &ZmqQueue::new(ZmqEndpoint::connect("tcp://ops:hunter2@broker:5555")),
+        &ZmqQueue::new(endpoint()),
         &Name::new("jobs"),
+        "hunter2",
+    );
+    harness::describes_without_credentials(
+        &ZmqFanout::new(endpoint()),
+        &Name::new("events"),
+        "hunter2",
+    );
+    harness::describes_without_credentials(
+        &ZmqRpc::new(endpoint()),
+        &Name::new("greeter"),
         "hunter2",
     );
 }

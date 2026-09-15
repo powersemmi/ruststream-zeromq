@@ -138,6 +138,9 @@ async fn a_queue_delivery_refuses_every_settlement_and_never_returns() {
             .await
             .expect("the job is published");
         let message = next_delivery(&mut subscriber, settle).await;
+        // ZMTP carries no delivery counter, so a handler reading one gets nothing rather than a
+        // number the transport made up; the framework's own retry header is what counts copies.
+        assert_eq!(message.redelivery_count(), None);
         let outcome = match *settle {
             "ack" => message.ack().await,
             "nack-requeue" => message.nack(true).await,

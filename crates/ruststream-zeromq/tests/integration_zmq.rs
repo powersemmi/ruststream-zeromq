@@ -12,9 +12,9 @@ use futures::StreamExt;
 use ruststream::runtime::{AppInfo, HandlerOutcome, PublishExt, RustStream, SubscriberSettings};
 use ruststream::{
     AckError, Broker, ConnectedBroker, HeaderMap, IncomingMessage, Outgoing, OutgoingMessage,
-    Publisher, Serialized, Subscribe, Subscriber, nonzero, subscriber,
+    Publisher, RequestReply, Serialized, Subscribe, Subscriber, nonzero, subscriber,
 };
-use ruststream_zeromq::{ZmqEndpoint, ZmqFanout, ZmqQueue, ZmqQueuePublish};
+use ruststream_zeromq::{ZmqEndpoint, ZmqFanout, ZmqQueue, ZmqQueuePublish, ZmqRpc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use zeromq::prelude::*;
@@ -557,4 +557,79 @@ async fn a_header_value_that_is_not_text_is_refused_against_its_destination() {
     );
 
     connected.shutdown().await.expect("shutdown succeeds");
+}
+
+/// A publisher outliving its connection is the one dynamic part of the lifecycle ladder: the
+/// consuming transitions make subscribing after shutdown a compile error, but a handle handed out
+/// earlier is still a value someone can call. It has to say the connection is gone rather than
+/// report a send nobody will ever receive.
+///
+/// The conformance suite holds the queue to this. The other two patterns are held to it here,
+/// because their publishers reach the shared state by different routes - the fan-out through its
+/// own cell, the responder through the ROUTER a subscription installs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn every_pattern_refuses_a_publisher_before_connect_and_after_shutdown() {
+    let queue = ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"));
+    let fanout = ZmqFanout::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"));
+    let rpc = ZmqRpc::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"));
+    let early = [
+        publish_error(&queue.publisher()).await,
+        publish_error(&fanout.publisher()).await,
+        publish_error(&rpc.publisher()).await,
+    ];
+    for err in early {
+        assert!(
+            err.contains("not connected"),
+            "a publisher built before connect must say the transport is not connected, got: {err}",
+        );
+    }
+
+    let queue = queue.connect().await.expect("the queue connects");
+    let fanout = fanout.connect().await.expect("the fan-out connects");
+    let rpc = rpc.connect().await.expect("the responder connects");
+    let outliving = [queue.publisher(), queue.publisher()];
+    let fanout_publisher = fanout.publisher();
+    let rpc_publisher = rpc.publisher();
+    queue.shutdown().await.expect("the queue shuts down");
+    fanout.shutdown().await.expect("the fan-out shuts down");
+    rpc.shutdown().await.expect("the responder shuts down");
+
+    for publisher in &outliving {
+        let err = publish_error(publisher).await;
+        assert!(
+            err.contains("not connected"),
+            "a publisher outliving the connection must refuse, got: {err}",
+        );
+    }
+    assert!(
+        publish_error(&fanout_publisher)
+            .await
+            .contains("not connected")
+    );
+    assert!(
+        publish_error(&rpc_publisher)
+            .await
+            .contains("not connected")
+    );
+    let asking = rpc_publisher
+        .request(
+            OutgoingMessage::new("greeter", b"{}".as_slice()),
+            Duration::from_millis(100),
+        )
+        .await
+        .expect_err("a request after shutdown has no connection to issue on")
+        .to_string();
+    assert!(
+        asking.contains("not connected"),
+        "a request after shutdown must refuse, got: {asking}",
+    );
+}
+
+/// The failure a publish reports, as text, so the three patterns can be read the same way.
+async fn publish_error<P: Publisher>(publisher: &P) -> String {
+    publisher
+        .publish(OutgoingMessage::new("jobs", b"{}".as_slice()), None)
+        .await
+        .expect_err("the transport is not connected")
+        .to_string()
 }
