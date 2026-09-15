@@ -8,6 +8,7 @@
 #![cfg(feature = "testing")]
 
 use std::any::type_name;
+use std::io;
 use std::pin::pin;
 use std::time::Duration;
 
@@ -18,13 +19,16 @@ use ruststream::prelude::*;
 use ruststream::runtime::{Bindable, Outgoing, PublishContext, RETRY_COUNT_HEADER};
 use ruststream::testing::TestApp;
 use ruststream::{
-    AddressedCopies, BatchSubscriber, Broker, IncomingMessage, NamedCopies, OutgoingMessage,
-    Publisher, RedeliveryAddress, RedeliveryAddressed, Subscribe, Subscriber,
+    AddressedCopies, BatchSubscriber, Broker, ConnectedBroker, IncomingMessage, NamedCopies,
+    OutgoingMessage, Publisher, RedeliveryAddress, RedeliveryAddressed, Subscribe, Subscriber,
 };
 use ruststream_zeromq::testing::{
     Fanout, Queue, Rpc, ZmqTestBroker, ZmqTestRpcSubscriber, ZmqTestSubscriber,
 };
-use ruststream_zeromq::{ZmqEndpoint, ZmqFanout, ZmqQueue, ZmqQueuePublish, ZmqRpc, ZmqRpcPublish};
+use ruststream_zeromq::{
+    ConnectedZmqQueue, ZmqEndpoint, ZmqFanout, ZmqMessage, ZmqQueue, ZmqQueuePublish, ZmqRpc,
+    ZmqRpcPublish, ZmqSubscriber,
+};
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 
@@ -406,4 +410,263 @@ async fn the_declared_cap_sends_a_spent_delivery_to_the_dead_letter_destination(
     tb.broker::<ZmqTestBroker<Queue>>()
         .published::<Job>("capped.dead")
         .with(&Job { id: 3 });
+}
+
+// -- The same promises over real sockets ------------------------------------------------------
+//
+// Everything above this line reads a declaration or runs on the stand. A copy this service
+// publishes is the whole retry story on this transport, so the copy has to be seen leaving one
+// socket and arriving on another: a stand that routes in memory cannot tell whether the PUSH
+// socket ever accepted it.
+
+/// How long the deferred copy waits. Real sockets rule out a paused clock, so this is short
+/// enough to keep the test quick and long enough to be a deferral rather than a race.
+const LIVE_RETRY_DELAY: Duration = Duration::from_millis(200);
+
+/// Long enough for a handshake and a deferral on a loaded machine.
+const LIVE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long a run has to stay silent before the copies count as stopped.
+const SILENCE: Duration = Duration::from_millis(500);
+
+/// What a handler saw on one delivery, published to a second queue.
+///
+/// The test reads the run off that queue's socket rather than out of the handler, so what it
+/// asserts travelled over ZMTP like every other message.
+#[derive(Debug, Deserialize, PartialEq, Serialize, Outgoing)]
+#[outgoing(name = "reports")]
+struct Report {
+    id: u64,
+    attempt: u64,
+}
+
+#[derive(OutSlot)]
+#[publishes(Report)]
+struct Reports;
+
+/// The framework's own counter, as a handler reads it: absent on the first delivery.
+fn retry_count<Broker, Shared>(ctx: &Context<'_, Broker, Shared>) -> u64 {
+    ctx.headers()
+        .get_str(RETRY_COUNT_HEADER)
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0)
+}
+
+/// Reports every delivery and defers the first one.
+#[subscriber("jobs")]
+async fn report_then_defer(
+    job: &Job,
+    ctx: &mut Context,
+    Out(reports): Out<impl Publisher, Reports>,
+) -> HandlerOutcome {
+    let attempt = retry_count(ctx);
+    reports
+        .message(&Report {
+            id: job.id,
+            attempt,
+        })
+        .publish()
+        .await
+        .expect("the report reaches the sink queue");
+    if attempt == 0 {
+        HandlerOutcome::retry_after(LIVE_RETRY_DELAY)
+    } else {
+        HandlerOutcome::ack()
+    }
+}
+
+/// Reports every delivery and never succeeds, so the declared cap is what stops it.
+#[subscriber("capped")]
+async fn report_and_fail(
+    job: &Job,
+    ctx: &mut Context,
+    Out(reports): Out<impl Publisher, Reports>,
+) -> HandlerOutcome {
+    let attempt = retry_count(ctx);
+    reports
+        .message(&Report {
+            id: job.id,
+            attempt,
+        })
+        .publish()
+        .await
+        .expect("the report reaches the sink queue");
+    HandlerOutcome::retry()
+}
+
+/// Opens the queue the copies and reports arrive on, and hands back the address the app dials.
+async fn live_sink() -> (ConnectedZmqQueue, ZmqSubscriber, String) {
+    let sink = ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"))
+        .connect()
+        .await
+        .expect("the sink queue connects");
+    let subscriber = sink
+        .subscribe("sink")
+        .await
+        .expect("the sink subscription opens");
+    let address = sink
+        .bound_address()
+        .expect("the sink subscription bound a port");
+    (sink, subscriber, address)
+}
+
+/// The next delivery off the sink's socket, or a failure naming what was waited for.
+async fn next_at_sink(subscriber: &mut ZmqSubscriber) -> ZmqMessage {
+    let mut stream = pin!(subscriber.stream());
+    timeout(LIVE_TIMEOUT, stream.next())
+        .await
+        .expect("a delivery arrives at the sink before the deadline")
+        .expect("the sink stream is open")
+        .expect("the delivery is well formed")
+}
+
+async fn next_report(subscriber: &mut ZmqSubscriber) -> Report {
+    let message = next_at_sink(subscriber).await;
+    serde_json::from_slice(message.payload()).expect("the report decodes")
+}
+
+/// Fails when anything else reaches the sink within the silence window.
+async fn expect_silence(subscriber: &mut ZmqSubscriber, why: &str) {
+    let mut stream = pin!(subscriber.stream());
+    assert!(
+        timeout(SILENCE, stream.next()).await.is_err(),
+        "{why}: something still arrived at the sink",
+    );
+}
+
+/// Nothing settles here, so a deferred delivery survives only as a copy the service publishes.
+/// This is that copy on a real PUSH/PULL pair: it leaves the publisher socket, arrives on the
+/// subscription's own socket, and carries the framework's counter forward.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_deferred_copy_travels_the_socket_and_carries_the_count() {
+    let (sink, mut reports, address) = live_sink().await;
+    let egress = ZmqQueue::new(ZmqEndpoint::connect(address)).bindable();
+    let slot = egress.bind(ZmqQueuePublish);
+
+    let app = RustStream::new(AppInfo::new("zmq-live-retry", "0.0.0"))
+        .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")), |b| {
+            b.include(report_then_defer)
+                .out(Reports, slot)
+                .out_retry(ZmqQueuePublish)
+                .build();
+            b.after_startup(ZmqQueuePublish, async move |publisher| -> io::Result<()> {
+                publisher
+                    .message(&Job { id: 11 })
+                    .to("jobs")
+                    .publish()
+                    .await
+                    .map_err(io::Error::other)
+            });
+        })
+        .with_broker(egress, |_b| {});
+    let running = app.start().await.expect("the app starts");
+
+    assert_eq!(
+        next_report(&mut reports).await,
+        Report { id: 11, attempt: 0 },
+        "the first delivery carries no retry count",
+    );
+    assert_eq!(
+        next_report(&mut reports).await,
+        Report { id: 11, attempt: 1 },
+        "the deferred copy comes back on the subscription with the count incremented",
+    );
+    expect_silence(&mut reports, "the second delivery was acknowledged").await;
+
+    running.shutdown().await.expect("the app shuts down");
+    sink.shutdown().await.expect("the sink shuts down");
+}
+
+/// The cap is the framework's, counted through a header the copies carry. Over a socket that
+/// shows what the stand cannot: the copies really do come back to the subscription, and the run
+/// really does stop where the declaration said rather than looping while a handler keeps failing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_declared_cap_stops_the_copies_over_a_socket() {
+    let (sink, mut reports, address) = live_sink().await;
+    let egress = ZmqQueue::new(ZmqEndpoint::connect(address)).bindable();
+    let slot = egress.bind(ZmqQueuePublish);
+
+    let app = RustStream::new(AppInfo::new("zmq-live-cap", "0.0.0"))
+        .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")), |b| {
+            b.include(report_and_fail)
+                .max_attempts(nonzero!(3u32))
+                .out(Reports, slot)
+                .out_retry(ZmqQueuePublish)
+                .build();
+            b.after_startup(ZmqQueuePublish, async move |publisher| -> io::Result<()> {
+                publisher
+                    .message(&Job { id: 12 })
+                    .to("capped")
+                    .publish()
+                    .await
+                    .map_err(io::Error::other)
+            });
+        })
+        .with_broker(egress, |_b| {});
+    let running = app.start().await.expect("the app starts");
+
+    for attempt in 0..3 {
+        assert_eq!(
+            next_report(&mut reports).await,
+            Report { id: 12, attempt },
+            "delivery {attempt} must be the copy the previous one asked for",
+        );
+    }
+    // Three deliveries is what the declaration allows, and the transport has no redelivery of
+    // its own to add a fourth.
+    expect_silence(
+        &mut reports,
+        "the cap is spent and no dead-letter destination is declared",
+    )
+    .await;
+
+    running.shutdown().await.expect("the app shuts down");
+    sink.shutdown().await.expect("the sink shuts down");
+}
+
+/// A dead-letter destination alone takes every failed delivery, and here it takes it over a
+/// socket to a queue of its own: the copy arrives under the declared name, with the payload it
+/// was delivered with and the framework's counter on it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dead_letter_destination_takes_the_spent_delivery_over_a_socket() {
+    let (sink, mut dead, address) = live_sink().await;
+    let egress = ZmqQueue::new(ZmqEndpoint::connect(address)).bindable();
+    let copies = egress.bind(ZmqQueuePublish);
+
+    let app = RustStream::new(AppInfo::new("zmq-live-dead-letter", "0.0.0"))
+        .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")), |b| {
+            b.include(never_succeeds)
+                .dead_letter("capped.dead")
+                .out_retry(copies);
+            b.after_startup(ZmqQueuePublish, async move |publisher| -> io::Result<()> {
+                publisher
+                    .message(&Job { id: 13 })
+                    .to("capped")
+                    .publish()
+                    .await
+                    .map_err(io::Error::other)
+            });
+        })
+        .with_broker(egress, |_b| {});
+    let running = app.start().await.expect("the app starts");
+
+    let message = next_at_sink(&mut dead).await;
+    assert_eq!(
+        message.name(),
+        "capped.dead",
+        "frame 0 of the copy is the declared destination, which is what a peer routes on",
+    );
+    assert_eq!(
+        message.headers().get_str(RETRY_COUNT_HEADER),
+        Some("1"),
+        "the copy carries the framework's counter, because the transport has none",
+    );
+    assert_eq!(
+        serde_json::from_slice::<Job>(message.payload()).expect("the job decodes"),
+        Job { id: 13 },
+    );
+    expect_silence(&mut dead, "one failed delivery makes one dead letter").await;
+
+    running.shutdown().await.expect("the app shuts down");
+    sink.shutdown().await.expect("the sink shuts down");
 }
