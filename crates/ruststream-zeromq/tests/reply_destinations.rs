@@ -4,10 +4,16 @@
 
 #![cfg(feature = "testing")]
 
+use std::time::Duration;
+
 use ruststream::prelude::*;
+// The two `Outgoing` names live in different namespaces: the prelude's is the derive on a reply
+// type, and the value a publish transform rewrites is the type `ruststream::runtime::Outgoing`.
+use ruststream::runtime::{Outgoing, PublishContext};
 use ruststream::testing::TestApp;
-use ruststream_zeromq::ZmqQueuePublish;
+use ruststream::{Broker, ConnectedBroker, IncomingMessage, OutgoingMessage, Subscribe};
 use ruststream_zeromq::testing::{Queue, ZmqTestBroker};
+use ruststream_zeromq::{ZmqEndpoint, ZmqQueuePublish, ZmqRpc, ZmqRpcPublish};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, PartialEq, Serialize, Outgoing)]
@@ -106,4 +112,140 @@ async fn a_reply_type_without_a_name_publishes_where_the_mount_site_says() {
         .with(&Answer {
             text: "hello world".to_owned(),
         });
+}
+
+// -- Where a reply lands on a real ROUTER ------------------------------------------------------
+//
+// The two resolutions above are the framework's, and the stand answers them the way the socket
+// does. What only a socket can answer is the third one: on DEALER/ROUTER a reply is addressed to
+// the peer identity the ROUTER derived from the request, and nothing in process derives that
+// identity.
+
+/// Long enough for a handshake and a round trip on a loaded machine.
+const LIVE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Routes a reply back to the peer that asked.
+///
+/// The transform reads the delivery being answered, so it names [`ForReply`], and it supplies the
+/// destination per delivery, so it declares [`Names`]. That right is on offer because [`Answer`]
+/// declares no destination of its own.
+#[derive(Debug, Clone, Copy)]
+struct ReplyToRequester;
+
+impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
+    type Destination = Names;
+
+    fn apply(
+        &self,
+        out: &mut Outgoing<'_>,
+        _options: &mut Option<Options>,
+        cx: &PublishContext<'_, C>,
+    ) {
+        if let Some(reply_to) = cx.headers().reply_to() {
+            out.set_name(reply_to.to_owned());
+        }
+        if let Some(correlation) = cx.headers().correlation_id() {
+            out.headers_mut()
+                .insert("correlation-id", correlation.to_owned());
+        }
+    }
+}
+
+/// The whole responder path over sockets: the ROUTER stamps the requesting peer on the request,
+/// the transform turns that stamp into the reply's destination, and the answer reaches the DEALER
+/// that asked. The mount-site name `answers` is only the fallback the document reports; no peer
+/// listens on it, so an answer that ignored the stamp would never arrive.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_answer_reaches_the_peer_the_router_stamped_on_the_request() {
+    // A publisher handed out before `connect` shares the pattern's state, which is how the test
+    // reaches the ephemeral port the responder binds.
+    let rpc = ZmqRpc::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"));
+    let requester = rpc.publisher();
+
+    let app = RustStream::new(AppInfo::new("zmq-live-reply", "0.0.0")).with_broker(rpc, |b| {
+        b.include(greet)
+            .out_reply(ZmqRpcPublish)
+            .transform(ReplyToRequester)
+            .out_retry(ZmqRpcPublish)
+            .to("greeter.retry");
+    });
+    let running = app.start().await.expect("the responder starts");
+
+    let request = serde_json::to_vec(&Greeting {
+        who: "world".to_owned(),
+    })
+    .expect("the request encodes");
+    let reply = requester
+        .request(
+            OutgoingMessage::new("greeter", request.as_slice()),
+            LIVE_TIMEOUT,
+        )
+        .await
+        .expect("the answer comes back to the peer that asked");
+
+    assert_eq!(
+        serde_json::from_slice::<Answer>(reply.payload()).expect("the answer decodes"),
+        Answer {
+            text: "hello world".to_owned(),
+        },
+    );
+    // Frame 0 of a reply is the literal `reply`: the ROUTER identity frame in front of it is what
+    // addressed this peer, so the name position carries nothing to route on.
+    assert_eq!(reply.name(), "reply");
+
+    running.shutdown().await.expect("the app shuts down");
+}
+
+/// What the reply publisher refuses, on the socket rather than on the stand.
+///
+/// Each refusal is a mount that would otherwise publish into the void: a plain name has no peer
+/// behind it, an address that is not hex names no identity, and a pattern with no responder
+/// attached has no ROUTER to route through.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_reply_publisher_refuses_what_it_cannot_route() {
+    let connected = ZmqRpc::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"))
+        .connect()
+        .await
+        .expect("the responder connects");
+    let publisher = connected.publisher();
+
+    let plain = publisher
+        .publish(OutgoingMessage::new("greeter", b"{}".as_slice()), None)
+        .await
+        .expect_err("a plain name is not an address on this pattern")
+        .to_string();
+    assert!(
+        plain.contains("zmq-reply:") && plain.contains("request()"),
+        "the refusal must name the address shape and the way out, got: {plain}",
+    );
+
+    let detached = publisher
+        .publish(OutgoingMessage::new("zmq-reply:00", b"{}".as_slice()), None)
+        .await
+        .expect_err("nothing can be routed before a responder attaches its ROUTER")
+        .to_string();
+    assert!(
+        detached.contains("no responder subscription is attached"),
+        "the refusal must name the missing responder, got: {detached}",
+    );
+
+    let mut subscriber = connected
+        .subscribe("greeter")
+        .await
+        .expect("the responder subscription opens");
+    let malformed = publisher
+        .publish(OutgoingMessage::new("zmq-reply:zz", b"{}".as_slice()), None)
+        .await
+        .expect_err("an address that is not hex names no peer identity")
+        .to_string();
+    assert!(
+        malformed.contains("malformed reply address"),
+        "the refusal must say the address is malformed, got: {malformed}",
+    );
+
+    let _ = &mut subscriber;
+    connected
+        .shutdown()
+        .await
+        .expect("the responder shuts down");
 }
