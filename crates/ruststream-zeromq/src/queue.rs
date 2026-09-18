@@ -17,12 +17,14 @@ pub use self::ZmqQueuePublish as Publish;
 ///     id: u64,
 /// }
 ///
-/// #[derive(Serialize)]
+/// // The result queue belongs to the message, so the type names it and the clause stays bare.
+/// #[derive(Serialize, Outgoing)]
+/// #[outgoing(name = "results")]
 /// struct Done {
 ///     id: u64,
 /// }
 ///
-/// #[subscriber("jobs", publish("results"))]
+/// #[subscriber("jobs", publish)]
 /// async fn handle(job: &Job) -> Done {
 ///     Done { id: job.id }
 /// }
@@ -32,7 +34,7 @@ pub use self::ZmqQueuePublish as Publish;
 ///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
 ///         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
 ///         |b| {
-///             b.include(handle).out(Reply, Publish);
+///             b.include(handle).out_reply(Publish);
 ///         },
 ///     )
 /// }
@@ -53,14 +55,19 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use futures::Stream;
+#[cfg(feature = "asyncapi")]
+use ruststream::asyncapi::Bindings;
 use ruststream::{
-    BatchSubscriber, Broker, BufferedSubscriber, ConnectedBroker, DefaultPublish, DescribeServer,
-    OutgoingMessage, PairError, PublishPolicy, Publisher, ServerSpec, Subscribe, Subscriber,
+    AddressedCopies, BatchSubscriber, Broker, BufferedSubscriber, ConnectedBroker, DefaultPublish,
+    DescribeServer, OutgoingMessage, PairError, PublishPolicy, Publisher, ServerSpec, Subscribe,
+    Subscriber,
 };
 use tokio::sync::{Mutex, OnceCell, mpsc};
 use zeromq::prelude::*;
 use zeromq::{PullSocket, PushSocket};
 
+#[cfg(feature = "asyncapi")]
+use crate::bindings::{self, SocketPair};
 use crate::common::{
     BATCH_MAX_WAIT, DriverHandle, Lifecycle, SharedLifecycle, WireSubscriber, send_with_retry,
 };
@@ -128,7 +135,7 @@ impl Broker for ZmqQueue {
 
 impl DescribeServer for ZmqQueue {
     fn describe_server(&self) -> ServerSpec {
-        ServerSpec::new(self.endpoint.address(), "zeromq")
+        self.endpoint.server_spec()
     }
 }
 
@@ -171,6 +178,16 @@ impl ConnectedBroker for ConnectedZmqQueue {
 
 impl Subscribe for ConnectedZmqQueue {
     type Subscriber = ZmqSubscriber;
+
+    /// The subscribe name is the address: a PUSH socket publishing under it reaches the PULL
+    /// subscription opened under it, so the runtime publishes a retry copy to the subscription's
+    /// own name and nothing has to be written at the mount site.
+    ///
+    /// This is the whole retry path on `ZeroMQ`. Nothing settles a delivery, so a handler asking
+    /// for `retry_after` is served only by the deferred copy the runtime publishes here.
+    /// Competing consumers still compete for that copy, so the worker that retries is not
+    /// necessarily the one that asked.
+    type Copies = AddressedCopies;
 
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
         self.lifecycle.ensure_open()?;
@@ -279,12 +296,27 @@ impl std::fmt::Debug for ZmqQueuePublisher {
 impl Publisher for ZmqQueuePublisher {
     type Error = ZmqError;
 
+    /// ZMTP carries no per-message setting: a send takes the frames and nothing else, so there is
+    /// nothing for a call site to adjust. See the [crate documentation](crate#per-message-settings).
+    type Options = ();
+
+    /// # Cancel safety
+    ///
+    /// Not cancel-safe. Dropping the future can leave the message half-handed to the socket: the
+    /// attach and the send share one guard, and a send that has begun is not undone. Publish from
+    /// a task of its own rather than inside a `select!` arm.
     // The socket guard intentionally spans the lazy attach and the send: the socket takes
     // &mut for every operation.
     #[allow(clippy::significant_drop_tightening)]
-    async fn publish(&self, msg: OutgoingMessage<'_>) -> Result<(), Self::Error> {
+    async fn publish(
+        &self,
+        msg: OutgoingMessage<'_>,
+        _options: Option<&Self::Options>,
+    ) -> Result<(), Self::Error> {
         let lifecycle = self.cell.get().ok_or(ZmqError::NotConnected)?;
         lifecycle.ensure_open()?;
+        // Framed before the socket is touched: a message that cannot be written costs no attach.
+        let frames = wire::encode_to(msg.name(), msg.name(), msg.headers(), msg.payload())?;
         let mut push = self.push.lock().await;
         if push.is_none() {
             let mut socket = PushSocket::new();
@@ -292,12 +324,7 @@ impl Publisher for ZmqQueuePublisher {
             *push = Some(socket);
         }
         let socket = push.as_mut().expect("just attached");
-        send_with_retry(
-            socket,
-            msg.name(),
-            wire::encode(msg.name(), msg.headers(), msg.payload()),
-        )
-        .await
+        send_with_retry(socket, msg.name(), frames).await
     }
 }
 
@@ -323,6 +350,13 @@ impl PublishPolicy<ConnectedZmqQueue> for ZmqQueuePublish {
         connected: &ConnectedZmqQueue,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(connected.publisher()))
+    }
+
+    /// The destination reaches the binding, because on this pattern it is also what frame 0 of
+    /// every message on the channel holds.
+    #[cfg(feature = "asyncapi")]
+    fn channel_bindings(&self, channel: &str) -> Bindings {
+        bindings::channel(SocketPair::PushPull, channel)
     }
 }
 

@@ -14,7 +14,7 @@ use ruststream::{
 use crate::common::BATCH_MAX_WAIT;
 use crate::error::ZmqError;
 use crate::testing::broker::TestState;
-use crate::testing::router::{Delivery, DeliveryReceiver, DeliverySender, SubscriptionId};
+use crate::testing::router::{Delivery, DeliveryReceiver, SubscriptionId};
 
 /// The routed side of an in-process subscription, matching the real transport's one-at-a-time
 /// delivery; batches are assembled over it by the wrapper in [`ZmqTestSubscriber`].
@@ -25,9 +25,8 @@ struct TestWire {
     state: Arc<TestState>,
     id: SubscriptionId,
     rx: DeliveryReceiver,
-    requeue: DeliverySender,
     /// A clone of the broker's harness coordinator, threaded into each yielded message so a
-    /// requeue re-counts and a consumed delivery decrements. `None` outside a harness run.
+    /// consumed delivery decrements. `None` outside a harness run.
     coordinator: Option<Coordinator>,
 }
 
@@ -42,20 +41,13 @@ impl Subscriber for TestWire {
     type Error = ZmqError;
 
     fn stream(&mut self) -> impl Stream<Item = Result<Self::Message, Self::Error>> + Send + '_ {
-        let requeue = self.requeue.clone();
         let coordinator = self.coordinator.clone();
         // Poll the receiver in place rather than wrapping it in an owning stream, so `stream`
         // can be called again after the returned stream is dropped (the runtime and the
         // conformance helpers re-enter it per call).
         futures::stream::poll_fn(move |cx| {
             self.rx.poll_recv(cx).map(|next| {
-                next.map(|delivery| {
-                    Ok(ZmqTestMessage::new(
-                        delivery,
-                        requeue.clone(),
-                        coordinator.clone(),
-                    ))
-                })
+                next.map(|delivery| Ok(ZmqTestMessage::new(delivery, coordinator.clone())))
             })
         })
     }
@@ -77,7 +69,6 @@ impl ZmqTestSubscriber {
         state: Arc<TestState>,
         id: SubscriptionId,
         rx: DeliveryReceiver,
-        requeue: DeliverySender,
         coordinator: Option<Coordinator>,
     ) -> Self {
         Self {
@@ -85,7 +76,6 @@ impl ZmqTestSubscriber {
                 state,
                 id,
                 rx,
-                requeue,
                 coordinator,
             })
             .max_wait(BATCH_MAX_WAIT),
@@ -115,22 +105,56 @@ impl BatchSubscriber for ZmqTestSubscriber {
     }
 }
 
+/// Subscriber of the responder stand: one request at a time, and no batches.
+///
+/// It wraps [`ZmqTestSubscriber`] and withholds
+/// [`BatchSubscriber`](ruststream::BatchSubscriber), because
+/// [`ZmqRpcSubscriber`](crate::ZmqRpcSubscriber) withholds it: a batch carries one publish context
+/// for the whole batch, so a batch of requests could not be answered peer by peer. Keeping the
+/// capability off the type makes `.batch(..)` on a responder mount a compile error under the
+/// harness, where production rejects it.
+pub struct ZmqTestRpcSubscriber {
+    inner: ZmqTestSubscriber,
+}
+
+impl std::fmt::Debug for ZmqTestRpcSubscriber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ZmqTestRpcSubscriber")
+            .finish_non_exhaustive()
+    }
+}
+
+impl ZmqTestRpcSubscriber {
+    pub(crate) fn new(inner: ZmqTestSubscriber) -> Self {
+        Self { inner }
+    }
+}
+
+impl Subscriber for ZmqTestRpcSubscriber {
+    type Message = ZmqTestMessage;
+    type Error = ZmqError;
+
+    fn stream(&mut self) -> impl Stream<Item = Result<Self::Message, Self::Error>> + Send + '_ {
+        self.inner.stream()
+    }
+}
+
 /// Message handed to handlers from an [`ZmqTestSubscriber`].
 ///
-/// `ack` consumes the handle; `nack(requeue = true)` re-queues the delivery on the owning
-/// subscription's channel so the next handler invocation sees it again; `nack(requeue = false)`
-/// drops it, matching the real subscriber's reject path in effect.
+/// Settlement answers what [`ZmqMessage`](crate::ZmqMessage) answers over a socket: `ZeroMQ`
+/// settles nothing, so `ack` and `nack` both return [`AckError::Unsupported`] and no delivery
+/// ever comes back. A handler that settles by retrying loses its message on this transport, and
+/// it loses it here too. A stand-in that redelivered instead would hand the author a passing test
+/// for something the deployment cannot do.
 pub struct ZmqTestMessage {
     delivery: Option<Delivery>,
-    requeue: DeliverySender,
     /// A clone of the broker's harness coordinator. When set, this delivery is counted in
     /// flight and is decremented exactly once when the message is consumed or dropped.
     coordinator: Option<Coordinator>,
 }
 
 impl Drop for ZmqTestMessage {
-    /// Counts this delivery consumed exactly once: on ack, nack, or an unsettled drop. A
-    /// requeue re-enqueues a fresh delivery first, so the in-flight count stays balanced.
+    /// Counts this delivery consumed exactly once: on ack, nack, or an unsettled drop.
     fn drop(&mut self) {
         if let Some(coordinator) = &self.coordinator {
             coordinator.consumed();
@@ -145,16 +169,18 @@ impl std::fmt::Debug for ZmqTestMessage {
 }
 
 impl ZmqTestMessage {
-    pub(crate) fn new(
-        delivery: Delivery,
-        requeue: DeliverySender,
-        coordinator: Option<Coordinator>,
-    ) -> Self {
+    /// Builds a message carrying a harness coordinator clone: a dispatch-driven delivery.
+    pub(crate) fn new(delivery: Delivery, coordinator: Option<Coordinator>) -> Self {
         Self {
             delivery: Some(delivery),
-            requeue,
             coordinator,
         }
+    }
+
+    /// Builds a message with no coordinator: a reply the requester consumes itself, which the
+    /// router leaves uncounted for the same reason.
+    pub(crate) fn from_reply(delivery: Delivery) -> Self {
+        Self::new(delivery, None)
     }
 }
 
@@ -175,24 +201,11 @@ impl IncomingMessage for ZmqTestMessage {
 
     fn ack(mut self) -> impl Future<Output = Result<(), AckError>> {
         self.delivery.take();
-        ready(Ok(()))
+        ready(Err(AckError::Unsupported))
     }
 
-    fn nack(mut self, requeue: bool) -> impl Future<Output = Result<(), AckError>> {
-        let delivery = self
-            .delivery
-            .take()
-            .expect("ZmqTestMessage ack/nack invoked twice");
-        if requeue {
-            let sent = self.requeue.send(delivery);
-            // The requeue bypasses fanout, so count the re-enqueue here to balance this
-            // message's `Drop` decrement. The redelivered copy is consumed in turn.
-            if sent.is_ok()
-                && let Some(coordinator) = &self.coordinator
-            {
-                coordinator.enqueued();
-            }
-        }
-        ready(Ok(()))
+    fn nack(mut self, _requeue: bool) -> impl Future<Output = Result<(), AckError>> {
+        self.delivery.take();
+        ready(Err(AckError::Unsupported))
     }
 }

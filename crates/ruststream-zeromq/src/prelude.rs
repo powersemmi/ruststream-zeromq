@@ -1,7 +1,7 @@
 //! The imports a routes file that mounts more than one `ZeroMQ` form writes, in one glob.
 //!
 //! The framework's prelude, the shared [`ZmqEndpoint`], the [`RequestReply`] capability, the
-//! three descriptors with their publish policies, and the three form modules (for the connected
+//! three broker types with their publish policies, and the three form modules (for the connected
 //! forms and live publishers, which a service rarely names).
 //!
 //! Policies keep their prefixed names here, because all three forms call theirs `Publish` and one
@@ -19,12 +19,14 @@
 //!     id: u64,
 //! }
 //!
-//! #[derive(Serialize)]
+//! // The result queue belongs to the message, so the type names it and the clause stays bare.
+//! #[derive(Serialize, Outgoing)]
+//! #[outgoing(name = "results")]
 //! struct Done {
 //!     id: u64,
 //! }
 //!
-//! #[subscriber("jobs", publish("results"))]
+//! #[subscriber("jobs", publish)]
 //! async fn work(job: &Job) -> Done {
 //!     Done { id: job.id }
 //! }
@@ -34,7 +36,7 @@
 //!     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
 //!         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
 //!         |b| {
-//!             b.include(work).out(Reply, ZmqQueuePublish);
+//!             b.include(work).out_reply(ZmqQueuePublish);
 //!         },
 //!     )
 //! }

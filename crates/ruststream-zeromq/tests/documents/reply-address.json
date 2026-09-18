@@ -1,0 +1,17 @@
+{
+  "channels": {
+    "reply": {
+      "address": null,
+      "bindings": {
+        "x-ruststream-zeromq": { "socketPair": "DEALER/ROUTER" }
+      }
+    }
+  },
+  "operations": {
+    "receive_greeter": {
+      "reply": {
+        "address": { "location": "$message.header#/reply-to" }
+      }
+    }
+  }
+}

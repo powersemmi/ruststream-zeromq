@@ -13,10 +13,13 @@ use std::io;
 use std::time::Duration;
 
 use ruststream::codec::{Codec, JsonCodec};
+// The two `Outgoing` names live in different namespaces: the derive on a reply type is the macro
+// `ruststream::Outgoing`, and the value a publish transform rewrites is the type
+// `ruststream::runtime::Outgoing`.
 use ruststream::runtime::{
-    App, AppInfo, Outgoing, PublishContext, PublishTransform, Reply, RustStream,
+    App, AppInfo, ForReply, Names, Outgoing, PublishContext, PublishTransform, RustStream,
 };
-use ruststream::{IncomingMessage, OutgoingMessage, RequestReply, subscriber};
+use ruststream::{IncomingMessage, Outgoing, OutgoingMessage, RequestReply, subscriber};
 use ruststream_zeromq::{ZmqEndpoint, ZmqRpc, ZmqRpcPublish};
 use serde::{Deserialize, Serialize};
 
@@ -25,9 +28,9 @@ struct Greeting {
     who: String,
 }
 
-// `Reply` is the mount site's marker for this handler's reply position, so the message type
-// answering the request carries its own name.
-#[derive(Debug, Deserialize, Serialize)]
+// An answer has no destination of its own: the ROUTER addresses it per request. The type derives
+// `Outgoing` without a name, so the destination is the one the mount site supplies.
+#[derive(Debug, Deserialize, Serialize, Outgoing)]
 struct Answer {
     text: String,
 }
@@ -38,8 +41,20 @@ struct Answer {
 struct ReplyToRequester;
 
 // --8<-- [start:transform]
-impl<C> PublishTransform<C> for ReplyToRequester {
-    fn apply(&self, out: &mut Outgoing<'_>, cx: &PublishContext<'_, C>) {
+// The transform reads the delivery being answered, so it names `ForReply`, and it names the
+// destination per delivery, so it declares `Names`. The reply type declares no destination of its
+// own, which is what leaves the naming right on offer at this position. It sets no per-message
+// setting, so it stays generic over the options type and mounts on any publisher; every publisher
+// here declares `Options = ()` anyway.
+impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
+    type Destination = Names;
+
+    fn apply(
+        &self,
+        out: &mut Outgoing<'_>,
+        _options: &mut Option<Options>,
+        cx: &PublishContext<'_, C>,
+    ) {
         if let Some(reply_to) = cx.headers().reply_to() {
             out.set_name(reply_to.to_owned());
         }
@@ -66,9 +81,14 @@ fn app() -> impl App {
         ZmqRpc::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")),
         |b| {
             // --8<-- [start:responder]
+            // A responder addresses no retry copies of its own, so the mount names where they go.
+            // A plain name reaches nothing on this pattern, so a service that means the copies to
+            // arrive binds a queue on another broker here.
             b.include(greet)
-                .out(Reply, ZmqRpcPublish)
-                .transform(ReplyToRequester);
+                .out_reply(ZmqRpcPublish)
+                .transform(ReplyToRequester)
+                .out_retry(ZmqRpcPublish)
+                .to("greeter.retry");
             // --8<-- [end:responder]
 
             // --8<-- [start:request]

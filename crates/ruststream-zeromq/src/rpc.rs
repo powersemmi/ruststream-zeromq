@@ -28,9 +28,10 @@ pub use self::ZmqRpcPublish as Publish;
 ///     who: String,
 /// }
 ///
-/// // `Reply` is the marker naming the reply position at the mount site, so the message type
-/// // answering the request carries its own name.
-/// #[derive(Serialize)]
+/// // An answer has no destination of its own: the ROUTER addresses it per request. The type
+/// // derives `Outgoing` without a name, and the clause's literal is the placeholder a publish
+/// // transform replaces with the request's `reply-to` address.
+/// #[derive(Serialize, Outgoing)]
 /// struct Answer {
 ///     text: String,
 /// }
@@ -47,7 +48,7 @@ pub use self::ZmqRpcPublish as Publish;
 ///     RustStream::new(AppInfo::new("greeter", "0.1.0")).with_broker(
 ///         ZmqRpc::new(ZmqEndpoint::bind("tcp://0.0.0.0:5557")),
 ///         |b| {
-///             b.include(greet).out(Reply, Publish);
+///             b.include(greet).out_reply(Publish).out_retry(Publish).to("greeter.retry");
 ///         },
 ///     )
 /// }
@@ -72,15 +73,19 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures::Stream;
+#[cfg(feature = "asyncapi")]
+use ruststream::asyncapi::Bindings;
 use ruststream::{
-    Broker, ConnectedBroker, DefaultPublish, DescribeServer, OutgoingMessage, PairError,
-    PublishPolicy, Publisher, RequestReply, ServerSpec, Subscribe, Subscriber,
+    Broker, ConnectedBroker, DefaultPublish, DescribeServer, NamedCopies, OutgoingMessage,
+    PairError, PublishPolicy, Publisher, RequestReply, ServerSpec, Subscribe, Subscriber,
 };
 use tokio::sync::{Mutex, OnceCell, mpsc};
 use zeromq::prelude::*;
 use zeromq::util::PeerIdentity;
 use zeromq::{DealerSocket, RouterSendHalf, RouterSocket, SocketOptions};
 
+#[cfg(feature = "asyncapi")]
+use crate::bindings::{self, SocketPair};
 use crate::common::{DriverHandle, Lifecycle, SharedLifecycle, WireSubscriber, send_with_retry};
 use crate::endpoint::ZmqEndpoint;
 use crate::error::ZmqError;
@@ -88,7 +93,31 @@ use crate::message::ZmqMessage;
 use crate::wire;
 
 /// The prefix of reply destinations minted by the responder subscription.
-const REPLY_PREFIX: &str = "zmq-reply:";
+pub(crate) const REPLY_PREFIX: &str = "zmq-reply:";
+
+/// The header a request carries the address of its answer in.
+pub(crate) const REPLY_TO_HEADER: &str = "reply-to";
+
+/// Where a client reads that address, as the specification's runtime expression.
+///
+/// A reply on this pattern is addressed per request, so the generated document reports the reply
+/// channel without an address and points here instead.
+#[cfg(feature = "asyncapi")]
+pub(crate) const REPLY_ADDRESS_LOCATION: &str = "$message.header#/reply-to";
+
+/// Builds the reply destination addressing one requesting peer.
+///
+/// The responder's ROUTER derives `identity` from the peer that sent the request; the in-process
+/// stand-in mints one per request. Both go through here, so a publish transform that rewrites a
+/// reply destination reads the same shape under the harness as it does over a socket.
+pub(crate) fn reply_address(identity: &[u8]) -> String {
+    format!("{REPLY_PREFIX}{}", hex_encode(identity))
+}
+
+/// Mints the correlation id a request carries when the caller supplied none.
+pub(crate) fn new_correlation_id() -> String {
+    format!("req-{}-{}", std::process::id(), hex_encode(&rand_suffix()))
+}
 
 fn hex_encode(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
@@ -183,7 +212,7 @@ impl Broker for ZmqRpc {
 
 impl DescribeServer for ZmqRpc {
     fn describe_server(&self) -> ServerSpec {
-        ServerSpec::new(self.endpoint.address(), "zeromq")
+        self.endpoint.server_spec()
     }
 }
 
@@ -259,6 +288,17 @@ impl Subscriber for ZmqRpcSubscriber {
 impl Subscribe for ConnectedZmqRpc {
     type Subscriber = ZmqRpcSubscriber;
 
+    /// A copy of a request has no address of its own, so the mount site names where one goes.
+    ///
+    /// The name a responder subscribes under is not a publish destination on this pattern:
+    /// [`ZmqRpcPublisher`] routes to the peer identity a request carried and refuses a plain
+    /// name, so a copy published under the subscription name would reach nothing. A registration
+    /// that binds `.out_retry(..)` over a responder therefore has to say where the copies go,
+    /// with `.to("name")` or with a transform that names one per delivery, and one that says
+    /// neither is refused before the subscription opens. Ask a requester again rather than
+    /// retrying its request from the responder side.
+    type Copies = NamedCopies;
+
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
         self.shared.lifecycle.ensure_open()?;
         let mut socket = RouterSocket::new();
@@ -284,10 +324,7 @@ impl Subscribe for ConnectedZmqRpc {
                             continue;
                         };
                         let item = wire::decode(rest).map(|(name, mut headers, payload)| {
-                            headers.insert(
-                                "reply-to",
-                                format!("{REPLY_PREFIX}{}", hex_encode(&identity)),
-                            );
+                            headers.insert(REPLY_TO_HEADER, reply_address(&identity));
                             ZmqMessage {
                                 name,
                                 headers,
@@ -340,7 +377,22 @@ impl ZmqRpcPublisher {
 impl Publisher for ZmqRpcPublisher {
     type Error = ZmqError;
 
-    async fn publish(&self, msg: OutgoingMessage<'_>) -> Result<(), Self::Error> {
+    /// ZMTP carries no per-message setting: a send takes the frames and nothing else, so there is
+    /// nothing for a call site to adjust. Which peer a reply reaches is a destination, not a
+    /// setting, and a naming publish transform supplies it. See the
+    /// [crate documentation](crate#per-message-settings).
+    type Options = ();
+
+    /// # Cancel safety
+    ///
+    /// Not cancel-safe. Dropping the future can leave the reply half-handed to the ROUTER, and the
+    /// requester then waits out its timeout. Answer from a task of its own rather than inside a
+    /// `select!` arm.
+    async fn publish(
+        &self,
+        msg: OutgoingMessage<'_>,
+        _options: Option<&Self::Options>,
+    ) -> Result<(), Self::Error> {
         let shared = self.shared()?;
         let Some(identity_hex) = msg.name().strip_prefix(REPLY_PREFIX) else {
             return Err(ZmqError::Send {
@@ -359,7 +411,9 @@ impl Publisher for ZmqRpcPublisher {
             reason: "no responder subscription is attached".to_owned(),
         })?;
 
-        let mut message = wire::encode("reply", msg.headers(), msg.payload());
+        // Frame 0 of a reply is the literal "reply". The ROUTER identity frame pushed in front of
+        // it is what addresses the requester, so the name position carries nothing to route on.
+        let mut message = wire::encode_to(msg.name(), "reply", msg.headers(), msg.payload())?;
         message.push_front(Bytes::from(identity));
         let mut router = router.lock().await;
         router.send(message).await.map_err(|e| ZmqError::Send {
@@ -372,6 +426,11 @@ impl Publisher for ZmqRpcPublisher {
 impl RequestReply for ZmqRpcPublisher {
     type Reply = ZmqMessage;
 
+    /// # Cancel safety
+    ///
+    /// Not cancel-safe. Dropping the future closes the DEALER this request was issued on, so an
+    /// answer already in flight is lost, and the request itself may have reached the responder
+    /// already. Give up through `timeout` rather than by cancelling.
     async fn request(
         &self,
         msg: OutgoingMessage<'_>,
@@ -395,13 +454,13 @@ impl RequestReply for ZmqRpcPublisher {
             })?;
 
         // Respect a caller-supplied correlation id (an upper layer may match on it too).
-        let correlation = msg.headers().correlation_id().map_or_else(
-            || format!("req-{}-{}", std::process::id(), hex_encode(&rand_suffix())),
-            str::to_owned,
-        );
+        let correlation = msg
+            .headers()
+            .correlation_id()
+            .map_or_else(new_correlation_id, str::to_owned);
         let mut headers = msg.headers().clone();
         headers.insert("correlation-id", correlation.clone());
-        let request = wire::encode(msg.name(), &headers, msg.payload());
+        let request = wire::encode_to(msg.name(), msg.name(), &headers, msg.payload())?;
         send_with_retry(&mut dealer, msg.name(), request).await?;
 
         let exchange = async {
@@ -424,6 +483,13 @@ impl RequestReply for ZmqRpcPublisher {
             .await
             .unwrap_or(Err(ZmqError::RequestTimeout))
     }
+}
+
+/// Mints a reply address for one in-process request, standing in for the peer identity the
+/// responder's ROUTER supplies over a socket.
+#[cfg(feature = "testing")]
+pub(crate) fn new_reply_address() -> String {
+    reply_address(&rand_suffix())
 }
 
 /// A per-request unique suffix without a randomness dependency: the address of a fresh
@@ -457,6 +523,18 @@ impl PublishPolicy<ConnectedZmqRpc> for ZmqRpcPublish {
         connected: &ConnectedZmqRpc,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(connected.publisher()))
+    }
+
+    /// The destination reaches the binding and stays out of it: a reply travels to the identity
+    /// the ROUTER supplies, so no name on this channel is an address a peer can send to.
+    #[cfg(feature = "asyncapi")]
+    fn channel_bindings(&self, channel: &str) -> Bindings {
+        bindings::channel(SocketPair::DealerRouter, channel)
+    }
+
+    #[cfg(feature = "asyncapi")]
+    fn reply_address_location(&self) -> Option<&'static str> {
+        Some(REPLY_ADDRESS_LOCATION)
     }
 }
 
