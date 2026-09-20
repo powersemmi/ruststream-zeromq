@@ -55,6 +55,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use futures::Stream;
+use futures::lock::Mutex;
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::Bindings;
 use ruststream::{
@@ -62,7 +63,7 @@ use ruststream::{
     DefaultPublish, DescribeServer, OutgoingMessage, PairError, PublishPolicy, Publisher,
     ServerSpec, Subscribe, Subscriber, Take,
 };
-use tokio::sync::{Mutex, OnceCell, mpsc};
+use tokio::sync::{OnceCell, mpsc};
 use zeromq::prelude::*;
 use zeromq::{PullSocket, PushSocket};
 

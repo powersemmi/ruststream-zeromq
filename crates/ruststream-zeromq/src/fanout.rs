@@ -52,13 +52,14 @@ pub mod prelude {
 use std::future::{Future, ready};
 use std::sync::Arc;
 
+use futures::lock::Mutex;
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::Bindings;
 use ruststream::{
     AddressedCopies, Broker, BytesMut, ConnectedBroker, DefaultPublish, DescribeServer,
     OutgoingMessage, PairError, PublishPolicy, Publisher, ServerSpec, Subscribe, Take,
 };
-use tokio::sync::{Mutex, OnceCell, mpsc};
+use tokio::sync::{OnceCell, mpsc};
 use zeromq::prelude::*;
 use zeromq::{PubSocket, SubSocket};
 
@@ -233,6 +234,10 @@ impl Subscribe for ConnectedZmqFanout {
 #[derive(Clone)]
 pub struct ZmqFanoutPublisher {
     cell: Arc<OnceCell<SharedLifecycle>>,
+    // The socket guard is the `futures` mutex rather than tokio's: the socket needs `&mut` per send,
+    // so something must serialise, and this one's uncontended lock and unlock are a pair of atomics
+    // where tokio's semaphore also takes its waiter list. It costs 1.8 of the 9 points a publish
+    // spends over a raw socket loop (#28).
     socket: Arc<Mutex<Option<PubSocket>>>,
 }
 

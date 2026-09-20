@@ -73,6 +73,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures::Stream;
+use futures::lock::Mutex;
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::Bindings;
 use ruststream::{
@@ -80,7 +81,7 @@ use ruststream::{
     OutgoingMessage, PairError, PublishPolicy, Publisher, RequestReply, ServerSpec, Str, Subscribe,
     Subscriber, Take,
 };
-use tokio::sync::{Mutex, OnceCell, mpsc};
+use tokio::sync::{OnceCell, mpsc};
 use zeromq::prelude::*;
 use zeromq::util::PeerIdentity;
 use zeromq::{DealerSocket, RouterSendHalf, RouterSocket, SocketOptions};
