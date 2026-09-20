@@ -597,6 +597,7 @@ dependencies = [
 name = "ruststream-zeromq"
 version = "0.7.0"
 dependencies = [
+ "async-trait",
  "bytes",
  "futures",
  "ruststream",

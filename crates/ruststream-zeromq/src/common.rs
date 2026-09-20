@@ -110,22 +110,29 @@ impl Lifecycle {
 
 /// Sends with a bounded retry while the handshake settles; `ReturnToSender` hands the message
 /// back, so nothing is lost by retrying.
+///
+/// The window is the time the peer is given to appear, so it opens at the first refusal rather
+/// than at the call: a send that is taken keeps the clock out of the publish path entirely.
 pub(crate) async fn send_with_retry<S: SocketSend>(
     socket: &mut S,
     name: &str,
     message: zeromq::ZmqMessage,
 ) -> Result<(), ZmqError> {
     let mut pending = message;
-    let deadline = tokio::time::Instant::now() + SEND_RETRY_WINDOW;
+    let mut deadline = None;
     loop {
         match socket.send(pending).await {
             Ok(()) => return Ok(()),
             Err(WireError::ReturnToSender { message, .. }) => {
-                if tokio::time::Instant::now() >= deadline {
-                    return Err(ZmqError::Send {
-                        name: name.to_owned(),
-                        reason: "no connected peer".to_owned(),
-                    });
+                match deadline {
+                    None => deadline = Some(tokio::time::Instant::now() + SEND_RETRY_WINDOW),
+                    Some(at) if tokio::time::Instant::now() >= at => {
+                        return Err(ZmqError::Send {
+                            name: name.to_owned(),
+                            reason: "no connected peer".to_owned(),
+                        });
+                    }
+                    Some(_) => {}
                 }
                 pending = message;
                 tokio::time::sleep(SEND_RETRY_STEP).await;
@@ -176,3 +183,59 @@ impl Subscriber for WireSubscriber {
 }
 
 pub(crate) type SharedLifecycle = Arc<Lifecycle>;
+
+#[cfg(test)]
+mod tests {
+    use async_trait::async_trait;
+    use bytes::Bytes;
+    use tokio::time::advance;
+    use zeromq::ZmqResult;
+
+    use super::*;
+
+    /// A socket that refuses the first send the way a peerless one does, after taking `stall` off
+    /// the clock: the handshake a freshly dialled socket is still settling takes time of its own.
+    struct Handshaking {
+        refusals: usize,
+        stall: Duration,
+        stalled: bool,
+    }
+
+    #[async_trait]
+    impl SocketSend for Handshaking {
+        async fn send(&mut self, message: zeromq::ZmqMessage) -> ZmqResult<()> {
+            if self.refusals == 0 {
+                return Ok(());
+            }
+            if !self.stalled {
+                self.stalled = true;
+                advance(self.stall).await;
+            }
+            self.refusals -= 1;
+            Err(WireError::ReturnToSender {
+                reason: "no peer",
+                message,
+            })
+        }
+    }
+
+    /// The window is the time the peer is given to appear, so it starts when the peer first
+    /// refuses. A send that took longer than the window to reach that refusal has not used the
+    /// window up - and a send that succeeds asks the clock nothing at all.
+    #[tokio::test(start_paused = true)]
+    async fn the_retry_window_starts_when_the_peer_first_refuses() {
+        let mut socket = Handshaking {
+            refusals: 1,
+            stall: SEND_RETRY_WINDOW + Duration::from_secs(1),
+            stalled: false,
+        };
+
+        send_with_retry(
+            &mut socket,
+            "orders",
+            zeromq::ZmqMessage::from(Bytes::from_static(b"{}")),
+        )
+        .await
+        .expect("the peer refused once and then took the message");
+    }
+}
