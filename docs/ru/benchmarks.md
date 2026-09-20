@@ -40,7 +40,7 @@
 
 ## Числа {#the-numbers}
 
-Медианы по чередующимся раундам, в скобках наблюдавшийся разброс. В столбцах со скоростью больше
+Лучший из трёх чередующихся раундов, в скобках худший из них. В столбцах со скоростью больше
 значит лучше.
 
 <div id="benchmark-results" data-benchmark-results="../../benchmarks/results.json" data-benchmark-labels='{"loading": "Загрузка опубликованных результатов...", "scenario": "Сценарий", "raw": "Сырой клиент", "adapter": "ruststream-zeromq", "framework": "Сервис RustStream", "adapterOverhead": "Расходы крейта", "overhead": "Суммарные расходы", "indistinguishable": "неразличимо", "brokerBound": "упирается в транспорт", "machine": "Машина", "os": "ОС", "broker": "Транспорт", "roundTrip": "Круговая задержка", "build": "Сборка", "versions": "Версии", "measured": "Измерено", "unavailable": "Результаты не удалось прочитать. Они публикуются по адресу {url}.", "unknownSchema": "Опубликованные результаты объявляют схему {schema}, которую эта страница не отображает."}'></div>

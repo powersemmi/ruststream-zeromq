@@ -8,7 +8,8 @@ site serves at `benchmarks/results.json`.
 
 The schema is the core's, declared at
 https://powersemmi.github.io/ruststream/latest/benchmarks/#publishing-results. This crate
-publishes the throughput table alone, so the document declares schema 1.
+publishes the throughput table alone, each loop as its best and worst round, so the document
+declares schema 3.
 
 The schema's `broker` field names what carried the messages. ZeroMQ has no broker, so it names
 the socket pair and its options instead: they, not a server's configuration, are what decides
@@ -133,7 +134,7 @@ def main() -> int:
         return 2
     summary = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
     document = {
-        "schema": 1,
+        "schema": 3,
         "crate": "ruststream-zeromq",
         "crate_version": crate_version(),
         "core_version": locked_version("ruststream"),
