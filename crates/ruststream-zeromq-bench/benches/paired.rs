@@ -329,17 +329,30 @@ impl Run {
         self.0.seen.load(Ordering::Acquire).min(self.0.total)
     }
 
-    /// Resolves once every expected delivery has been handled.
+    /// Resolves once the last delivery's instant has been recorded.
+    ///
+    /// The wait is on that instant rather than on the counter, because the counter is bumped
+    /// first and with `Relaxed`: a waiter can see the count reach its total while the instant
+    /// behind it is not yet stored, and would then read a window that does not exist. The loops
+    /// that join their consuming task never saw this; the one that has no task to join did.
     async fn drained(&self) {
-        while self.0.seen.load(Ordering::Acquire) < self.0.total {
+        while self.0.last.get().is_none() {
             self.0.drained.notified().await;
         }
     }
 
     /// The measured window: the first delivery to the end of the last one.
-    fn window(&self) -> Duration {
-        let first = *self.0.first.get().expect("the run took a delivery");
-        let last = *self.0.last.get().expect("the run took its last delivery");
+    fn window(&self, loop_name: &str) -> Duration {
+        let first = *self
+            .0
+            .first
+            .get()
+            .unwrap_or_else(|| panic!("{loop_name}: the run took a delivery"));
+        let last = *self
+            .0
+            .last
+            .get()
+            .unwrap_or_else(|| panic!("{loop_name}: the run took its last delivery"));
         last - first
     }
 }
@@ -498,7 +511,7 @@ async fn raw(address: &Address, messages: usize) -> Duration {
 
     drain(&run, "raw").await;
     consuming.await.expect("the consuming task ends");
-    run.window()
+    run.window("raw")
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -547,7 +560,7 @@ async fn adapter(address: &Address, messages: usize) -> Duration {
     feed(&publisher, messages, &run).await;
     drain(&run, "adapter").await;
     consuming.await.expect("the consuming task ends");
-    let window = run.window();
+    let window = run.window("adapter");
     connected.shutdown().await.expect("the broker shuts down");
     window
 }
@@ -583,7 +596,7 @@ async fn framework(address: &Address, messages: usize) -> Duration {
 
     feed(&publisher, messages, &run).await;
     drain(&run, "framework").await;
-    let window = run.window();
+    let window = run.window("framework");
     app.shutdown().await.expect("the service stops");
     window
 }
