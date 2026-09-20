@@ -13,7 +13,7 @@
     "memory_speed": "unknown",
     "os": "Linux 7.2.6-x64v3-xanmod1-1",
     "broker": "none: ZeroMQ has no broker, so the peer is a PUSH socket in the same process, over tcp:// on the loopback and over ipc://, with default socket options (the zeromq crate exposes no high-water mark)",
-    "round_trip": "tcp:// 15.1 us, ipc:// 10.5 us (20000 REQ/REP exchanges on the same transport, outside every loop)",
+    "round_trip": "tcp:// 15.1 us, ipc:// 10.2 us (20000 REQ/REP exchanges on the same transport, outside every loop)",
     "rustc": "1.98.1",
     "profile": "bench, inheriting release (opt-level = 3, lto = false, codegen-units = 16)",
     "features": "ruststream-zeromq default (none), ruststream macros,json",
@@ -23,52 +23,52 @@
     {
       "name": "PUSH/PULL over tcp:// on the loopback, 512 B JSON",
       "unit": "msg/s",
-      "messages": 1599068,
+      "messages": 1625550,
       "pairs": 11,
       "raw": {
-        "median": 257639,
-        "min": 254386,
-        "max": 264888
+        "median": 256476,
+        "min": 254271,
+        "max": 264728
       },
       "adapter": {
-        "median": 251569,
-        "min": 246811,
-        "max": 252724
+        "median": 248728,
+        "min": 248193,
+        "max": 255380
       },
       "framework": {
-        "median": 257226,
-        "min": 254351,
-        "max": 260672
+        "median": 257373,
+        "min": 255355,
+        "max": 263394
       },
-      "adapter_overhead_percent": 2.4,
+      "adapter_overhead_percent": 3.0,
       "adapter_verdict": "indistinguishable",
-      "overhead_percent": 0.2,
+      "overhead_percent": -0.3,
       "verdict": "indistinguishable",
       "broker_bound": false
     },
     {
       "name": "PUSH/PULL over ipc://, 512 B JSON",
       "unit": "msg/s",
-      "messages": 5565267,
+      "messages": 5621253,
       "pairs": 11,
       "raw": {
-        "median": 928467,
-        "min": 917498,
-        "max": 932336
+        "median": 910253,
+        "min": 905588,
+        "max": 918483
       },
       "adapter": {
-        "median": 837767,
-        "min": 831407,
-        "max": 845853
+        "median": 824675,
+        "min": 820939,
+        "max": 832217
       },
       "framework": {
-        "median": 836745,
-        "min": 823975,
-        "max": 845320
+        "median": 827097,
+        "min": 822241,
+        "max": 830845
       },
-      "adapter_overhead_percent": 9.8,
+      "adapter_overhead_percent": 9.4,
       "adapter_verdict": "measured",
-      "overhead_percent": 9.9,
+      "overhead_percent": 9.1,
       "verdict": "measured",
       "broker_bound": false
     }
