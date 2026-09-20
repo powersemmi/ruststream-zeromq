@@ -15,7 +15,8 @@ use bytes::Bytes;
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::Bindings;
 use ruststream::{
-    DefaultPublish, OutgoingMessage, PairError, PublishPolicy, Publisher, RequestReply, Str,
+    BytesMut, DefaultPublish, OutgoingMessage, PairError, PublishPolicy, Publisher, RequestReply,
+    Str, Take,
 };
 
 #[cfg(feature = "asyncapi")]
@@ -66,7 +67,7 @@ impl ZmqTestPublisher {
         }
     }
 
-    fn route(&self, msg: &OutgoingMessage<'_>) -> Result<(), ZmqError> {
+    fn route(&self, msg: &OutgoingMessage<'_, BytesMut>) -> Result<(), ZmqError> {
         self.state.ensure_open()?;
         self.state.publish(
             msg.name(),
@@ -79,6 +80,10 @@ impl ZmqTestPublisher {
 }
 
 impl Publisher for ZmqTestPublisher {
+    /// The same answer the socket publishers give: the delivery the stand records owns its
+    /// payload.
+    type Payload = Take;
+
     type Error = ZmqError;
 
     /// The transport's own answer: ZMTP has no per-message setting, so neither has the stand-in.
@@ -92,7 +97,7 @@ impl Publisher for ZmqTestPublisher {
     /// down, rather than routing into a dead broker.
     fn publish(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingMessage<'_, BytesMut>,
         _options: Option<&Self::Options>,
     ) -> impl Future<Output = Result<(), Self::Error>> {
         ready(self.route(&msg))
@@ -126,7 +131,7 @@ impl ZmqTestRpcPublisher {
     }
 
     /// The reply leg, shared by the sync and async entry points.
-    fn route_reply(&self, msg: &OutgoingMessage<'_>) -> Result<(), ZmqError> {
+    fn route_reply(&self, msg: &OutgoingMessage<'_, BytesMut>) -> Result<(), ZmqError> {
         self.state.ensure_open()?;
         if !msg.name().starts_with(REPLY_PREFIX) {
             return Err(ZmqError::Send {
@@ -147,6 +152,10 @@ impl ZmqTestRpcPublisher {
 }
 
 impl Publisher for ZmqTestRpcPublisher {
+    /// The same answer the socket publishers give: the delivery the stand records owns its
+    /// payload.
+    type Payload = Take;
+
     type Error = ZmqError;
 
     /// The transport's own answer: ZMTP has no per-message setting, so neither has the stand-in.
@@ -165,7 +174,7 @@ impl Publisher for ZmqTestRpcPublisher {
     /// [`ZmqError::NotConnected`] once the transport this handle aliases has been shut down.
     fn publish(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingMessage<'_, BytesMut>,
         _options: Option<&Self::Options>,
     ) -> impl Future<Output = Result<(), Self::Error>> {
         ready(self.route_reply(&msg))
@@ -188,7 +197,7 @@ impl RequestReply for ZmqTestRpcPublisher {
 
     async fn request(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingMessage<'_, BytesMut>,
         timeout: Duration,
     ) -> Result<Self::Reply, Self::Error> {
         // Checked before the inbox is minted: a handle that outlived the transport reports the

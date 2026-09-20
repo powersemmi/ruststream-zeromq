@@ -55,8 +55,8 @@ use std::sync::Arc;
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::Bindings;
 use ruststream::{
-    AddressedCopies, Broker, ConnectedBroker, DefaultPublish, DescribeServer, OutgoingMessage,
-    PairError, PublishPolicy, Publisher, ServerSpec, Subscribe,
+    AddressedCopies, Broker, BytesMut, ConnectedBroker, DefaultPublish, DescribeServer,
+    OutgoingMessage, PairError, PublishPolicy, Publisher, ServerSpec, Subscribe, Take,
 };
 use tokio::sync::{Mutex, OnceCell, mpsc};
 use zeromq::prelude::*;
@@ -243,6 +243,10 @@ impl std::fmt::Debug for ZmqFanoutPublisher {
 }
 
 impl Publisher for ZmqFanoutPublisher {
+    /// A frame owns its bytes: the payload becomes the message's third frame and the socket
+    /// keeps it until the send completes.
+    type Payload = Take;
+
     type Error = ZmqError;
 
     /// ZMTP carries no per-message setting: a send takes the frames and nothing else, so there is
@@ -259,7 +263,7 @@ impl Publisher for ZmqFanoutPublisher {
     #[allow(clippy::significant_drop_tightening)]
     async fn publish(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingMessage<'_, BytesMut>,
         _options: Option<&Self::Options>,
     ) -> Result<(), Self::Error> {
         let lifecycle = self.cell.get().ok_or(ZmqError::NotConnected)?;

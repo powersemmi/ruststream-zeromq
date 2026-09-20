@@ -76,8 +76,9 @@ use futures::Stream;
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::Bindings;
 use ruststream::{
-    Broker, ConnectedBroker, DefaultPublish, DescribeServer, NamedCopies, OutgoingMessage,
-    PairError, PublishPolicy, Publisher, RequestReply, ServerSpec, Str, Subscribe, Subscriber,
+    Broker, BytesMut, ConnectedBroker, DefaultPublish, DescribeServer, NamedCopies,
+    OutgoingMessage, PairError, PublishPolicy, Publisher, RequestReply, ServerSpec, Str, Subscribe,
+    Subscriber, Take,
 };
 use tokio::sync::{Mutex, OnceCell, mpsc};
 use zeromq::prelude::*;
@@ -381,6 +382,10 @@ impl ZmqRpcPublisher {
 }
 
 impl Publisher for ZmqRpcPublisher {
+    /// A frame owns its bytes: the payload becomes the message's third frame and the ROUTER
+    /// keeps it until the send completes.
+    type Payload = Take;
+
     type Error = ZmqError;
 
     /// ZMTP carries no per-message setting: a send takes the frames and nothing else, so there is
@@ -396,7 +401,7 @@ impl Publisher for ZmqRpcPublisher {
     /// `select!` arm.
     async fn publish(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingMessage<'_, BytesMut>,
         _options: Option<&Self::Options>,
     ) -> Result<(), Self::Error> {
         let shared = self.shared()?;
@@ -439,7 +444,7 @@ impl RequestReply for ZmqRpcPublisher {
     /// already. Give up through `timeout` rather than by cancelling.
     async fn request(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingMessage<'_, BytesMut>,
         timeout: Duration,
     ) -> Result<Self::Reply, Self::Error> {
         let shared = self.shared()?;
