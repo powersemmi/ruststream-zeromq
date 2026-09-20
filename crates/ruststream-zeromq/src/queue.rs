@@ -320,7 +320,8 @@ impl Publisher for ZmqQueuePublisher {
         let lifecycle = self.cell.get().ok_or(ZmqError::NotConnected)?;
         lifecycle.ensure_open()?;
         // Framed before the socket is touched: a message that cannot be written costs no attach.
-        let frames = wire::encode_to(msg.name(), msg.name(), msg.headers(), msg.payload())?;
+        let (name, payload, headers) = msg.into_parts();
+        let frames = wire::encode_to(name, name, &headers, payload.freeze())?;
         let mut push = self.push.lock().await;
         if push.is_none() {
             let mut socket = PushSocket::new();
@@ -328,7 +329,7 @@ impl Publisher for ZmqQueuePublisher {
             *push = Some(socket);
         }
         let socket = push.as_mut().expect("just attached");
-        send_with_retry(socket, msg.name(), frames).await
+        send_with_retry(socket, name, frames).await
     }
 }
 

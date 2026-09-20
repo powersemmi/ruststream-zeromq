@@ -11,7 +11,6 @@ use std::future::{Future, ready};
 use std::sync::Arc;
 use std::time::Duration;
 
-use bytes::Bytes;
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::Bindings;
 use ruststream::{
@@ -67,14 +66,12 @@ impl ZmqTestPublisher {
         }
     }
 
-    fn route(&self, msg: &OutgoingMessage<'_, BytesMut>) -> Result<(), ZmqError> {
+    fn route(&self, msg: OutgoingMessage<'_, BytesMut>) -> Result<(), ZmqError> {
         self.state.ensure_open()?;
-        self.state.publish(
-            msg.name(),
-            Bytes::copy_from_slice(msg.payload()),
-            msg.headers().clone(),
-            self.routing,
-        );
+        let headers = msg.headers().clone();
+        let name = msg.name();
+        self.state
+            .publish(name, msg.into_payload().freeze(), headers, self.routing);
         Ok(())
     }
 }
@@ -100,7 +97,7 @@ impl Publisher for ZmqTestPublisher {
         msg: OutgoingMessage<'_, BytesMut>,
         _options: Option<&Self::Options>,
     ) -> impl Future<Output = Result<(), Self::Error>> {
-        ready(self.route(&msg))
+        ready(self.route(msg))
     }
 }
 
@@ -131,7 +128,7 @@ impl ZmqTestRpcPublisher {
     }
 
     /// The reply leg, shared by the sync and async entry points.
-    fn route_reply(&self, msg: &OutgoingMessage<'_, BytesMut>) -> Result<(), ZmqError> {
+    fn route_reply(&self, msg: OutgoingMessage<'_, BytesMut>) -> Result<(), ZmqError> {
         self.state.ensure_open()?;
         if !msg.name().starts_with(REPLY_PREFIX) {
             return Err(ZmqError::Send {
@@ -141,12 +138,10 @@ impl ZmqTestRpcPublisher {
                 ),
             });
         }
-        self.state.publish(
-            msg.name(),
-            Bytes::copy_from_slice(msg.payload()),
-            msg.headers().clone(),
-            Routing::Exact,
-        );
+        let headers = msg.headers().clone();
+        let name = msg.name();
+        self.state
+            .publish(name, msg.into_payload().freeze(), headers, Routing::Exact);
         Ok(())
     }
 }
@@ -177,7 +172,7 @@ impl Publisher for ZmqTestRpcPublisher {
         msg: OutgoingMessage<'_, BytesMut>,
         _options: Option<&Self::Options>,
     ) -> impl Future<Output = Result<(), Self::Error>> {
-        ready(self.route_reply(&msg))
+        ready(self.route_reply(msg))
     }
 }
 
@@ -218,7 +213,7 @@ impl RequestReply for ZmqTestRpcPublisher {
         // A request reaches one responder, the way a DEALER picks one connected ROUTER.
         self.state.publish(
             msg.name(),
-            Bytes::copy_from_slice(msg.payload()),
+            msg.into_payload().freeze(),
             headers,
             Routing::Competing,
         );

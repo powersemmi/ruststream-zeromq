@@ -64,18 +64,21 @@ fn decode_headers(frame: &[u8]) -> Result<HeaderMap, ZmqError> {
 
 /// Builds the three-frame message.
 ///
+/// The payload becomes the third frame as it is: this crate's publishers declare `Take`, so the
+/// buffer the framework wrote arrives here and the frame is made of it.
+///
 /// Returns the reason a header cannot be written, so the caller reports it against the
 /// destination it is publishing to rather than against the name in frame 0, which on a reply is
 /// the literal `reply`.
 pub(crate) fn encode(
     name: &str,
     headers: &HeaderMap,
-    payload: &[u8],
+    payload: Bytes,
 ) -> Result<WireMessage, String> {
     let headers = encode_headers(headers)?;
     let mut message = WireMessage::from(name);
     message.push_back(headers);
-    message.push_back(Bytes::copy_from_slice(payload));
+    message.push_back(payload);
     Ok(message)
 }
 
@@ -85,7 +88,7 @@ pub(crate) fn encode_to(
     destination: &str,
     name: &str,
     headers: &HeaderMap,
-    payload: &[u8],
+    payload: Bytes,
 ) -> Result<WireMessage, ZmqError> {
     encode(name, headers, payload).map_err(|reason| ZmqError::Send {
         name: destination.to_owned(),
@@ -114,14 +117,30 @@ pub(crate) fn decode(message: WireMessage) -> Result<(String, HeaderMap, Bytes),
 
 #[cfg(test)]
 mod tests {
+    use bytes::BytesMut;
+
     use super::*;
+
+    /// The frame is made of the buffer the publish wrote, not of a copy of it: this crate takes
+    /// the payload, and a frame owns its bytes anyway.
+    #[test]
+    fn the_payload_frame_is_the_buffer_that_was_handed_in() {
+        let body = BytesMut::from(&br#"{"id":7}"#[..]);
+        let written_at = body.as_ptr();
+        let message = encode("orders", &HeaderMap::new(), body.freeze()).expect("encodes");
+        assert_eq!(
+            message.get(2).expect("the payload frame").as_ptr(),
+            written_at,
+            "the frame must carry the buffer the publish wrote, not a copy of it",
+        );
+    }
 
     #[test]
     fn three_frames_round_trip() {
         let mut headers = HeaderMap::new();
         headers.insert("content-type", "application/json");
         headers.insert("x-tenant", "acme");
-        let message = encode("orders", &headers, b"{}").expect("encodes");
+        let message = encode("orders", &headers, Bytes::from_static(b"{}")).expect("encodes");
         let (name, decoded, payload) = decode(message).expect("decodes");
         assert_eq!(name, "orders");
         assert_eq!(decoded.get_str("content-type"), Some("application/json"));
@@ -141,7 +160,8 @@ mod tests {
 
     #[test]
     fn empty_headers_stay_an_empty_frame() {
-        let message = encode("orders", &HeaderMap::new(), b"x").expect("encodes");
+        let message =
+            encode("orders", &HeaderMap::new(), Bytes::from_static(b"x")).expect("encodes");
         assert_eq!(message.get(1).map(Bytes::len), Some(0));
     }
 
@@ -149,8 +169,8 @@ mod tests {
     fn a_value_that_is_not_text_is_refused_with_its_destination() {
         let mut headers = HeaderMap::new();
         headers.insert("x-binary", [0xff, 0xfe].as_slice());
-        let err =
-            encode_to("orders", "reply", &headers, b"{}").expect_err("a binary value has no frame");
+        let err = encode_to("orders", "reply", &headers, Bytes::from_static(b"{}"))
+            .expect_err("a binary value has no frame");
         let message = err.to_string();
         assert!(message.contains("x-binary"), "names the header: {message}");
         assert!(

@@ -424,11 +424,12 @@ impl Publisher for ZmqRpcPublisher {
 
         // Frame 0 of a reply is the literal "reply". The ROUTER identity frame pushed in front of
         // it is what addresses the requester, so the name position carries nothing to route on.
-        let mut message = wire::encode_to(msg.name(), "reply", msg.headers(), msg.payload())?;
+        let (name, payload, headers) = msg.into_parts();
+        let mut message = wire::encode_to(name, "reply", &headers, payload.freeze())?;
         message.push_front(Bytes::from(identity));
         let mut router = router.lock().await;
         router.send(message).await.map_err(|e| ZmqError::Send {
-            name: msg.name().to_owned(),
+            name: name.to_owned(),
             reason: e.to_string(),
         })
     }
@@ -471,8 +472,9 @@ impl RequestReply for ZmqRpcPublisher {
             .map_or_else(new_correlation_id, str::to_owned);
         let mut headers = msg.headers().clone();
         headers.insert(Str::from_static(CORRELATION_ID_HEADER), correlation.clone());
-        let request = wire::encode_to(msg.name(), msg.name(), &headers, msg.payload())?;
-        send_with_retry(&mut dealer, msg.name(), request).await?;
+        let name = msg.name();
+        let request = wire::encode_to(name, name, &headers, msg.into_payload().freeze())?;
+        send_with_retry(&mut dealer, name, request).await?;
 
         let exchange = async {
             loop {
