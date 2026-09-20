@@ -62,10 +62,29 @@ fn decode_headers(frame: &[u8]) -> Result<HeaderMap, ZmqError> {
     Ok(headers)
 }
 
-/// Builds the three-frame message.
+/// Builds the message out of its frames, behind `front` where a pattern addresses it with a
+/// frame of its own (the peer identity a ROUTER routes a reply by).
 ///
-/// The payload becomes the third frame as it is: this crate's publishers declare `Take`, so the
-/// buffer the framework wrote arrives here and the frame is made of it.
+/// How many frames there are is known before the first one is written, so the list is built at
+/// its final size rather than grown per frame. The payload becomes the last frame as it is: this
+/// crate's publishers declare `Take`, so the buffer the framework wrote arrives here and the
+/// frame is made of it.
+fn frames(
+    front: Option<Bytes>,
+    name: &str,
+    headers: &HeaderMap,
+    payload: Bytes,
+) -> Result<WireMessage, String> {
+    let headers = encode_headers(headers)?;
+    let name = Bytes::copy_from_slice(name.as_bytes());
+    let frames = match front {
+        Some(front) => vec![front, name, headers, payload],
+        None => vec![name, headers, payload],
+    };
+    Ok(WireMessage::try_from(frames).expect("a list built from named frames is never empty"))
+}
+
+/// Builds the three-frame message.
 ///
 /// Returns the reason a header cannot be written, so the caller reports it against the
 /// destination it is publishing to rather than against the name in frame 0, which on a reply is
@@ -75,11 +94,22 @@ pub(crate) fn encode(
     headers: &HeaderMap,
     payload: Bytes,
 ) -> Result<WireMessage, String> {
-    let headers = encode_headers(headers)?;
-    let mut message = WireMessage::from(name);
-    message.push_back(headers);
-    message.push_back(payload);
-    Ok(message)
+    frames(None, name, headers, payload)
+}
+
+/// Frames a reply behind the peer identity that routes it, reporting a header that cannot be
+/// written as a send error naming the destination.
+pub(crate) fn encode_addressed_to(
+    destination: &str,
+    identity: Bytes,
+    name: &str,
+    headers: &HeaderMap,
+    payload: Bytes,
+) -> Result<WireMessage, ZmqError> {
+    frames(Some(identity), name, headers, payload).map_err(|reason| ZmqError::Send {
+        name: destination.to_owned(),
+        reason,
+    })
 }
 
 /// Frames a message for `destination`, reporting a header that cannot be written as a send
@@ -132,6 +162,41 @@ mod tests {
             message.get(2).expect("the payload frame").as_ptr(),
             written_at,
             "the frame must carry the buffer the publish wrote, not a copy of it",
+        );
+    }
+
+    /// The list holds exactly the frames there are: how many a message has is known before the
+    /// first one is written, so building it is one allocation rather than one per frame.
+    #[test]
+    fn the_frame_list_is_built_at_its_final_size() {
+        let message =
+            encode("orders", &HeaderMap::new(), Bytes::from_static(b"{}")).expect("encodes");
+        let frames = message.into_vecdeque();
+        assert_eq!(frames.len(), 3, "name, headers, payload");
+        assert_eq!(
+            frames.capacity(),
+            frames.len(),
+            "a list grown frame by frame ends up larger than the message it holds",
+        );
+    }
+
+    /// The same for a reply, which carries the peer identity in front of the three.
+    #[test]
+    fn a_reply_is_framed_behind_its_identity_at_its_final_size() {
+        let message = encode_addressed_to(
+            "orders",
+            Bytes::from_static(&[0xde, 0xad]),
+            "reply",
+            &HeaderMap::new(),
+            Bytes::from_static(b"{}"),
+        )
+        .expect("encodes");
+        let frames = message.into_vecdeque();
+        assert_eq!(frames.len(), 4, "identity, name, headers, payload");
+        assert_eq!(
+            frames.capacity(),
+            frames.len(),
+            "a list grown frame by frame ends up larger than the message it holds",
         );
     }
 

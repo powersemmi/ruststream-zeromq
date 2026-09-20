@@ -425,8 +425,13 @@ impl Publisher for ZmqRpcPublisher {
         // Frame 0 of a reply is the literal "reply". The ROUTER identity frame pushed in front of
         // it is what addresses the requester, so the name position carries nothing to route on.
         let (name, payload, headers) = msg.into_parts();
-        let mut message = wire::encode_to(name, "reply", &headers, payload.freeze())?;
-        message.push_front(Bytes::from(identity));
+        let message = wire::encode_addressed_to(
+            name,
+            Bytes::from(identity),
+            "reply",
+            &headers,
+            payload.freeze(),
+        )?;
         let mut router = router.lock().await;
         router.send(message).await.map_err(|e| ZmqError::Send {
             name: name.to_owned(),
