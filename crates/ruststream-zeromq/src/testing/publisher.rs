@@ -68,10 +68,9 @@ impl ZmqTestPublisher {
 
     fn route(&self, msg: OutgoingMessage<'_, BytesMut>) -> Result<(), ZmqError> {
         self.state.ensure_open()?;
-        let headers = msg.headers().clone();
-        let name = msg.name();
+        let (name, payload, headers) = msg.into_parts();
         self.state
-            .publish(name, msg.into_payload().freeze(), headers, self.routing);
+            .publish(name, payload.freeze(), headers, self.routing);
         Ok(())
     }
 }
@@ -138,10 +137,9 @@ impl ZmqTestRpcPublisher {
                 ),
             });
         }
-        let headers = msg.headers().clone();
-        let name = msg.name();
+        let (name, payload, headers) = msg.into_parts();
         self.state
-            .publish(name, msg.into_payload().freeze(), headers, Routing::Exact);
+            .publish(name, payload.freeze(), headers, Routing::Exact);
         Ok(())
     }
 }
@@ -207,16 +205,12 @@ impl RequestReply for ZmqTestRpcPublisher {
             .headers()
             .correlation_id()
             .map_or_else(new_correlation_id, str::to_owned);
-        let mut headers = msg.headers().clone();
+        let (name, payload, mut headers) = msg.into_parts();
         headers.insert(Str::from_static(REPLY_TO_HEADER), inbox);
         headers.insert(Str::from_static(CORRELATION_ID_HEADER), correlation.clone());
         // A request reaches one responder, the way a DEALER picks one connected ROUTER.
-        self.state.publish(
-            msg.name(),
-            msg.into_payload().freeze(),
-            headers,
-            Routing::Competing,
-        );
+        self.state
+            .publish(name, payload.freeze(), headers, Routing::Competing);
 
         let correlated = async {
             loop {

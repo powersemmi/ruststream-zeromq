@@ -470,10 +470,9 @@ impl RequestReply for ZmqRpcPublisher {
             .headers()
             .correlation_id()
             .map_or_else(new_correlation_id, str::to_owned);
-        let mut headers = msg.headers().clone();
+        let (name, payload, mut headers) = msg.into_parts();
         headers.insert(Str::from_static(CORRELATION_ID_HEADER), correlation.clone());
-        let name = msg.name();
-        let request = wire::encode_to(name, name, &headers, msg.into_payload().freeze())?;
+        let request = wire::encode_to(name, name, &headers, payload.freeze())?;
         send_with_retry(&mut dealer, name, request).await?;
 
         let exchange = async {
