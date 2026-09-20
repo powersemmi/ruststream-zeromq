@@ -592,6 +592,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ruststream-zeromq-bench"
+version = "0.7.0"
+dependencies = [
+ "bytes",
+ "futures",
+ "ruststream",
+ "ruststream-zeromq",
+ "serde",
+ "serde_json",
+ "tokio",
+ "zeromq",
+]
+
+[[package]]
 name = "rustversion"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
