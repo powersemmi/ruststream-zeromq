@@ -77,7 +77,7 @@ use futures::Stream;
 use ruststream::asyncapi::Bindings;
 use ruststream::{
     Broker, ConnectedBroker, DefaultPublish, DescribeServer, NamedCopies, OutgoingMessage,
-    PairError, PublishPolicy, Publisher, RequestReply, ServerSpec, Subscribe, Subscriber,
+    PairError, PublishPolicy, Publisher, RequestReply, ServerSpec, Str, Subscribe, Subscriber,
 };
 use tokio::sync::{Mutex, OnceCell, mpsc};
 use zeromq::prelude::*;
@@ -97,6 +97,9 @@ pub(crate) const REPLY_PREFIX: &str = "zmq-reply:";
 
 /// The header a request carries the address of its answer in.
 pub(crate) const REPLY_TO_HEADER: &str = "reply-to";
+
+/// The header a request and its answer are matched on.
+pub(crate) const CORRELATION_ID_HEADER: &str = "correlation-id";
 
 /// Where a client reads that address, as the specification's runtime expression.
 ///
@@ -324,7 +327,10 @@ impl Subscribe for ConnectedZmqRpc {
                             continue;
                         };
                         let item = wire::decode(rest).map(|(name, mut headers, payload)| {
-                            headers.insert(REPLY_TO_HEADER, reply_address(&identity));
+                            headers.insert(
+                                Str::from_static(REPLY_TO_HEADER),
+                                reply_address(&identity),
+                            );
                             ZmqMessage {
                                 name,
                                 headers,
@@ -459,7 +465,7 @@ impl RequestReply for ZmqRpcPublisher {
             .correlation_id()
             .map_or_else(new_correlation_id, str::to_owned);
         let mut headers = msg.headers().clone();
-        headers.insert("correlation-id", correlation.clone());
+        headers.insert(Str::from_static(CORRELATION_ID_HEADER), correlation.clone());
         let request = wire::encode_to(msg.name(), msg.name(), &headers, msg.payload())?;
         send_with_retry(&mut dealer, msg.name(), request).await?;
 

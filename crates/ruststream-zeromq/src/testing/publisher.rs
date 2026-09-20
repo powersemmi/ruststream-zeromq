@@ -15,7 +15,7 @@ use bytes::Bytes;
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::Bindings;
 use ruststream::{
-    DefaultPublish, OutgoingMessage, PairError, PublishPolicy, Publisher, RequestReply,
+    DefaultPublish, OutgoingMessage, PairError, PublishPolicy, Publisher, RequestReply, Str,
 };
 
 #[cfg(feature = "asyncapi")]
@@ -23,7 +23,9 @@ use crate::bindings::{self, SocketPair};
 use crate::error::ZmqError;
 #[cfg(feature = "asyncapi")]
 use crate::rpc::REPLY_ADDRESS_LOCATION;
-use crate::rpc::{REPLY_PREFIX, REPLY_TO_HEADER, new_correlation_id, new_reply_address};
+use crate::rpc::{
+    CORRELATION_ID_HEADER, REPLY_PREFIX, REPLY_TO_HEADER, new_correlation_id, new_reply_address,
+};
 use crate::testing::broker::{ConnectedZmqTestBroker, Fanout, Queue, Rpc, TestState};
 use crate::testing::router::Routing;
 use crate::testing::subscriber::ZmqTestMessage;
@@ -202,8 +204,8 @@ impl RequestReply for ZmqTestRpcPublisher {
             .correlation_id()
             .map_or_else(new_correlation_id, str::to_owned);
         let mut headers = msg.headers().clone();
-        headers.insert(REPLY_TO_HEADER, inbox);
-        headers.insert("correlation-id", correlation.clone());
+        headers.insert(Str::from_static(REPLY_TO_HEADER), inbox);
+        headers.insert(Str::from_static(CORRELATION_ID_HEADER), correlation.clone());
         // A request reaches one responder, the way a DEALER picks one connected ROUTER.
         self.state.publish(
             msg.name(),
