@@ -1,9 +1,9 @@
 {
-  "schema": 1,
+  "schema": 3,
   "crate": "ruststream-zeromq",
   "crate_version": "0.7.0",
   "core_version": "0.7.0-rc.9",
-  "measured_at": "2026-09-20",
+  "measured_at": "2026-09-21",
   "environment": {
     "cpu": "AMD Ryzen 9 7900X 12-Core Processor",
     "architecture": "x86_64",
@@ -13,7 +13,7 @@
     "memory_speed": "unknown",
     "os": "Linux 7.2.6-x64v3-xanmod1-1",
     "broker": "none: ZeroMQ has no broker, so the peer is a PUSH socket in the same process, over tcp:// on the loopback and over ipc://, with default socket options (the zeromq crate exposes no high-water mark)",
-    "round_trip": "tcp:// 16.7 us, ipc:// 10.3 us (20000 REQ/REP exchanges on the same transport, outside every loop)",
+    "round_trip": "tcp:// 15.2 us, ipc:// 10.1 us (20000 REQ/REP exchanges on the same transport, outside every loop)",
     "rustc": "1.98.1",
     "profile": "bench, inheriting release (opt-level = 3, lto = false, codegen-units = 16)",
     "features": "ruststream-zeromq default (none), ruststream macros,json",
@@ -23,52 +23,46 @@
     {
       "name": "PUSH/PULL over tcp:// on the loopback, 512 B JSON",
       "unit": "msg/s",
-      "messages": 1483250,
-      "pairs": 11,
+      "messages": 1584857,
+      "pairs": 3,
       "raw": {
-        "median": 231570,
-        "min": 229327,
-        "max": 249467
+        "best": 257373,
+        "worst": 256066
       },
       "adapter": {
-        "median": 230710,
-        "min": 225654,
-        "max": 248071
+        "best": 265691,
+        "worst": 260752
       },
       "framework": {
-        "median": 230716,
-        "min": 228677,
-        "max": 249968
+        "best": 260518,
+        "worst": 257074
       },
-      "adapter_overhead_percent": 0.4,
-      "adapter_verdict": "indistinguishable",
-      "overhead_percent": 0.4,
+      "adapter_overhead_percent": -3.2,
+      "adapter_verdict": "measured",
+      "overhead_percent": -1.2,
       "verdict": "indistinguishable",
       "broker_bound": false
     },
     {
       "name": "PUSH/PULL over ipc://, 512 B JSON",
       "unit": "msg/s",
-      "messages": 5667045,
-      "pairs": 11,
+      "messages": 5845862,
+      "pairs": 3,
       "raw": {
-        "median": 912182,
-        "min": 526748,
-        "max": 920367
+        "best": 939393,
+        "worst": 918102
       },
       "adapter": {
-        "median": 907933,
-        "min": 889650,
-        "max": 914153
+        "best": 927754,
+        "worst": 917977
       },
       "framework": {
-        "median": 910569,
-        "min": 900141,
-        "max": 926270
+        "best": 928153,
+        "worst": 917596
       },
-      "adapter_overhead_percent": 0.5,
+      "adapter_overhead_percent": 1.2,
       "adapter_verdict": "indistinguishable",
-      "overhead_percent": 0.2,
+      "overhead_percent": 1.2,
       "verdict": "indistinguishable",
       "broker_bound": false
     }
