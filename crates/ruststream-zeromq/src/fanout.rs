@@ -52,13 +52,14 @@ pub mod prelude {
 use std::future::{Future, ready};
 use std::sync::Arc;
 
+use futures::lock::Mutex;
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::Bindings;
 use ruststream::{
-    AddressedCopies, Broker, ConnectedBroker, DefaultPublish, DescribeServer, OutgoingMessage,
-    PairError, PublishPolicy, Publisher, ServerSpec, Subscribe,
+    AddressedCopies, Broker, BytesMut, ConnectedBroker, DefaultPublish, DescribeServer,
+    OutgoingMessage, PairError, PublishPolicy, Publisher, ServerSpec, Subscribe, Take,
 };
-use tokio::sync::{Mutex, OnceCell, mpsc};
+use tokio::sync::{OnceCell, mpsc};
 use zeromq::prelude::*;
 use zeromq::{PubSocket, SubSocket};
 
@@ -233,6 +234,10 @@ impl Subscribe for ConnectedZmqFanout {
 #[derive(Clone)]
 pub struct ZmqFanoutPublisher {
     cell: Arc<OnceCell<SharedLifecycle>>,
+    // The socket guard is the `futures` mutex rather than tokio's: the socket needs `&mut` per send,
+    // so something must serialise, and this one's uncontended lock and unlock are a pair of atomics
+    // where tokio's semaphore also takes its waiter list. It costs 1.8 of the 9 points a publish
+    // spends over a raw socket loop (#28).
     socket: Arc<Mutex<Option<PubSocket>>>,
 }
 
@@ -243,6 +248,10 @@ impl std::fmt::Debug for ZmqFanoutPublisher {
 }
 
 impl Publisher for ZmqFanoutPublisher {
+    /// A frame owns its bytes: the payload becomes the message's third frame and the socket
+    /// keeps it until the send completes.
+    type Payload = Take;
+
     type Error = ZmqError;
 
     /// ZMTP carries no per-message setting: a send takes the frames and nothing else, so there is
@@ -259,13 +268,14 @@ impl Publisher for ZmqFanoutPublisher {
     #[allow(clippy::significant_drop_tightening)]
     async fn publish(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingMessage<'_, BytesMut>,
         _options: Option<&Self::Options>,
     ) -> Result<(), Self::Error> {
         let lifecycle = self.cell.get().ok_or(ZmqError::NotConnected)?;
         lifecycle.ensure_open()?;
         // Framed before the socket is touched: a message that cannot be written costs no attach.
-        let frames = wire::encode_to(msg.name(), msg.name(), msg.headers(), msg.payload())?;
+        let (name, payload, headers) = msg.into_parts();
+        let frames = wire::encode_to(name, name, &headers, payload.freeze())?;
         let mut guard = self.socket.lock().await;
         if guard.is_none() {
             let mut socket = PubSocket::new();
@@ -275,7 +285,7 @@ impl Publisher for ZmqFanoutPublisher {
         let socket = guard.as_mut().expect("just attached");
         // PUB never reports "no peers": an unmatched message is dropped by design, so the
         // retry helper only smooths transport-level failures.
-        send_with_retry(socket, msg.name(), frames).await
+        send_with_retry(socket, name, frames).await
     }
 }
 

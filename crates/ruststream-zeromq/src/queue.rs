@@ -55,14 +55,15 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use futures::Stream;
+use futures::lock::Mutex;
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::Bindings;
 use ruststream::{
-    AddressedCopies, BatchSubscriber, Broker, BufferedSubscriber, ConnectedBroker, DefaultPublish,
-    DescribeServer, OutgoingMessage, PairError, PublishPolicy, Publisher, ServerSpec, Subscribe,
-    Subscriber,
+    AddressedCopies, BatchSubscriber, Broker, BufferedSubscriber, BytesMut, ConnectedBroker,
+    DefaultPublish, DescribeServer, OutgoingMessage, PairError, PublishPolicy, Publisher,
+    ServerSpec, Subscribe, Subscriber, Take,
 };
-use tokio::sync::{Mutex, OnceCell, mpsc};
+use tokio::sync::{OnceCell, mpsc};
 use zeromq::prelude::*;
 use zeromq::{PullSocket, PushSocket};
 
@@ -294,6 +295,10 @@ impl std::fmt::Debug for ZmqQueuePublisher {
 }
 
 impl Publisher for ZmqQueuePublisher {
+    /// A frame owns its bytes: the payload becomes the message's third frame and the socket
+    /// keeps it until the send completes.
+    type Payload = Take;
+
     type Error = ZmqError;
 
     /// ZMTP carries no per-message setting: a send takes the frames and nothing else, so there is
@@ -310,13 +315,14 @@ impl Publisher for ZmqQueuePublisher {
     #[allow(clippy::significant_drop_tightening)]
     async fn publish(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingMessage<'_, BytesMut>,
         _options: Option<&Self::Options>,
     ) -> Result<(), Self::Error> {
         let lifecycle = self.cell.get().ok_or(ZmqError::NotConnected)?;
         lifecycle.ensure_open()?;
         // Framed before the socket is touched: a message that cannot be written costs no attach.
-        let frames = wire::encode_to(msg.name(), msg.name(), msg.headers(), msg.payload())?;
+        let (name, payload, headers) = msg.into_parts();
+        let frames = wire::encode_to(name, name, &headers, payload.freeze())?;
         let mut push = self.push.lock().await;
         if push.is_none() {
             let mut socket = PushSocket::new();
@@ -324,7 +330,7 @@ impl Publisher for ZmqQueuePublisher {
             *push = Some(socket);
         }
         let socket = push.as_mut().expect("just attached");
-        send_with_retry(socket, msg.name(), frames).await
+        send_with_retry(socket, name, frames).await
     }
 }
 

@@ -73,13 +73,15 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures::Stream;
+use futures::lock::Mutex;
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::Bindings;
 use ruststream::{
-    Broker, ConnectedBroker, DefaultPublish, DescribeServer, NamedCopies, OutgoingMessage,
-    PairError, PublishPolicy, Publisher, RequestReply, ServerSpec, Subscribe, Subscriber,
+    Broker, BytesMut, ConnectedBroker, DefaultPublish, DescribeServer, NamedCopies,
+    OutgoingMessage, PairError, PublishPolicy, Publisher, RequestReply, ServerSpec, Str, Subscribe,
+    Subscriber, Take,
 };
-use tokio::sync::{Mutex, OnceCell, mpsc};
+use tokio::sync::{OnceCell, mpsc};
 use zeromq::prelude::*;
 use zeromq::util::PeerIdentity;
 use zeromq::{DealerSocket, RouterSendHalf, RouterSocket, SocketOptions};
@@ -97,6 +99,9 @@ pub(crate) const REPLY_PREFIX: &str = "zmq-reply:";
 
 /// The header a request carries the address of its answer in.
 pub(crate) const REPLY_TO_HEADER: &str = "reply-to";
+
+/// The header a request and its answer are matched on.
+pub(crate) const CORRELATION_ID_HEADER: &str = "correlation-id";
 
 /// Where a client reads that address, as the specification's runtime expression.
 ///
@@ -324,7 +329,10 @@ impl Subscribe for ConnectedZmqRpc {
                             continue;
                         };
                         let item = wire::decode(rest).map(|(name, mut headers, payload)| {
-                            headers.insert(REPLY_TO_HEADER, reply_address(&identity));
+                            headers.insert(
+                                Str::from_static(REPLY_TO_HEADER),
+                                reply_address(&identity),
+                            );
                             ZmqMessage {
                                 name,
                                 headers,
@@ -375,6 +383,10 @@ impl ZmqRpcPublisher {
 }
 
 impl Publisher for ZmqRpcPublisher {
+    /// A frame owns its bytes: the payload becomes the message's third frame and the ROUTER
+    /// keeps it until the send completes.
+    type Payload = Take;
+
     type Error = ZmqError;
 
     /// ZMTP carries no per-message setting: a send takes the frames and nothing else, so there is
@@ -390,7 +402,7 @@ impl Publisher for ZmqRpcPublisher {
     /// `select!` arm.
     async fn publish(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingMessage<'_, BytesMut>,
         _options: Option<&Self::Options>,
     ) -> Result<(), Self::Error> {
         let shared = self.shared()?;
@@ -413,11 +425,17 @@ impl Publisher for ZmqRpcPublisher {
 
         // Frame 0 of a reply is the literal "reply". The ROUTER identity frame pushed in front of
         // it is what addresses the requester, so the name position carries nothing to route on.
-        let mut message = wire::encode_to(msg.name(), "reply", msg.headers(), msg.payload())?;
-        message.push_front(Bytes::from(identity));
+        let (name, payload, headers) = msg.into_parts();
+        let message = wire::encode_addressed_to(
+            name,
+            Bytes::from(identity),
+            "reply",
+            &headers,
+            payload.freeze(),
+        )?;
         let mut router = router.lock().await;
         router.send(message).await.map_err(|e| ZmqError::Send {
-            name: msg.name().to_owned(),
+            name: name.to_owned(),
             reason: e.to_string(),
         })
     }
@@ -433,7 +451,7 @@ impl RequestReply for ZmqRpcPublisher {
     /// already. Give up through `timeout` rather than by cancelling.
     async fn request(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingMessage<'_, BytesMut>,
         timeout: Duration,
     ) -> Result<Self::Reply, Self::Error> {
         let shared = self.shared()?;
@@ -458,10 +476,10 @@ impl RequestReply for ZmqRpcPublisher {
             .headers()
             .correlation_id()
             .map_or_else(new_correlation_id, str::to_owned);
-        let mut headers = msg.headers().clone();
-        headers.insert("correlation-id", correlation.clone());
-        let request = wire::encode_to(msg.name(), msg.name(), &headers, msg.payload())?;
-        send_with_retry(&mut dealer, msg.name(), request).await?;
+        let (name, payload, mut headers) = msg.into_parts();
+        headers.insert(Str::from_static(CORRELATION_ID_HEADER), correlation.clone());
+        let request = wire::encode_to(name, name, &headers, payload.freeze())?;
+        send_with_retry(&mut dealer, name, request).await?;
 
         let exchange = async {
             loop {

@@ -11,11 +11,11 @@ use std::future::{Future, ready};
 use std::sync::Arc;
 use std::time::Duration;
 
-use bytes::Bytes;
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::Bindings;
 use ruststream::{
-    DefaultPublish, OutgoingMessage, PairError, PublishPolicy, Publisher, RequestReply,
+    BytesMut, DefaultPublish, OutgoingMessage, PairError, PublishPolicy, Publisher, RequestReply,
+    Str, Take,
 };
 
 #[cfg(feature = "asyncapi")]
@@ -23,7 +23,9 @@ use crate::bindings::{self, SocketPair};
 use crate::error::ZmqError;
 #[cfg(feature = "asyncapi")]
 use crate::rpc::REPLY_ADDRESS_LOCATION;
-use crate::rpc::{REPLY_PREFIX, REPLY_TO_HEADER, new_correlation_id, new_reply_address};
+use crate::rpc::{
+    CORRELATION_ID_HEADER, REPLY_PREFIX, REPLY_TO_HEADER, new_correlation_id, new_reply_address,
+};
 use crate::testing::broker::{ConnectedZmqTestBroker, Fanout, Queue, Rpc, TestState};
 use crate::testing::router::Routing;
 use crate::testing::subscriber::ZmqTestMessage;
@@ -64,19 +66,20 @@ impl ZmqTestPublisher {
         }
     }
 
-    fn route(&self, msg: &OutgoingMessage<'_>) -> Result<(), ZmqError> {
+    fn route(&self, msg: OutgoingMessage<'_, BytesMut>) -> Result<(), ZmqError> {
         self.state.ensure_open()?;
-        self.state.publish(
-            msg.name(),
-            Bytes::copy_from_slice(msg.payload()),
-            msg.headers().clone(),
-            self.routing,
-        );
+        let (name, payload, headers) = msg.into_parts();
+        self.state
+            .publish(name, payload.freeze(), headers, self.routing);
         Ok(())
     }
 }
 
 impl Publisher for ZmqTestPublisher {
+    /// The same answer the socket publishers give: the delivery the stand records owns its
+    /// payload.
+    type Payload = Take;
+
     type Error = ZmqError;
 
     /// The transport's own answer: ZMTP has no per-message setting, so neither has the stand-in.
@@ -90,10 +93,10 @@ impl Publisher for ZmqTestPublisher {
     /// down, rather than routing into a dead broker.
     fn publish(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingMessage<'_, BytesMut>,
         _options: Option<&Self::Options>,
     ) -> impl Future<Output = Result<(), Self::Error>> {
-        ready(self.route(&msg))
+        ready(self.route(msg))
     }
 }
 
@@ -124,7 +127,7 @@ impl ZmqTestRpcPublisher {
     }
 
     /// The reply leg, shared by the sync and async entry points.
-    fn route_reply(&self, msg: &OutgoingMessage<'_>) -> Result<(), ZmqError> {
+    fn route_reply(&self, msg: OutgoingMessage<'_, BytesMut>) -> Result<(), ZmqError> {
         self.state.ensure_open()?;
         if !msg.name().starts_with(REPLY_PREFIX) {
             return Err(ZmqError::Send {
@@ -134,17 +137,18 @@ impl ZmqTestRpcPublisher {
                 ),
             });
         }
-        self.state.publish(
-            msg.name(),
-            Bytes::copy_from_slice(msg.payload()),
-            msg.headers().clone(),
-            Routing::Exact,
-        );
+        let (name, payload, headers) = msg.into_parts();
+        self.state
+            .publish(name, payload.freeze(), headers, Routing::Exact);
         Ok(())
     }
 }
 
 impl Publisher for ZmqTestRpcPublisher {
+    /// The same answer the socket publishers give: the delivery the stand records owns its
+    /// payload.
+    type Payload = Take;
+
     type Error = ZmqError;
 
     /// The transport's own answer: ZMTP has no per-message setting, so neither has the stand-in.
@@ -163,10 +167,10 @@ impl Publisher for ZmqTestRpcPublisher {
     /// [`ZmqError::NotConnected`] once the transport this handle aliases has been shut down.
     fn publish(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingMessage<'_, BytesMut>,
         _options: Option<&Self::Options>,
     ) -> impl Future<Output = Result<(), Self::Error>> {
-        ready(self.route_reply(&msg))
+        ready(self.route_reply(msg))
     }
 }
 
@@ -186,7 +190,7 @@ impl RequestReply for ZmqTestRpcPublisher {
 
     async fn request(
         &self,
-        msg: OutgoingMessage<'_>,
+        msg: OutgoingMessage<'_, BytesMut>,
         timeout: Duration,
     ) -> Result<Self::Reply, Self::Error> {
         // Checked before the inbox is minted: a handle that outlived the transport reports the
@@ -201,16 +205,12 @@ impl RequestReply for ZmqTestRpcPublisher {
             .headers()
             .correlation_id()
             .map_or_else(new_correlation_id, str::to_owned);
-        let mut headers = msg.headers().clone();
-        headers.insert(REPLY_TO_HEADER, inbox);
-        headers.insert("correlation-id", correlation.clone());
+        let (name, payload, mut headers) = msg.into_parts();
+        headers.insert(Str::from_static(REPLY_TO_HEADER), inbox);
+        headers.insert(Str::from_static(CORRELATION_ID_HEADER), correlation.clone());
         // A request reaches one responder, the way a DEALER picks one connected ROUTER.
-        self.state.publish(
-            msg.name(),
-            Bytes::copy_from_slice(msg.payload()),
-            headers,
-            Routing::Competing,
-        );
+        self.state
+            .publish(name, payload.freeze(), headers, Routing::Competing);
 
         let correlated = async {
             loop {

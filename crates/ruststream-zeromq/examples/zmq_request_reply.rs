@@ -19,7 +19,7 @@ use ruststream::codec::{Codec, JsonCodec};
 use ruststream::runtime::{
     App, AppInfo, ForReply, Names, Outgoing, PublishContext, PublishTransform, RustStream,
 };
-use ruststream::{IncomingMessage, Outgoing, OutgoingMessage, RequestReply, subscriber};
+use ruststream::{IncomingMessage, Outgoing, OutgoingMessage, RequestReply, Str, subscriber};
 use ruststream_zeromq::{ZmqEndpoint, ZmqRpc, ZmqRpcPublish};
 use serde::{Deserialize, Serialize};
 
@@ -46,6 +46,9 @@ struct ReplyToRequester;
 // own, which is what leaves the naming right on offer at this position. It sets no per-message
 // setting, so it stays generic over the options type and mounts on any publisher; every publisher
 // here declares `Options = ()` anyway.
+//
+// Both values are taken with `get_shared`, which hands the header over as the buffer the request
+// arrived in, so addressing an answer costs a reference count rather than a copy.
 impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
     type Destination = Names;
 
@@ -55,12 +58,14 @@ impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
         _options: &mut Option<Options>,
         cx: &PublishContext<'_, C>,
     ) {
-        if let Some(reply_to) = cx.headers().reply_to() {
-            out.set_name(reply_to.to_owned());
+        if let Some(reply_to) = cx.headers().get_shared("reply-to")
+            && let Ok(reply_to) = Str::try_from(reply_to)
+        {
+            out.set_name(reply_to);
         }
-        if let Some(correlation) = cx.headers().correlation_id() {
+        if let Some(correlation) = cx.headers().get_shared("correlation-id") {
             out.headers_mut()
-                .insert("correlation-id", correlation.to_owned());
+                .insert(Str::from_static("correlation-id"), correlation);
         }
     }
 }

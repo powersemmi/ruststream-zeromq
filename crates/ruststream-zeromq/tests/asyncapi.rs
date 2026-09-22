@@ -53,8 +53,10 @@ impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
         _options: &mut Option<Options>,
         cx: &PublishContext<'_, C>,
     ) {
-        if let Some(reply_to) = cx.headers().reply_to() {
-            out.set_name(reply_to.to_owned());
+        if let Some(reply_to) = cx.headers().get_shared("reply-to")
+            && let Ok(reply_to) = Str::try_from(reply_to)
+        {
+            out.set_name(reply_to);
         }
     }
 }
