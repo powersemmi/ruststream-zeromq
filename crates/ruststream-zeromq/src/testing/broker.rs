@@ -1,6 +1,5 @@
 //! [`ZmqTestBroker`]: the in-process stands, one per socket pattern, and their connected forms.
 
-use std::any::TypeId;
 use std::fmt;
 use std::future::{Future, ready};
 use std::marker::PhantomData;
@@ -16,6 +15,7 @@ use ruststream::{
 
 #[cfg(feature = "asyncapi")]
 use crate::bindings;
+use crate::common::endpoint_taken;
 use crate::endpoint::{Bind, Connect, EndpointRole, Side, ZMTP_VERSION};
 use crate::error::ZmqError;
 use crate::testing::publisher::{ZmqTestPublisher, ZmqTestRpcPublisher};
@@ -99,7 +99,14 @@ impl TestState {
 }
 
 mod sealed {
-    pub trait Sealed {}
+    use crate::testing::router::Routing;
+
+    pub trait Sealed {
+        /// Which subscriptions a message from the pattern's foreign peer reaches: a PUSH or a
+        /// DEALER hands it to one of the sockets that dialed it, a PUB to every one whose
+        /// prefix matches.
+        const FROM_PEER: Routing;
+    }
 }
 
 /// Which socket pattern a stand stands in for.
@@ -124,19 +131,16 @@ pub struct Fanout;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Rpc;
 
-impl sealed::Sealed for Queue {}
-impl sealed::Sealed for Fanout {}
-impl sealed::Sealed for Rpc {}
-/// How a foreign peer of `Pattern` reaches the subscriptions: the socket's own rule. Resolved
-/// per stand type when the harness injects, which is test code only.
-fn injection_routing<Pattern: 'static>() -> Routing {
-    if TypeId::of::<Pattern>() == TypeId::of::<Queue>() {
-        Routing::Competing
-    } else if TypeId::of::<Pattern>() == TypeId::of::<Fanout>() {
-        Routing::Prefix
-    } else {
-        Routing::Exact
-    }
+impl sealed::Sealed for Queue {
+    const FROM_PEER: Routing = Routing::Competing;
+}
+
+impl sealed::Sealed for Fanout {
+    const FROM_PEER: Routing = Routing::Prefix;
+}
+
+impl sealed::Sealed for Rpc {
+    const FROM_PEER: Routing = Routing::Competing;
 }
 
 impl TestPattern for Queue {
@@ -323,8 +327,15 @@ impl<Pattern, Role> ConnectedZmqTestBroker<Pattern, Role> {
     /// it.
     fn open(&self, name: &str) -> Result<ZmqTestSubscriber, ZmqError> {
         self.state.ensure_open()?;
+        // A bound endpoint is one socket, so the stand of that side takes one subscription, as
+        // the socket brokers do; the side that dials opens as many as the peer serves.
+        if self.state.holder.set(name.to_owned()).is_err()
+            && self.state.side() == Side::Bind
+            && let Some(holder) = self.state.holder()
+        {
+            return Err(endpoint_taken(name, holder));
+        }
         let (id, rx) = self.state.router.subscribe(name.to_owned());
-        self.state.holder.get_or_init(|| name.to_owned());
         Ok(ZmqTestSubscriber::new(
             Arc::clone(&self.state),
             id,
@@ -494,10 +505,12 @@ impl<Pattern: TestPattern, Role: EndpointRole> TestableBroker
         let _ = self.state.coordinator.set(coordinator);
     }
 
-    /// Injects a message the way a foreign peer of the pattern would send it: a PUSH peer hands
-    /// it to one of the queue's workers in turn, a PUB peer to every subscription whose name is a
-    /// prefix of the destination, and on the RPC pattern it reaches the subscription spelled like
-    /// the destination.
+    /// Injects a message the way the pattern's foreign peer sends it.
+    ///
+    /// On the queue and the responder the peer is a PUSH or a DEALER socket, which hands each
+    /// message to one of the subscriptions that dialed it, so an injection reaches one of the
+    /// subscriptions on the destination, taken in turn. On the fan-out the peer is a PUB socket,
+    /// so an injection reaches every subscription whose name is a prefix of the destination.
     ///
     /// It does not consult the closed flag the publishers consult: this is the harness reaching
     /// into the transport, not a handle a service holds, and it has no error to report through.
@@ -506,7 +519,7 @@ impl<Pattern: TestPattern, Role: EndpointRole> TestableBroker
             message.name(),
             Bytes::copy_from_slice(message.payload()),
             message.headers().clone(),
-            injection_routing::<Pattern>(),
+            <Pattern as sealed::Sealed>::FROM_PEER,
         );
     }
 

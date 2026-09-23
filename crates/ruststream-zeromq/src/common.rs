@@ -125,18 +125,31 @@ impl Lifecycle {
     ) -> Result<(), ZmqError> {
         match self.endpoint.side() {
             Side::Bind => {
-                let resolved =
-                    socket
-                        .bind(self.endpoint.address())
-                        .await
-                        .map_err(|e| ZmqError::Endpoint {
-                            endpoint: self.endpoint.address().to_owned(),
-                            source: box_err(e),
+                // The cell runs one bind at a time and keeps the first that succeeds, so two
+                // subscriptions opening together cannot both bind: the later one finds the
+                // listener and is refused. A bind that fails leaves the cell empty to try again.
+                let mut bound_here = false;
+                let listener = self
+                    .listener
+                    .get_or_try_init(async || {
+                        let resolved = socket.bind(self.endpoint.address()).await.map_err(|e| {
+                            ZmqError::Endpoint {
+                                endpoint: self.endpoint.address().to_owned(),
+                                source: box_err(e),
+                            }
                         })?;
-                let _ = self.listener.set(Listener {
-                    address: resolved.to_string(),
-                    subscription: subscription.to_owned(),
-                });
+                        bound_here = true;
+                        Ok::<_, ZmqError>(Listener {
+                            address: resolved.to_string(),
+                            subscription: subscription.to_owned(),
+                        })
+                    })
+                    .await?;
+                // Refused at startup rather than by the type: how many subscriptions a scope
+                // mounts on one broker is decided by statements the type does not count.
+                if !bound_here {
+                    return Err(endpoint_taken(subscription, &listener.subscription));
+                }
             }
             Side::Connect => {
                 socket
@@ -202,6 +215,20 @@ pub(crate) fn returns_to_subscription(name: &str, subscription: &str) -> ZmqErro
              message pushed into it; publish '{name}' through a queue on an endpoint of its own"
         ),
     }
+}
+
+/// The refusal of a second subscription on an endpoint this service binds: the endpoint is one
+/// listening socket, read by the subscription that bound it, and another subscription would bind
+/// a socket of its own that nothing dials (on an ephemeral port) or fail to bind (on a fixed one).
+///
+/// The socket brokers and the in-process stand refuse in these words alike.
+pub(crate) fn endpoint_taken(subscription: &str, holder: &str) -> ZmqError {
+    ZmqError::Invalid(format!(
+        "subscription '{subscription}' cannot open on the endpoint this broker binds: this \
+         service's subscription '{holder}' binds it, and a bound endpoint is one socket read by \
+         the subscription that bound it; mount '{subscription}' on a broker with an endpoint of \
+         its own"
+    ))
 }
 
 /// The refusal of a publish on an endpoint a subscription of this service dials: the peer that

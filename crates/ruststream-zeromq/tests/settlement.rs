@@ -62,6 +62,7 @@ async fn a_delivery_refuses_to_settle() {
     let connected = ZmqTestBroker::queue().connect().await.expect("connects");
     let mut subscriber = connected.subscribe("jobs").await.expect("subscribes");
     connected.inject(OutgoingMessage::new("jobs", b"{\"id\":1}".as_slice()));
+    connected.inject(OutgoingMessage::new("jobs", b"{\"id\":2}".as_slice()));
 
     let mut stream = pin!(subscriber.stream());
     let message = stream
@@ -71,9 +72,6 @@ async fn a_delivery_refuses_to_settle() {
         .expect("the delivery is ok");
     assert!(matches!(message.ack().await, Err(AckError::Unsupported)));
 
-    let mut subscriber = connected.subscribe("jobs").await.expect("subscribes");
-    connected.inject(OutgoingMessage::new("jobs", b"{\"id\":2}".as_slice()));
-    let mut stream = pin!(subscriber.stream());
     let message = stream
         .next()
         .await
