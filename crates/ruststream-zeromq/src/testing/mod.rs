@@ -14,6 +14,10 @@
 //!   mounted on one name do not both run. Once a subscription has opened, the stand is that
 //!   subscription's queue, as an endpoint is the queue of the subscription that bound it: its
 //!   publisher sends under the subscription's name and refuses any other in the socket's words;
+//! * a stand takes the side of the endpoint its broker takes: a constructor gives the bind side,
+//!   and `.dialing()` the side that dials. There a one-way subscription addresses no retry copy,
+//!   and once a subscription has opened the stand's publisher refuses every publish in the
+//!   socket's words, because the peer a dialing subscription reads from takes nothing;
 //! * the fan-out filters by name prefix, the protocol's own rule, and drops what nothing matches;
 //! * the request-reply exchange correlates an answer to its request and routes it back to the
 //!   caller that asked, and only to that caller. Its subscriber is no
