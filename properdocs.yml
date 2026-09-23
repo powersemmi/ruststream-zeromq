@@ -78,7 +78,8 @@ plugins:
         zeromq.md: https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html
         ru/zeromq.md: https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html
         zh/zeromq.md: https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html
-  # Versioned docs are published with `mike` (see the Docs workflow and the version switcher).
+  # Versioned docs are published with `mike` (see the Deploy docs workflow and the version
+  # switcher).
   # Translations live under `docs/<locale>/`; English stays at the docs root as the default.
   - i18n:
       docs_structure: folder

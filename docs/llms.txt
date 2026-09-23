@@ -1,0 +1,31 @@
+# ruststream-zeromq
+
+> `ruststream-zeromq` is the ZeroMQ transport for RustStream, a Rust framework for services that subscribe to message brokers and publish to them. It joins a service to a ZeroMQ topology over the pure-Rust `zeromq` implementation on the `tcp://` and `ipc://` transports, with no server in the middle and a documented frame layout, so the peer on the other side does not have to be Rust.
+
+A service picks one of three patterns: `ZmqQueue` (PUSH/PULL, competing consumers), `ZmqFanout` (PUB/SUB, broadcast filtered by name prefix) or `ZmqRpc` (DEALER/ROUTER, request and reply), each on a `ZmqEndpoint` that says whether this process binds or connects. A subscription is a plain name, `#[subscriber("jobs")]`, with no descriptor. A routes file imports its pattern's prelude (`ruststream_zeromq::queue::prelude::*` and so on), which offers that pattern's publish policy as `Publish`; a file mounting more than one pattern imports `ruststream_zeromq::prelude::*`. Delivery is at most once: `ack` and `nack` report `AckError::Unsupported`.
+
+This site holds the entry pages. The crate's guide is its module overview on docs.rs, and the framework itself is documented on the RustStream site.
+
+## Site
+
+- [Home](https://powersemmi.github.io/ruststream-zeromq/latest/): what the crate does, the three patterns, the dependency lines and a first service
+- [Benchmarks](https://powersemmi.github.io/ruststream-zeromq/latest/benchmarks/): what this crate and the framework's runtime cost over the raw `zeromq` sockets, and how to re-measure it with `just bench`
+
+## Guide
+
+- [Overview](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html): the transport, what it does not do, and a service
+- [The three patterns](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#the-three-patterns): which pattern fits which messaging shape
+- [Endpoints](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#endpoints): `ZmqEndpoint::bind` and `ZmqEndpoint::connect` on `tcp://` and `ipc://`
+- [Subscribing](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#subscribing): subscriptions, client-side batches and retries republished by the framework
+- [Publishing](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#publishing): publish policies, replies, and request and reply on `ZmqRpc`
+- [The wire contract](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#the-wire-contract): the three-frame layout a non-Rust peer composes messages against
+- [The prelude](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#the-prelude): which glob a routes file imports
+- [The generated document](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#the-generated-document): what the `asyncapi` feature reports in the `x-ruststream-zeromq` extension
+- [Testing](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#testing): `ZmqTestBroker` behind the `testing` feature, driven by `TestApp`
+- [Operations](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#operations): transports, security, back-pressure, cancel safety and durability
+
+## Optional
+
+- [API reference](https://docs.rs/ruststream-zeromq): the full rustdoc of the crate
+- [RustStream llms.txt](https://powersemmi.github.io/ruststream/llms.txt): the index of the framework's own documentation
+- [Source](https://github.com/powersemmi/ruststream-zeromq): the crate's repository

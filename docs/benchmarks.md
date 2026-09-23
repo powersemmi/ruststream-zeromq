@@ -103,8 +103,8 @@ Nothing settles a delivery on this transport. The two loops that go through this
 waits for; the raw loop has nothing to call. A row published for a broker that does settle carries
 an acknowledgement inside the window, and this one carries none.
 
-The numbers are a snapshot of one machine on one day. They are re-measured on demand, never in CI:
-a shared runner's noise is larger than the difference this page is about.
+The numbers are a snapshot of one machine on one day. They are re-measured by hand, on a machine
+given to the run alone: the difference this page is about is smaller than the noise of a shared one.
 
 ## Running it yourself
 
