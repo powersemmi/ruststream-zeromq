@@ -127,9 +127,15 @@ subscription descriptor in this crate: a name is all any of the three patterns n
 
 Only [`ZmqFanout`] filters on the name, and it filters by prefix, which is the protocol's own rule:
 a subscription on `events` also receives `events.created`. [`ZmqQueue`] and [`ZmqRpc`] hand a
-subscription every message their socket receives, whatever frame 0 says. Two [`ZmqQueue`]
-subscriptions on one endpoint therefore split one stream of work, and a second kind of work needs
-an endpoint of its own.
+subscription every message their socket receives, whatever frame 0 says, so a second kind of work
+needs an endpoint of its own.
+
+How many subscriptions a broker takes follows from the side. Subscriptions that dial are sockets
+of their own on the peer's endpoint: two [`ZmqQueue`] workers dialing one ventilator split its
+stream, and two [`ZmqFanout`] watchers dialing one publisher each receive their own prefix. An
+endpoint this service binds is one socket, read by the subscription that bound it. A second
+subscription on the same broker is refused when it opens, with an error naming both subscriptions,
+and mounts on a broker with an endpoint of its own.
 
 Nothing is stored, so there is no position to return to: neither `Seekable` nor `Positioned` is
 implemented and `.start_at(..)` does not compile here. This crate adds no per-delivery context key
@@ -633,7 +639,8 @@ to the service is refused the same way: once a subscription has opened on a queu
 stand's publisher sends under that subscription's name alone and refuses any other in the words
 the socket uses. A stand takes the side its broker takes - `ZmqTestBroker::queue().dialing()` for
 a `ZmqQueue<Connect>` - and on that side it refuses every publish once a subscription has opened,
-as the socket does. What the stand withholds, it withholds because the pattern does: `.batch(..)`
+as the socket does. On the bind side it refuses a second subscription in the socket's words, and on
+the side that dials it hands what the harness injects to one worker, as a ventilator does. What the stand withholds, it withholds because the pattern does: `.batch(..)`
 on a responder does not compile against the stand either, and a responder mount or a dialing mount
 that names no retry destination is refused under the harness in the words the socket uses.
 

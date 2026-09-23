@@ -36,15 +36,14 @@ use crate::{ZmqFanoutPublish, ZmqQueuePublish, ZmqRpcPublish};
 /// Publisher for the one-way patterns on the in-process broker, carrying the delivery rule of
 /// the pattern whose policy paired it.
 ///
-/// A queue publisher hands each message to one of the consumers on the destination, taken in
-/// turn, so a job mounted on two workers is worked once. Once a subscription has opened on a
-/// bind-side stand, the stand is that subscription's queue, as an endpoint is the queue of the
-/// subscription that bound it: a publish under its name reaches it, and one under any other name
-/// returns [`ZmqError::Send`] in the words the socket publisher uses, since over the socket it
-/// would arrive at that subscription as its next delivery. A fan-out publisher hands it to every
-/// subscription whose name is a prefix of the destination - the protocol's own filter - and to
-/// none when nothing matches. Both are client-side selection, so they are reproduced rather than
-/// approximated.
+/// A queue publisher hands each message to one of the consumers on the destination. Once a
+/// subscription has opened on a bind-side stand, the stand is that subscription's queue, as an
+/// endpoint is the queue of the subscription that bound it: a publish under its name reaches it,
+/// and one under any other name returns [`ZmqError::Send`] in the words the socket publisher uses,
+/// since over the socket it would arrive at that subscription as its next delivery. A fan-out
+/// publisher hands it to every subscription whose name is a prefix of the destination - the
+/// protocol's own filter - and to none when nothing matches. Both are client-side selection, so
+/// they are reproduced rather than approximated.
 ///
 /// On a connect-side stand, once a subscription has opened, every publish returns
 /// [`ZmqError::Send`] in the socket publisher's words: that subscription dialed the sending end of

@@ -463,6 +463,80 @@ async fn binding_an_occupied_endpoint_is_refused() {
     held.shutdown().await.expect("the first queue shuts down");
 }
 
+/// A bound endpoint is one listening socket, and it belongs to the subscription that bound it. A
+/// second subscription on the same broker used to bind a port of its own on `tcp://..:0`, which
+/// nothing dials, so it never received; it is refused before it binds, naming both subscriptions.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_second_subscription_on_a_bound_endpoint_is_refused_naming_both() {
+    let queue = ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"))
+        .connect()
+        .await
+        .expect("the queue connects");
+    let fanout = ZmqFanout::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"))
+        .connect()
+        .await
+        .expect("the fan-out connects");
+    let rpc = ZmqRpc::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"))
+        .connect()
+        .await
+        .expect("the responder connects");
+
+    for refusal in [
+        second_subscription_error(&queue).await,
+        second_subscription_error(&fanout).await,
+        second_subscription_error(&rpc).await,
+    ] {
+        assert!(
+            refusal.contains("'jobs'") && refusal.contains("'reports'"),
+            "the refusal must name the subscription holding the endpoint and the one refused, \
+             got: {refusal}",
+        );
+    }
+}
+
+/// Opens `jobs`, then asks for `reports` on the same broker while `jobs` still holds it.
+async fn second_subscription_error<C>(connected: &C) -> String
+where
+    C: Subscribe,
+    C::Error: std::fmt::Display,
+{
+    let _holding = connected
+        .subscribe("jobs")
+        .await
+        .map_err(|err| err.to_string())
+        .expect("the first subscription binds the endpoint");
+    match connected.subscribe("reports").await {
+        Ok(_) => panic!("a second subscription on a bound endpoint must be refused"),
+        Err(err) => err.to_string(),
+    }
+}
+
+/// Subscriptions that dial are separate sockets on the peer's endpoint, so two of them on one
+/// broker split the stream the peer pushes, as every worker behind a ventilator does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subscriptions_that_dial_share_one_broker() {
+    let mut ventilator = zeromq::PushSocket::new();
+    let address = ventilator
+        .bind("tcp://127.0.0.1:0")
+        .await
+        .expect("the ventilator binds")
+        .to_string();
+    let workers = ZmqQueue::new(ZmqEndpoint::connect(address))
+        .connect()
+        .await
+        .expect("the workers connect");
+    let _first = workers
+        .subscribe("jobs")
+        .await
+        .expect("the first worker dials");
+    let _second = workers
+        .subscribe("reports")
+        .await
+        .expect("a second worker dials the same peer");
+
+    workers.shutdown().await.expect("the workers shut down");
+}
+
 /// A PUSH socket with nothing attached hands every message back, so the crate retries for five
 /// seconds and then reports the destination it could not reach. Without that window a publish
 /// issued while a peer is still shaking hands would fail for no reason; with it, a publish into

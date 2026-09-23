@@ -39,17 +39,19 @@ struct Subscription {
 
 /// Which subscriptions one publish reaches: the difference between the crate's three patterns,
 /// and the semantics a service writes tests about.
+///
+/// Public inside this private module so a pattern's sealed trait can name the one its foreign
+/// peer delivers by, without the type being nameable outside the crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Routing {
-    /// PUSH/PULL: exactly one of the consumers on the destination, taken in turn, so a job is
-    /// worked once however many workers are mounted.
+pub enum Routing {
+    /// PUSH/PULL and a DEALER's request: exactly one of the consumers on the destination, taken
+    /// in turn, so a job is worked once however many workers dial the peer.
     Competing,
     /// PUB/SUB: every subscription whose name is a prefix of the destination, which is the
     /// protocol's own filter, and none at all when nothing matches.
     Prefix,
     /// Every subscription spelled exactly like the destination. Reply addresses are minted per
-    /// request, so this delivers a reply to the one requester waiting on it; harness injection
-    /// uses it as the pattern-neutral way in.
+    /// request, so this delivers a reply to the one requester waiting on it.
     Exact,
 }
 
