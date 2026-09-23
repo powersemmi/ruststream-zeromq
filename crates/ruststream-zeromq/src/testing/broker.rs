@@ -21,18 +21,26 @@ use crate::testing::publisher::{ZmqTestPublisher, ZmqTestRpcPublisher};
 use crate::testing::router::{AddressRouter, Routing};
 use crate::testing::subscriber::{ZmqTestRpcSubscriber, ZmqTestSubscriber};
 
-/// Shared state of one in-process broker: the router, the harness coordinator, and whether the
-/// transport is still open.
+/// Shared state of one in-process broker: the router, the harness coordinator, the subscription
+/// holding a queue stand, and whether the transport is still open.
 #[derive(Debug, Default)]
 pub(crate) struct TestState {
     pub(crate) router: AddressRouter,
     coordinator: OnceLock<Coordinator>,
+    /// The first subscription opened on a queue stand. It stands for the subscription that binds
+    /// the endpoint on a socket, which every publish of the same broker then reaches.
+    holder: OnceLock<String>,
     closed: AtomicBool,
 }
 
 impl TestState {
     fn coordinator(&self) -> Option<&Coordinator> {
         self.coordinator.get()
+    }
+
+    /// The subscription holding a queue stand, once one has opened.
+    pub(crate) fn holder(&self) -> Option<&str> {
+        self.holder.get().map(String::as_str)
     }
 
     /// Marks the transport shut down. Set before the router is cleared, so no handle can slip a
@@ -320,8 +328,15 @@ impl Subscribe for ConnectedZmqTestBroker<Queue> {
     /// names no destination.
     type Copies = AddressedCopies;
 
+    /// Opens the subscription, and the first one opened holds the stand: a publish through the
+    /// queue's policy then reaches it under its own name and is refused under any other, the
+    /// answer the socket gives once a subscription has bound the endpoint.
     fn subscribe(&self, name: &str) -> impl Future<Output = Result<Self::Subscriber, Self::Error>> {
-        ready(self.open(name))
+        let opened = self.open(name);
+        if opened.is_ok() {
+            self.state.holder.get_or_init(|| name.to_owned());
+        }
+        ready(opened)
     }
 }
 

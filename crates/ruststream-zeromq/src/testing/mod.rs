@@ -11,7 +11,9 @@
 //! so what compiles and starts under the harness compiles and starts against the socket:
 //!
 //! * the queue hands each message to one of the consumers on the destination, so two workers
-//!   mounted on one name do not both run;
+//!   mounted on one name do not both run. Once a subscription has opened, the stand is that
+//!   subscription's queue, as an endpoint is the queue of the subscription that bound it: its
+//!   publisher sends under the subscription's name and refuses any other in the socket's words;
 //! * the fan-out filters by name prefix, the protocol's own rule, and drops what nothing matches;
 //! * the request-reply exchange correlates an answer to its request and routes it back to the
 //!   caller that asked, and only to that caller. Its subscriber is no

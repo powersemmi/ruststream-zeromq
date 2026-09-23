@@ -264,7 +264,7 @@ impl ConnectedZmqRpc {
     /// `tcp://...:0` endpoint); `None` until a subscription has bound.
     #[must_use]
     pub fn bound_address(&self) -> Option<String> {
-        self.shared.lifecycle.resolved.get().cloned()
+        self.shared.lifecycle.bound_address()
     }
 
     /// A publisher from the connected form.
@@ -338,7 +338,10 @@ impl Subscribe for ConnectedZmqRpc {
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
         self.shared.lifecycle.ensure_open()?;
         let mut socket = RouterSocket::new();
-        self.shared.lifecycle.attach_receiver(&mut socket).await?;
+        self.shared
+            .lifecycle
+            .attach_receiver(&mut socket, name)
+            .await?;
         let (send_half, mut recv_half) = socket.split();
         // One responder ROUTER per pattern instance: replies route through it.
         let _ = self.shared.router_tx.set(Arc::new(Mutex::new(send_half)));
@@ -492,7 +495,7 @@ impl RequestReply for ZmqRpcPublisher {
         timeout: Duration,
     ) -> Result<Self::Reply, Self::Error> {
         let shared = self.shared()?;
-        let (address, _) = shared.lifecycle.sender_address()?;
+        let address = shared.lifecycle.send_target().address().to_owned();
 
         // One DEALER per request: simple and correct; a shared correlated link is a later
         // optimisation. The identity is random, so replies route to this request alone.

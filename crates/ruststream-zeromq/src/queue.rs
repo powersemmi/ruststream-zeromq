@@ -31,12 +31,15 @@ pub use self::ZmqQueuePublish as Publish;
 ///
 /// #[ruststream::app]
 /// fn app() -> impl App {
-///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
-///         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
-///         |b| {
-///             b.include(handle).out_reply(Publish);
-///         },
-///     )
+///     // The results travel on a queue of their own: the one the jobs arrive on would hand a
+///     // result back to `handle` as its next job.
+///     let results = ZmqQueue::new(ZmqEndpoint::connect("tcp://sink:5556")).bindable();
+///     let to_results = results.bind(Publish);
+///     RustStream::new(AppInfo::new("worker", "0.1.0"))
+///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
+///             b.include(handle).out_reply(to_results);
+///         })
+///         .with_broker(results, |_b| {})
 /// }
 /// ```
 pub mod prelude {
@@ -71,7 +74,7 @@ use zeromq::{PullSocket, PushSocket};
 use crate::bindings::{self, SocketPair};
 use crate::common::{
     BATCH_MAX_WAIT, DEFAULT_READ_AHEAD, DeliveryReceiver, DriverHandle, Lifecycle, SharedLifecycle,
-    WireSubscriber, delivery_channel, send_with_retry,
+    WireSubscriber, delivery_channel, returns_to_subscription, send_with_retry,
 };
 use crate::endpoint::ZmqEndpoint;
 use crate::error::ZmqError;
@@ -180,7 +183,7 @@ impl ConnectedZmqQueue {
     /// `tcp://...:0` endpoint); `None` until a subscription has bound.
     #[must_use]
     pub fn bound_address(&self) -> Option<String> {
-        self.lifecycle.resolved.get().cloned()
+        self.lifecycle.bound_address()
     }
 
     /// A publisher from the connected form.
@@ -221,7 +224,7 @@ impl Subscribe for ConnectedZmqQueue {
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
         self.lifecycle.ensure_open()?;
         let mut socket = PullSocket::new();
-        self.lifecycle.attach_receiver(&mut socket).await?;
+        self.lifecycle.attach_receiver(&mut socket, name).await?;
 
         let (tx, rx) = delivery_channel(self.read_ahead);
         let task = tokio::spawn(async move {
@@ -310,10 +313,23 @@ impl BatchSubscriber for ZmqSubscriber {
 }
 
 /// Publishes into the queue over a lazily attached PUSH socket.
+///
+/// On an endpoint a subscription of this service bound, the socket dials that subscription, so a
+/// publish reaches it and nothing else: one under the subscription's own name (a retry copy, a
+/// job the service feeds itself) is sent, and one under any other name returns
+/// [`ZmqError::Send`] rather than arriving at the subscription as its next delivery.
 #[derive(Clone)]
 pub struct ZmqQueuePublisher {
     cell: Arc<OnceCell<SharedLifecycle>>,
-    push: Arc<Mutex<Option<PushSocket>>>,
+    push: Arc<Mutex<Option<Attached>>>,
+}
+
+/// A PUSH socket, and the subscription of this service it reaches when it dialed one.
+struct Attached {
+    socket: PushSocket,
+    /// Set when a subscription of this service bound the endpoint and the socket dialed it: that
+    /// subscription receives every message sent, so only its own name may be sent.
+    local: Option<String>,
 }
 
 impl std::fmt::Debug for ZmqQueuePublisher {
@@ -354,11 +370,24 @@ impl Publisher for ZmqQueuePublisher {
         let mut push = self.push.lock().await;
         if push.is_none() {
             let mut socket = PushSocket::new();
-            lifecycle.attach_sender(&mut socket).await?;
-            *push = Some(socket);
+            let local = lifecycle
+                .attach_sender(&mut socket)
+                .await?
+                .map(|listener| listener.subscription.clone());
+            *push = Some(Attached { socket, local });
         }
-        let socket = push.as_mut().expect("just attached");
-        send_with_retry(socket, name, frames).await
+        let attached = push.as_mut().expect("just attached");
+        // Checked per message because the name is per message: a slot names it at the call site
+        // and a transform may rewrite it per delivery, while whether a subscription of this
+        // service holds the endpoint is deployment configuration read once one has bound. Nothing
+        // before the first publish sees both. A socket that dials out or listens carries no name
+        // and skips it.
+        if let Some(subscription) = attached.local.as_deref()
+            && subscription != name
+        {
+            return Err(returns_to_subscription(name, subscription));
+        }
+        send_with_retry(&mut attached.socket, name, frames).await
     }
 }
 

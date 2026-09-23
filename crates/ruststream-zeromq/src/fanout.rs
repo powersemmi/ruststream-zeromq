@@ -181,7 +181,7 @@ impl ConnectedZmqFanout {
     /// `tcp://...:0` endpoint); `None` until a subscription has bound.
     #[must_use]
     pub fn bound_address(&self) -> Option<String> {
-        self.lifecycle.resolved.get().cloned()
+        self.lifecycle.bound_address()
     }
 
     /// A publisher from the connected form.
@@ -222,7 +222,7 @@ impl Subscribe for ConnectedZmqFanout {
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
         self.lifecycle.ensure_open()?;
         let mut socket = SubSocket::new();
-        self.lifecycle.attach_receiver(&mut socket).await?;
+        self.lifecycle.attach_receiver(&mut socket, name).await?;
         // The name frame doubles as the subscription prefix; filtering happens on the
         // publisher side, per the protocol.
         socket

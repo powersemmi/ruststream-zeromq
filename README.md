@@ -43,7 +43,7 @@ let dialer = ZmqEndpoint::connect("tcp://ml:5555");       // this process dials 
 let local = ZmqEndpoint::bind("ipc:///tmp/orders");       // same host, no network stack
 ```
 
-An ephemeral bind (`tcp://127.0.0.1:0`) resolves at subscribe; `bound_address()` reports it, and a same-process publisher dials it automatically (the loopback arrangement).
+An ephemeral bind (`tcp://127.0.0.1:0`) resolves at subscribe; `bound_address()` reports it, and a same-process publisher dials it automatically (the loopback arrangement). Such a publisher reaches that subscription and nothing else, so on `ZmqQueue` it sends under the subscription's own name (a retry copy, a job the service feeds itself) and refuses any other name with `ZmqError::Send` rather than handing the message back to the subscription as its next delivery. A reply, a result or a dead letter leaves through a queue on an endpoint of its own.
 
 ## The wire contract
 
@@ -108,12 +108,14 @@ async fn handle(job: &Job) -> Done {
 
 #[ruststream::app]
 fn app() -> impl App {
-    RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
-        ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
-        |b| {
-            b.include(handle).out_reply(Publish);
-        },
-    )
+    // The results travel on a queue of their own, which a sink binds.
+    let results = ZmqQueue::new(ZmqEndpoint::connect("tcp://sink:5556")).bindable();
+    let to_results = results.bind(Publish);
+    RustStream::new(AppInfo::new("worker", "0.1.0"))
+        .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
+            b.include(handle).out_reply(to_results);
+        })
+        .with_broker(results, |_b| {})
 }
 ```
 
@@ -126,24 +128,29 @@ The `testing` feature ships `ZmqTestBroker`: an in-process stand with the same r
 ```rust
 use ruststream::testing::TestApp;
 use ruststream_zeromq::ZmqQueuePublish;
-use ruststream_zeromq::testing::{Queue, ZmqTestBroker};
+use ruststream_zeromq::testing::ZmqTestBroker;
 
+let results = ZmqTestBroker::queue().bindable();
+let to_results = results.bind(ZmqQueuePublish);
 let app = RustStream::new(AppInfo::new("worker", "0.1.0"))
-    .with_broker(ZmqTestBroker::queue(), |b| {
-        b.include(handle).out_reply(ZmqQueuePublish);
-    });
+    .with_broker_labeled("jobs", ZmqTestBroker::queue(), |b| {
+        b.include(handle).out_reply(to_results);
+    })
+    .with_broker_labeled("results", results, |_b| {});
 let tb = TestApp::start(app).await?;
 
 // A foreign peer's push; the injection returns once the handler has settled.
-tb.broker::<ZmqTestBroker<Queue>>()
+tb.broker_named("jobs")
     .publish("jobs", &Job { id: 1 })
     .await?;
 
-tb.broker::<ZmqTestBroker<Queue>>()
+tb.broker_named("results")
     .published::<Done>("results")
     .assert_called_once()
     .with(&Done { id: 1 });
 ```
+
+A result mounted on the queue its own subscription holds is refused under the harness in the words the socket uses, so the mount that would loop in production fails its test instead.
 
 Socket-level behaviour needs no stand-in and no server: the conformance routing suite, the lifecycle ladder, the batch and request-reply capabilities, and a wire-layout check driven by a raw foreign-style peer all run on loopback sockets, so `just test` covers the whole crate with nothing to start first.
 

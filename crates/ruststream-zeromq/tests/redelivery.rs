@@ -378,12 +378,15 @@ async fn never_succeeds(_job: &Job) -> HandlerOutcome {
     HandlerOutcome::retry()
 }
 
-/// The cap and the dead-letter destination are declared at the mount site, and nothing on this
-/// transport applies them natively: `ZeroMQ` has no delivery counter and no dead-letter topology,
-/// so the runtime counts the copies through its own header and republishes the spent delivery
-/// where the registration said.
+/// The cap is declared at the mount site, and nothing on this transport applies it natively:
+/// `ZeroMQ` has no delivery counter, so the runtime counts the copies through its own header and
+/// stops where the declaration said. The copies come back through the subscription's own queue.
+///
+/// A dead-letter destination on that same queue is refused, as the socket refuses it: the
+/// subscription that holds the queue would receive the spent delivery as its next one, and a
+/// handler that keeps failing would keep making copies.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_declared_cap_sends_a_spent_delivery_to_the_dead_letter_destination() {
+async fn the_declared_cap_stops_the_copies_and_the_own_queue_takes_no_dead_letter() {
     let app = RustStream::new(AppInfo::new("zmq-retry-cap", "0.0.0")).with_broker(
         ZmqTestBroker::queue(),
         |b| {
@@ -409,7 +412,40 @@ async fn the_declared_cap_sends_a_spent_delivery_to_the_dead_letter_destination(
         .with(&Job { id: 3 });
     tb.broker::<ZmqTestBroker<Queue>>()
         .published::<Job>("capped.dead")
-        .with(&Job { id: 3 });
+        .assert_not_called();
+}
+
+/// A dead-letter destination takes the spent delivery once the copies leave through a queue of
+/// its own, the arrangement the live test below runs over sockets.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dead_letter_destination_takes_the_spent_delivery_through_a_queue_of_its_own() {
+    let dead = ZmqTestBroker::queue().bindable();
+    let copies = dead.bind(ZmqQueuePublish);
+    let app = RustStream::new(AppInfo::new("zmq-retry-dead-letter", "0.0.0"))
+        .with_broker_labeled("worker", ZmqTestBroker::queue(), |b| {
+            b.include(never_succeeds)
+                .dead_letter("capped.dead")
+                .out_retry(copies);
+        })
+        .with_broker_labeled("dead", dead, |_b| {});
+    let tb = TestApp::start(app).await.expect("the harness starts");
+
+    tb.broker_named("worker")
+        .message(&Job { id: 4 })
+        .to("capped")
+        .publish()
+        .await
+        .expect("the job is published");
+    tb.settle().await.expect("the copy settles");
+
+    tb.broker_named("worker")
+        .subscriber("capped")
+        .assert_called_once()
+        .with(&Job { id: 4 });
+    tb.broker_named("dead")
+        .published::<Job>("capped.dead")
+        .assert_called_once()
+        .with(&Job { id: 4 });
 }
 
 // -- The same promises over real sockets ------------------------------------------------------
@@ -617,6 +653,52 @@ async fn a_declared_cap_stops_the_copies_over_a_socket() {
     expect_silence(
         &mut reports,
         "the cap is spent and no dead-letter destination is declared",
+    )
+    .await;
+
+    running.shutdown().await.expect("the app shuts down");
+    sink.shutdown().await.expect("the sink shuts down");
+}
+
+/// A dead-letter destination on the queue the subscription binds would come back to that
+/// subscription: the spent delivery would arrive as a fourth job, fail again, and be dead-lettered
+/// again, forever. The publish is refused instead, so the run stops at the cap.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dead_letter_on_the_bound_queue_is_refused_rather_than_looped_over_a_socket() {
+    let (sink, mut reports, address) = live_sink().await;
+    let egress = ZmqQueue::new(ZmqEndpoint::connect(address)).bindable();
+    let slot = egress.bind(ZmqQueuePublish);
+
+    let app = RustStream::new(AppInfo::new("zmq-live-own-dead-letter", "0.0.0"))
+        .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")), |b| {
+            b.include(report_and_fail)
+                .max_attempts(nonzero!(3u32))
+                .dead_letter("capped.dead")
+                .out(Reports, slot)
+                .out_retry(ZmqQueuePublish)
+                .build();
+            b.after_startup(ZmqQueuePublish, async move |publisher| -> io::Result<()> {
+                publisher
+                    .message(&Job { id: 14 })
+                    .to("capped")
+                    .publish()
+                    .await
+                    .map_err(io::Error::other)
+            });
+        })
+        .with_broker(egress, |_b| {});
+    let running = app.start().await.expect("the app starts");
+
+    for attempt in 0..3 {
+        assert_eq!(
+            next_report(&mut reports).await,
+            Report { id: 14, attempt },
+            "delivery {attempt} must be the copy the previous one asked for",
+        );
+    }
+    expect_silence(
+        &mut reports,
+        "the dead letter came back to the subscription that gave up on it",
     )
     .await;
 

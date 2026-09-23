@@ -42,23 +42,60 @@ pub(crate) fn delivery_channel(read_ahead: NonZeroUsize) -> (DeliverySender, Del
     mpsc::channel(read_ahead.get())
 }
 
-/// Shared lifecycle state: the endpoint, the
-/// address a local subscription resolved by binding (which is what a same-process publisher dials
-/// for the loopback arrangement), and the closed flag aliased handles trip over.
+/// Shared lifecycle state: the endpoint, the listener a local subscription bound (which is what a
+/// same-process publisher dials for the loopback arrangement), and the closed flag aliased handles
+/// trip over.
 #[derive(Debug)]
 pub(crate) struct Lifecycle {
     pub(crate) endpoint: ZmqEndpoint,
-    pub(crate) resolved: OnceCell<String>,
+    listener: OnceCell<Listener>,
     pub(crate) closed: AtomicBool,
+}
+
+/// The socket a subscription in this process bound on the endpoint.
+#[derive(Debug)]
+pub(crate) struct Listener {
+    /// The address the bind resolved to: the port the operating system chose for a `:0`
+    /// endpoint.
+    pub(crate) address: String,
+    /// The subscription that bound it, which is what receives a message sent there.
+    pub(crate) subscription: String,
+}
+
+/// Where a sending socket attaches.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum SendTarget<'a> {
+    /// Another process listens on the endpoint, so the socket dials it.
+    Dial(&'a str),
+    /// Nothing in this process holds the endpoint, so the socket listens there and peers dial it.
+    Listen(&'a str),
+    /// A subscription in this process bound the endpoint, so the socket dials the address that
+    /// bind resolved to.
+    Local(&'a Listener),
+}
+
+impl<'a> SendTarget<'a> {
+    /// The address the socket attaches to.
+    pub(crate) fn address(self) -> &'a str {
+        match self {
+            Self::Dial(address) | Self::Listen(address) => address,
+            Self::Local(listener) => &listener.address,
+        }
+    }
 }
 
 impl Lifecycle {
     pub(crate) fn new(endpoint: ZmqEndpoint) -> Self {
         Self {
             endpoint,
-            resolved: OnceCell::new(),
+            listener: OnceCell::new(),
             closed: AtomicBool::new(false),
         }
+    }
+
+    /// The address a local subscription resolved by binding, or `None` until one has bound.
+    pub(crate) fn bound_address(&self) -> Option<String> {
+        self.listener.get().map(|listener| listener.address.clone())
     }
 
     pub(crate) fn ensure_open(&self) -> Result<(), ZmqError> {
@@ -68,9 +105,13 @@ impl Lifecycle {
         Ok(())
     }
 
-    /// Attaches a receiving socket per the endpoint's role, recording the resolved address on
-    /// bind so a same-process publisher can dial it.
-    pub(crate) async fn attach_receiver<S: Socket>(&self, socket: &mut S) -> Result<(), ZmqError> {
+    /// Attaches a receiving socket for `subscription` per the endpoint's role, recording the
+    /// listener on bind so a same-process publisher can dial it.
+    pub(crate) async fn attach_receiver<S: Socket>(
+        &self,
+        socket: &mut S,
+        subscription: &str,
+    ) -> Result<(), ZmqError> {
         match self.endpoint.role {
             Role::Bind => {
                 let resolved =
@@ -81,7 +122,10 @@ impl Lifecycle {
                             endpoint: self.endpoint.address().to_owned(),
                             source: box_err(e),
                         })?;
-                let _ = self.resolved.set(resolved.to_string());
+                let _ = self.listener.set(Listener {
+                    address: resolved.to_string(),
+                    subscription: subscription.to_owned(),
+                });
             }
             Role::Connect => {
                 socket
@@ -96,30 +140,55 @@ impl Lifecycle {
         Ok(())
     }
 
-    /// The address a sending socket should use: the endpoint itself when dialing out, or the
-    /// locally bound address for the loopback arrangement (a subscription in this process
-    /// bound the listener).
-    pub(crate) fn sender_address(&self) -> Result<(String, Role), ZmqError> {
+    /// Where a sending socket attaches: the endpoint itself when dialing out or when nothing in
+    /// this process holds it, or the listener a subscription in this process bound (the loopback
+    /// arrangement).
+    pub(crate) fn send_target(&self) -> SendTarget<'_> {
         match self.endpoint.role {
-            Role::Connect => Ok((self.endpoint.address().to_owned(), Role::Connect)),
-            Role::Bind => self.resolved.get().map_or_else(
-                || Ok((self.endpoint.address().to_owned(), Role::Bind)),
-                |resolved| Ok((resolved.clone(), Role::Connect)),
+            Role::Connect => SendTarget::Dial(self.endpoint.address()),
+            Role::Bind => self.listener.get().map_or_else(
+                || SendTarget::Listen(self.endpoint.address()),
+                SendTarget::Local,
             ),
         }
     }
 
-    /// Attaches a sending socket per [`sender_address`](Self::sender_address).
-    pub(crate) async fn attach_sender<S: Socket>(&self, socket: &mut S) -> Result<(), ZmqError> {
-        let (address, role) = self.sender_address()?;
-        let outcome = match role {
-            Role::Bind => socket.bind(&address).await.map(|_| ()),
-            Role::Connect => socket.connect(&address).await,
+    /// Attaches a sending socket per [`send_target`](Self::send_target), and returns the local
+    /// listener it dialed, if it dialed one.
+    pub(crate) async fn attach_sender<S: Socket>(
+        &self,
+        socket: &mut S,
+    ) -> Result<Option<&Listener>, ZmqError> {
+        let target = self.send_target();
+        let outcome = match target {
+            SendTarget::Listen(address) => socket.bind(address).await.map(|_| ()),
+            SendTarget::Dial(address) => socket.connect(address).await,
+            SendTarget::Local(listener) => socket.connect(&listener.address).await,
         };
         outcome.map_err(|e| ZmqError::Endpoint {
-            endpoint: address,
+            endpoint: target.address().to_owned(),
             source: box_err(e),
+        })?;
+        Ok(match target {
+            SendTarget::Local(listener) => Some(listener),
+            SendTarget::Dial(_) | SendTarget::Listen(_) => None,
         })
+    }
+}
+
+/// The refusal of a queue publish that would come back to this service: the subscription that
+/// bound the queue receives every message pushed into it, whatever its name, so a message named
+/// anything else would arrive there as its next delivery.
+///
+/// The socket publisher and the in-process stand refuse in these words alike, so a test read
+/// against the stand teaches the fix the deployment needs.
+pub(crate) fn returns_to_subscription(name: &str, subscription: &str) -> ZmqError {
+    ZmqError::Send {
+        name: name.to_owned(),
+        reason: format!(
+            "this service's subscription '{subscription}' binds the queue and receives every \
+             message pushed into it; publish '{name}' through a queue on an endpoint of its own"
+        ),
     }
 }
 
