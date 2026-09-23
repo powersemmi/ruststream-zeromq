@@ -67,9 +67,11 @@ pub mod prelude {
     pub use super::{Publish, ZmqRpc};
 }
 
+use std::fmt;
 use std::future::{Future, ready};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -93,7 +95,7 @@ use crate::common::{
     DEFAULT_READ_AHEAD, DriverHandle, Lifecycle, SharedLifecycle, WireSubscriber, delivery_channel,
     send_with_retry,
 };
-use crate::endpoint::ZmqEndpoint;
+use crate::endpoint::{Endpoint, EndpointRole, ZmqEndpoint};
 use crate::error::ZmqError;
 use crate::message::ZmqMessage;
 use crate::wire;
@@ -149,6 +151,10 @@ fn hex_decode(text: &str) -> Option<Vec<u8>> {
 
 /// The DEALER/ROUTER request-reply pattern.
 ///
+/// The endpoint may take either side, and the pattern answers the same on both: a copy of a
+/// request has no address of its own, so every responder registration names where its retry
+/// copies go.
+///
 /// # Examples
 ///
 /// ```
@@ -161,7 +167,7 @@ fn hex_decode(text: &str) -> Option<Vec<u8>> {
 #[derive(Debug, Clone)]
 #[must_use]
 pub struct ZmqRpc {
-    endpoint: ZmqEndpoint,
+    endpoint: Endpoint,
     read_ahead: NonZeroUsize,
     cell: Arc<OnceCell<RpcShared>>,
 }
@@ -173,17 +179,27 @@ pub(crate) struct RpcShared {
     router_tx: Arc<OnceCell<Arc<Mutex<RouterSendHalf>>>>,
 }
 
-impl std::fmt::Debug for RpcShared {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for RpcShared {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RpcShared").finish_non_exhaustive()
     }
 }
 
 impl ZmqRpc {
-    /// Records the endpoint. No I/O.
-    pub fn new(endpoint: ZmqEndpoint) -> Self {
+    /// Records the endpoint, on either side. No I/O.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ruststream_zeromq::{ZmqEndpoint, ZmqRpc};
+    ///
+    /// let responder = ZmqRpc::new(ZmqEndpoint::bind("tcp://0.0.0.0:5557"));
+    /// let requester = ZmqRpc::new(ZmqEndpoint::connect("tcp://ml:5557"));
+    /// # let _ = (responder, requester);
+    /// ```
+    pub fn new<Role: EndpointRole>(endpoint: ZmqEndpoint<Role>) -> Self {
         Self {
-            endpoint,
+            endpoint: endpoint.into_inner(),
             read_ahead: DEFAULT_READ_AHEAD,
             cell: Arc::new(OnceCell::new()),
         }
@@ -281,10 +297,7 @@ impl ConnectedBroker for ConnectedZmqRpc {
     type Closed = ();
 
     fn shutdown(self) -> impl Future<Output = Result<(), Self::Error>> {
-        self.shared
-            .lifecycle
-            .closed
-            .store(true, std::sync::atomic::Ordering::Release);
+        self.shared.lifecycle.closed.store(true, Ordering::Release);
         ready(Ok(()))
     }
 }
@@ -304,8 +317,8 @@ pub struct ZmqRpcSubscriber {
     inner: WireSubscriber,
 }
 
-impl std::fmt::Debug for ZmqRpcSubscriber {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for ZmqRpcSubscriber {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ZmqRpcSubscriber")
             .field("name", &self.name)
             .finish_non_exhaustive()
@@ -408,8 +421,8 @@ pub struct ZmqRpcPublisher {
     cell: Arc<OnceCell<RpcShared>>,
 }
 
-impl std::fmt::Debug for ZmqRpcPublisher {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for ZmqRpcPublisher {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ZmqRpcPublisher").finish_non_exhaustive()
     }
 }
@@ -553,7 +566,7 @@ pub(crate) fn new_reply_address() -> String {
 /// A per-request unique suffix without a randomness dependency: the address of a fresh
 /// allocation mixed with a monotonic counter.
 fn rand_suffix() -> [u8; 8] {
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::AtomicU64;
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     seq.to_be_bytes()

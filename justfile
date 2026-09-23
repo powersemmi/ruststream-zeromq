@@ -15,8 +15,9 @@ check:
     cargo check --workspace --exclude ruststream-zeromq-bench --all-targets --all-features
     cargo check --workspace --no-default-features
 
+# The compile-fail snapshots run here too: the toolchain file pins stable, the one they record.
 test:
-    cargo test --workspace --all-features
+    RUN_UI_TESTS=1 REQUIRE_UI_TESTS=1 cargo test --workspace --all-features
 
 # What this crate costs over the zeromq client it wraps: two scenarios, each run as a RustStream
 # service and as a hand-written socket loop. There is no stand to start - ZeroMQ has no broker, so

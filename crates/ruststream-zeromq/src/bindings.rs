@@ -17,7 +17,7 @@
 use ruststream::asyncapi::{Binding, Bindings};
 use serde::Serialize;
 
-use crate::endpoint::{Role, ZmqEndpoint};
+use crate::endpoint::{Endpoint, Side};
 
 /// The extension key both levels sit under.
 const EXTENSION: &str = "x-ruststream-zeromq";
@@ -74,9 +74,9 @@ struct ChannelBody {
 
 /// The transport scheme, as this binding names it.
 ///
-/// [`ZmqEndpoint::validate`] admits `tcp://` and `ipc://` and nothing else, so an endpoint a
-/// service reaches here is one of the two.
-fn transport(endpoint: &ZmqEndpoint) -> &'static str {
+/// [`Endpoint::validate`] admits `tcp://` and `ipc://` and nothing else, so an endpoint a service
+/// reaches here is one of the two.
+fn transport(endpoint: &Endpoint) -> &'static str {
     if endpoint.address().starts_with("ipc://") {
         "ipc"
     } else {
@@ -85,13 +85,13 @@ fn transport(endpoint: &ZmqEndpoint) -> &'static str {
 }
 
 /// The server binding: the transport, the coordinate, and which side of it this service takes.
-pub(crate) fn server(endpoint: &ZmqEndpoint) -> Bindings {
+pub(crate) fn server(endpoint: &Endpoint) -> Bindings {
     let body = ServerBody {
         transport: transport(endpoint),
         endpoint: endpoint.host(),
-        role: Some(match endpoint.role {
-            Role::Bind => "bind",
-            Role::Connect => "connect",
+        role: Some(match endpoint.side() {
+            Side::Bind => "bind",
+            Side::Connect => "connect",
         }),
     };
     wrap(&body)
@@ -138,11 +138,14 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
+    use crate::ZmqEndpoint;
 
     #[test]
     fn the_server_binding_reports_the_transport_and_the_role() {
-        let json = serde_json::to_value(server(&ZmqEndpoint::bind("tcp://0.0.0.0:5555")))
-            .expect("the binding serializes");
+        let json = serde_json::to_value(server(
+            &ZmqEndpoint::bind("tcp://0.0.0.0:5555").into_inner(),
+        ))
+        .expect("the binding serializes");
         let body = &json[EXTENSION];
         assert_eq!(body["transport"], "tcp");
         assert_eq!(body["endpoint"], "0.0.0.0:5555");
@@ -153,7 +156,7 @@ mod tests {
     /// here is the same credential-free one the server description carries.
     #[test]
     fn the_server_binding_drops_userinfo_with_the_scheme() {
-        let endpoint = ZmqEndpoint::connect("tcp://user:hunter2@broker:5555");
+        let endpoint = ZmqEndpoint::connect("tcp://user:hunter2@broker:5555").into_inner();
         let json = serde_json::to_string(&server(&endpoint)).expect("the binding serializes");
         assert!(
             !json.contains("hunter2"),
@@ -167,8 +170,10 @@ mod tests {
 
     #[test]
     fn an_ipc_endpoint_reports_its_socket_path() {
-        let json = serde_json::to_value(server(&ZmqEndpoint::connect("ipc:///tmp/orders")))
-            .expect("the binding serializes");
+        let json = serde_json::to_value(server(
+            &ZmqEndpoint::connect("ipc:///tmp/orders").into_inner(),
+        ))
+        .expect("the binding serializes");
         assert_eq!(json[EXTENSION]["transport"], "ipc");
         assert_eq!(json[EXTENSION]["endpoint"], "/tmp/orders");
         assert_eq!(json[EXTENSION]["role"], "connect");

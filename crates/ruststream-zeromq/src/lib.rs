@@ -17,7 +17,7 @@ pub mod rpc;
 #[cfg(feature = "testing")]
 pub mod testing;
 
-pub use endpoint::ZmqEndpoint;
+pub use endpoint::{Bind, Connect, EndpointRole, ZmqEndpoint};
 pub use error::ZmqError;
 pub use fanout::{ConnectedZmqFanout, ZmqFanout, ZmqFanoutPublish, ZmqFanoutPublisher};
 pub use message::ZmqMessage;

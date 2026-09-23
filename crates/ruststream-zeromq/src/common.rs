@@ -11,7 +11,7 @@ use tokio::sync::{OnceCell, mpsc};
 use zeromq::prelude::*;
 use zeromq::{Socket, ZmqError as WireError};
 
-use crate::endpoint::{Role, ZmqEndpoint};
+use crate::endpoint::{Endpoint, Side};
 use crate::error::{ZmqError, box_err};
 use crate::message::ZmqMessage;
 
@@ -43,12 +43,16 @@ pub(crate) fn delivery_channel(read_ahead: NonZeroUsize) -> (DeliverySender, Del
 }
 
 /// Shared lifecycle state: the endpoint, the listener a local subscription bound (which is what a
-/// same-process publisher dials for the loopback arrangement), and the closed flag aliased handles
-/// trip over.
+/// same-process publisher dials for the loopback arrangement), the subscription that dialed the
+/// endpoint on the other side, and the closed flag aliased handles trip over.
 #[derive(Debug)]
 pub(crate) struct Lifecycle {
-    pub(crate) endpoint: ZmqEndpoint,
+    pub(crate) endpoint: Endpoint,
     listener: OnceCell<Listener>,
+    /// The first subscription of this service that dialed the endpoint. The peer it reads from is
+    /// the sending end of the pattern, which takes nothing, so a publisher of the same broker has
+    /// nowhere to send.
+    dialer: OnceCell<String>,
     pub(crate) closed: AtomicBool,
 }
 
@@ -85,12 +89,18 @@ impl<'a> SendTarget<'a> {
 }
 
 impl Lifecycle {
-    pub(crate) fn new(endpoint: ZmqEndpoint) -> Self {
+    pub(crate) fn new(endpoint: Endpoint) -> Self {
         Self {
             endpoint,
             listener: OnceCell::new(),
+            dialer: OnceCell::new(),
             closed: AtomicBool::new(false),
         }
+    }
+
+    /// The subscription of this service that dialed the endpoint, or `None` until one has.
+    pub(crate) fn dialer(&self) -> Option<&str> {
+        self.dialer.get().map(String::as_str)
     }
 
     /// The address a local subscription resolved by binding, or `None` until one has bound.
@@ -105,15 +115,16 @@ impl Lifecycle {
         Ok(())
     }
 
-    /// Attaches a receiving socket for `subscription` per the endpoint's role, recording the
-    /// listener on bind so a same-process publisher can dial it.
+    /// Attaches a receiving socket for `subscription` per the endpoint's side, recording the
+    /// listener on bind so a same-process publisher can dial it, and the dialing subscription on
+    /// connect so a same-process publisher is refused before it dials a peer that only sends.
     pub(crate) async fn attach_receiver<S: Socket>(
         &self,
         socket: &mut S,
         subscription: &str,
     ) -> Result<(), ZmqError> {
-        match self.endpoint.role {
-            Role::Bind => {
+        match self.endpoint.side() {
+            Side::Bind => {
                 let resolved =
                     socket
                         .bind(self.endpoint.address())
@@ -127,7 +138,7 @@ impl Lifecycle {
                     subscription: subscription.to_owned(),
                 });
             }
-            Role::Connect => {
+            Side::Connect => {
                 socket
                     .connect(self.endpoint.address())
                     .await
@@ -135,6 +146,7 @@ impl Lifecycle {
                         endpoint: self.endpoint.address().to_owned(),
                         source: box_err(e),
                     })?;
+                let _ = self.dialer.set(subscription.to_owned());
             }
         }
         Ok(())
@@ -144,9 +156,9 @@ impl Lifecycle {
     /// this process holds it, or the listener a subscription in this process bound (the loopback
     /// arrangement).
     pub(crate) fn send_target(&self) -> SendTarget<'_> {
-        match self.endpoint.role {
-            Role::Connect => SendTarget::Dial(self.endpoint.address()),
-            Role::Bind => self.listener.get().map_or_else(
+        match self.endpoint.side() {
+            Side::Connect => SendTarget::Dial(self.endpoint.address()),
+            Side::Bind => self.listener.get().map_or_else(
                 || SendTarget::Listen(self.endpoint.address()),
                 SendTarget::Local,
             ),
@@ -188,6 +200,28 @@ pub(crate) fn returns_to_subscription(name: &str, subscription: &str) -> ZmqErro
         reason: format!(
             "this service's subscription '{subscription}' binds the queue and receives every \
              message pushed into it; publish '{name}' through a queue on an endpoint of its own"
+        ),
+    }
+}
+
+/// The refusal of a publish on an endpoint a subscription of this service dials: the peer that
+/// subscription reads from is the sending end of the pattern (`sender`, a PUSH or a PUB socket),
+/// and the handshake refuses a sending socket that dials it.
+///
+/// The socket publishers refuse in these words before they dial, and the in-process stand refuses
+/// in them alike, so a test read against the stand teaches the fix the deployment needs.
+pub(crate) fn dials_the_sender(
+    name: &str,
+    subscription: &str,
+    sender: &str,
+    pattern: &str,
+) -> ZmqError {
+    ZmqError::Send {
+        name: name.to_owned(),
+        reason: format!(
+            "this service's subscription '{subscription}' dials the endpoint, and the {sender} \
+             socket it reads from there takes no message; publish '{name}' through a {pattern} \
+             on an endpoint of its own"
         ),
     }
 }

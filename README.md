@@ -43,6 +43,8 @@ let dialer = ZmqEndpoint::connect("tcp://ml:5555");       // this process dials 
 let local = ZmqEndpoint::bind("ipc:///tmp/orders");       // same host, no network stack
 ```
 
+The side is a type: `bind` gives a `ZmqEndpoint<Bind>`, `connect` a `ZmqEndpoint<Connect>`, and the broker built on it carries the same `Role` parameter, so `ZmqQueue::new(ZmqEndpoint::connect(..))` is a `ZmqQueue<Connect>`. It decides where a retry copy can go, so a mount the side cannot serve is refused before it runs.
+
 An ephemeral bind (`tcp://127.0.0.1:0`) resolves at subscribe; `bound_address()` reports it, and a same-process publisher dials it automatically (the loopback arrangement). Such a publisher reaches that subscription and nothing else, so on `ZmqQueue` it sends under the subscription's own name (a retry copy, a job the service feeds itself) and refuses any other name with `ZmqError::Send` rather than handing the message back to the subscription as its next delivery. A reply, a result or a dead letter leaves through a queue on an endpoint of its own.
 
 ## The wire contract
@@ -66,7 +68,7 @@ The payload frame is whatever the framework's codec produced, so the peer only h
 - A subscription reads **at most 1000 deliveries ahead** of its handler, or the bound its descriptor sets with `.read_ahead(n)`. Past it the subscription stops reading and the socket holds the sender back, so a slow handler slows the sender down instead of growing the service's memory. A PUB socket waits for its slowest matching subscriber the same way.
 - There is **no encryption layer**: use it on trusted networks, or inside an existing tunnel.
 - No consumer groups, no transactions, and **no native retry mechanism**: a delivery limit and a dead-letter destination declared with `.max_attempts(..)` and `.dead_letter(..)` are counted and applied by the framework, not by the transport.
-- **Nothing settles a delivery**, so a `retry_after` is served only by the copy the runtime publishes through the publisher the registration binds with `.out_retry(policy)`. The one-way patterns address their own subscription, so a mount site there names no destination; a `ZmqRpc` responder addresses nothing, so every registration on one names where its copies go or is refused before the subscription opens.
+- **Nothing settles a delivery**, so a `retry_after` is served only by the copy the runtime publishes through the publisher the registration binds with `.out_retry(policy)`. A one-way subscription that binds addresses itself, so a mount site there names no destination. One that dials reads from a peer that only sends, and a `ZmqRpc` responder addresses nothing; every registration on either names where its copies go (`.out_retry(policy).to("jobs")` over another broker) or is refused before the subscription opens.
 - **A send takes the frames and nothing else**: no priority, no expiry, no ordering key. Every publisher declares `Options = ()`, this crate adds no publish builder step, and a handler body imports `ruststream::prelude::*` alone.
 
 ## Install

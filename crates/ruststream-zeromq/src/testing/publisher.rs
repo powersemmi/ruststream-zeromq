@@ -20,7 +20,8 @@ use ruststream::{
 
 #[cfg(feature = "asyncapi")]
 use crate::bindings::{self, SocketPair};
-use crate::common::returns_to_subscription;
+use crate::common::{dials_the_sender, returns_to_subscription};
+use crate::endpoint::{EndpointRole, Side};
 use crate::error::ZmqError;
 #[cfg(feature = "asyncapi")]
 use crate::rpc::REPLY_ADDRESS_LOCATION;
@@ -36,14 +37,18 @@ use crate::{ZmqFanoutPublish, ZmqQueuePublish, ZmqRpcPublish};
 /// the pattern whose policy paired it.
 ///
 /// A queue publisher hands each message to one of the consumers on the destination, taken in
-/// turn, so a job mounted on two workers is worked once. Once a subscription has opened on the
-/// stand, the stand is that subscription's queue, as an endpoint is the queue of the subscription
-/// that bound it: a publish under its name reaches it, and one under any other name returns
-/// [`ZmqError::Send`] in the words the socket publisher uses, since over the socket it would
-/// arrive at that subscription as its next delivery. A fan-out publisher hands it to every
+/// turn, so a job mounted on two workers is worked once. Once a subscription has opened on a
+/// bind-side stand, the stand is that subscription's queue, as an endpoint is the queue of the
+/// subscription that bound it: a publish under its name reaches it, and one under any other name
+/// returns [`ZmqError::Send`] in the words the socket publisher uses, since over the socket it
+/// would arrive at that subscription as its next delivery. A fan-out publisher hands it to every
 /// subscription whose name is a prefix of the destination - the protocol's own filter - and to
 /// none when nothing matches. Both are client-side selection, so they are reproduced rather than
 /// approximated.
+///
+/// On a connect-side stand, once a subscription has opened, every publish returns
+/// [`ZmqError::Send`] in the socket publisher's words: that subscription dialed the sending end of
+/// the pattern, and the handshake refuses a sending socket that dials it.
 ///
 /// What is not reproduced is everything that depends on a peer existing: PUSH blocks and then
 /// fails when no socket is connected to it, while a publish here is recorded and dropped, because
@@ -73,11 +78,19 @@ impl ZmqTestPublisher {
 
     fn route(&self, msg: OutgoingMessage<'_, BytesMut>) -> Result<(), ZmqError> {
         self.state.ensure_open()?;
-        if self.routing == Routing::Competing
-            && let Some(holder) = self.state.holder()
-            && holder != msg.name()
-        {
-            return Err(returns_to_subscription(msg.name(), holder));
+        if let Some(holder) = self.state.holder() {
+            match (self.state.side(), self.routing) {
+                (Side::Connect, Routing::Competing) => {
+                    return Err(dials_the_sender(msg.name(), holder, "PUSH", "queue"));
+                }
+                (Side::Connect, _) => {
+                    return Err(dials_the_sender(msg.name(), holder, "PUB", "fan-out"));
+                }
+                (Side::Bind, Routing::Competing) if holder != msg.name() => {
+                    return Err(returns_to_subscription(msg.name(), holder));
+                }
+                (Side::Bind, _) => {}
+            }
         }
         let (name, payload, headers) = msg.into_parts();
         self.state
@@ -248,12 +261,12 @@ impl RequestReply for ZmqTestRpcPublisher {
 /// The PUSH/PULL policy pairs against the queue stand and against no other, exactly as it pairs
 /// against [`ConnectedZmqQueue`](crate::ConnectedZmqQueue) alone in production: competing
 /// consumers still compete, so each message is worked once.
-impl PublishPolicy<ConnectedZmqTestBroker<Queue>> for ZmqQueuePublish {
+impl<Role: EndpointRole> PublishPolicy<ConnectedZmqTestBroker<Queue, Role>> for ZmqQueuePublish {
     type Live = ZmqTestPublisher;
 
     fn pair(
         self,
-        connected: &ConnectedZmqTestBroker<Queue>,
+        connected: &ConnectedZmqTestBroker<Queue, Role>,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(connected.publisher()))
     }
@@ -269,12 +282,12 @@ impl PublishPolicy<ConnectedZmqTestBroker<Queue>> for ZmqQueuePublish {
 
 /// The PUB/SUB policy pairs against the fan-out stand, keeping the pattern's prefix filter: a
 /// subscription on `orders` sees `orders.eu.1`, and a message nothing matches is dropped.
-impl PublishPolicy<ConnectedZmqTestBroker<Fanout>> for ZmqFanoutPublish {
+impl<Role: EndpointRole> PublishPolicy<ConnectedZmqTestBroker<Fanout, Role>> for ZmqFanoutPublish {
     type Live = ZmqTestPublisher;
 
     fn pair(
         self,
-        connected: &ConnectedZmqTestBroker<Fanout>,
+        connected: &ConnectedZmqTestBroker<Fanout, Role>,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(connected.publisher()))
     }
@@ -291,12 +304,12 @@ impl PublishPolicy<ConnectedZmqTestBroker<Fanout>> for ZmqFanoutPublish {
 /// The DEALER/ROUTER policy pairs against the responder stand, to the one live publisher that
 /// answers and asks, so the capability split the real forms have survives into the harness: a
 /// handler binding `Out<impl RequestReply, ..>` mounts on this policy and on no other.
-impl PublishPolicy<ConnectedZmqTestBroker<Rpc>> for ZmqRpcPublish {
+impl<Role: EndpointRole> PublishPolicy<ConnectedZmqTestBroker<Rpc, Role>> for ZmqRpcPublish {
     type Live = ZmqTestRpcPublisher;
 
     fn pair(
         self,
-        connected: &ConnectedZmqTestBroker<Rpc>,
+        connected: &ConnectedZmqTestBroker<Rpc, Role>,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(connected.publisher()))
     }
@@ -319,14 +332,14 @@ impl PublishPolicy<ConnectedZmqTestBroker<Rpc>> for ZmqRpcPublish {
 
 /// Each stand names the default its pattern names, so a mount that omits `.out_reply(..)` takes
 /// the publisher it would take in production rather than the queue's for want of anything better.
-impl DefaultPublish for ConnectedZmqTestBroker<Queue> {
+impl<Role: EndpointRole> DefaultPublish for ConnectedZmqTestBroker<Queue, Role> {
     type Policy = ZmqQueuePublish;
 }
 
-impl DefaultPublish for ConnectedZmqTestBroker<Fanout> {
+impl<Role: EndpointRole> DefaultPublish for ConnectedZmqTestBroker<Fanout, Role> {
     type Policy = ZmqFanoutPublish;
 }
 
-impl DefaultPublish for ConnectedZmqTestBroker<Rpc> {
+impl<Role: EndpointRole> DefaultPublish for ConnectedZmqTestBroker<Rpc, Role> {
     type Policy = ZmqRpcPublish;
 }
