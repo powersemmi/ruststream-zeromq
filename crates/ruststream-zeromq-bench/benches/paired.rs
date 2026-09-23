@@ -126,10 +126,9 @@ const WORKERS: usize = 4;
 
 /// How far the publisher may run ahead of the consumer, in messages.
 ///
-/// This crate's subscription drains its socket into a queue with no bound, so nothing else would
-/// ever stop the publisher on the loops that use it: without this gate a slow consumer is paid for
-/// in memory rather than in back-pressure. 32768 bodies is about 18 MiB outstanding, and far more
-/// than any loop is ever behind when it is keeping up.
+/// Every loop is held to the same ceiling, whatever else bounds it: the socket buffers on a raw
+/// loop, those and the subscription's read-ahead on this crate's. 32768 bodies is about 18 MiB
+/// outstanding, and far more than any loop is ever behind when it is keeping up.
 const IN_FLIGHT: usize = 32_768;
 /// How often the publisher checks that ceiling.
 const CHECK_EVERY: usize = 512;

@@ -68,6 +68,7 @@ pub mod prelude {
 }
 
 use std::future::{Future, ready};
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -81,14 +82,16 @@ use ruststream::{
     OutgoingMessage, PairError, PublishPolicy, Publisher, RequestReply, ServerSpec, Str, Subscribe,
     Subscriber, Take,
 };
-use tokio::sync::{OnceCell, mpsc};
+use tokio::sync::OnceCell;
 use zeromq::prelude::*;
 use zeromq::util::PeerIdentity;
 use zeromq::{DealerSocket, RouterSendHalf, RouterSocket, SocketOptions};
 
 #[cfg(feature = "asyncapi")]
 use crate::bindings::{self, SocketPair};
-use crate::common::{DriverHandle, Lifecycle, SharedLifecycle, WireSubscriber, send_with_retry};
+use crate::common::{
+    DEFAULT_READ_AHEAD, DriverHandle, Lifecycle, SharedLifecycle, WireSubscriber, send_with_retry,
+};
 use crate::endpoint::ZmqEndpoint;
 use crate::error::ZmqError;
 use crate::message::ZmqMessage;
@@ -158,6 +161,7 @@ fn hex_decode(text: &str) -> Option<Vec<u8>> {
 #[must_use]
 pub struct ZmqRpc {
     endpoint: ZmqEndpoint,
+    read_ahead: NonZeroUsize,
     cell: Arc<OnceCell<RpcShared>>,
 }
 
@@ -179,8 +183,31 @@ impl ZmqRpc {
     pub fn new(endpoint: ZmqEndpoint) -> Self {
         Self {
             endpoint,
+            read_ahead: DEFAULT_READ_AHEAD,
             cell: Arc::new(OnceCell::new()),
         }
+    }
+
+    /// How many deliveries a subscription reads off its socket ahead of the handler; 1000 unless
+    /// set, the receive high-water mark `ZeroMQ` itself gives a socket.
+    ///
+    /// Past this bound the subscription stops reading, the socket's buffers fill, and the sender
+    /// waits: a handler slower than the wire slows the sender down rather than growing this
+    /// process's memory.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ruststream::nonzero;
+    /// use ruststream_zeromq::{ZmqRpc, ZmqEndpoint};
+    ///
+    /// let responder = ZmqRpc::new(ZmqEndpoint::bind("tcp://0.0.0.0:5557"))
+    ///     .read_ahead(nonzero!(64_usize));
+    /// # let _ = responder;
+    /// ```
+    pub const fn read_ahead(mut self, read_ahead: NonZeroUsize) -> Self {
+        self.read_ahead = read_ahead;
+        self
     }
 
     /// A publisher sharing this pattern's state; buildable before `connect`.
@@ -202,7 +229,7 @@ impl Broker for ZmqRpc {
             .get_or_try_init(async || {
                 self.endpoint.validate()?;
                 Ok::<_, ZmqError>(RpcShared {
-                    lifecycle: Arc::new(Lifecycle::new(self.endpoint.clone())),
+                    lifecycle: Arc::new(Lifecycle::new(self.endpoint.clone(), self.read_ahead)),
                     router_tx: Arc::new(OnceCell::new()),
                 })
             })
@@ -312,7 +339,7 @@ impl Subscribe for ConnectedZmqRpc {
         // One responder ROUTER per pattern instance: replies route through it.
         let _ = self.shared.router_tx.set(Arc::new(Mutex::new(send_half)));
 
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = self.shared.lifecycle.delivery_channel();
         let task = tokio::spawn(async move {
             loop {
                 match recv_half.recv().await {
@@ -323,9 +350,11 @@ impl Subscribe for ConnectedZmqRpc {
                         };
                         let rest: Result<zeromq::ZmqMessage, _> = frames.try_into();
                         let Ok(rest) = rest else {
-                            let _ = tx.send(Err(ZmqError::Wire(
-                                "a request needs name and payload frames".into(),
-                            )));
+                            let _ = tx
+                                .send(Err(ZmqError::Wire(
+                                    "a request needs name and payload frames".into(),
+                                )))
+                                .await;
                             continue;
                         };
                         let item = wire::decode(rest).map(|(name, mut headers, payload)| {
@@ -339,12 +368,16 @@ impl Subscribe for ConnectedZmqRpc {
                                 payload,
                             }
                         });
-                        if tx.send(item).is_err() {
+                        if tx.send(item).await.is_err() {
                             break;
                         }
                     }
                     Err(err) => {
-                        if tx.send(Err(ZmqError::Receive(err.to_string()))).is_err() {
+                        if tx
+                            .send(Err(ZmqError::Receive(err.to_string())))
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }

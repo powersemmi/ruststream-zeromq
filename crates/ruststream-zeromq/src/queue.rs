@@ -63,14 +63,15 @@ use ruststream::{
     DefaultPublish, DescribeServer, OutgoingMessage, PairError, PublishPolicy, Publisher,
     ServerSpec, Subscribe, Subscriber, Take,
 };
-use tokio::sync::{OnceCell, mpsc};
+use tokio::sync::OnceCell;
 use zeromq::prelude::*;
 use zeromq::{PullSocket, PushSocket};
 
 #[cfg(feature = "asyncapi")]
 use crate::bindings::{self, SocketPair};
 use crate::common::{
-    BATCH_MAX_WAIT, DriverHandle, Lifecycle, SharedLifecycle, WireSubscriber, send_with_retry,
+    BATCH_MAX_WAIT, DEFAULT_READ_AHEAD, DeliveryReceiver, DriverHandle, Lifecycle, SharedLifecycle,
+    WireSubscriber, send_with_retry,
 };
 use crate::endpoint::ZmqEndpoint;
 use crate::error::ZmqError;
@@ -92,6 +93,7 @@ use crate::wire;
 #[must_use]
 pub struct ZmqQueue {
     endpoint: ZmqEndpoint,
+    read_ahead: NonZeroUsize,
     cell: Arc<OnceCell<SharedLifecycle>>,
 }
 
@@ -100,8 +102,31 @@ impl ZmqQueue {
     pub fn new(endpoint: ZmqEndpoint) -> Self {
         Self {
             endpoint,
+            read_ahead: DEFAULT_READ_AHEAD,
             cell: Arc::new(OnceCell::new()),
         }
+    }
+
+    /// How many deliveries a subscription reads off its socket ahead of the handler; 1000 unless
+    /// set, the receive high-water mark `ZeroMQ` itself gives a socket.
+    ///
+    /// Past this bound the subscription stops reading, the socket's buffers fill, and the sender
+    /// waits: a handler slower than the wire slows the sender down rather than growing this
+    /// process's memory.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ruststream::nonzero;
+    /// use ruststream_zeromq::{ZmqQueue, ZmqEndpoint};
+    ///
+    /// let subscriber_side = ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555"))
+    ///     .read_ahead(nonzero!(64_usize));
+    /// # let _ = subscriber_side;
+    /// ```
+    pub const fn read_ahead(mut self, read_ahead: NonZeroUsize) -> Self {
+        self.read_ahead = read_ahead;
+        self
     }
 
     /// A publisher sharing this queue's state; buildable before `connect`.
@@ -123,7 +148,10 @@ impl Broker for ZmqQueue {
             .cell
             .get_or_try_init(async || {
                 self.endpoint.validate()?;
-                Ok::<_, ZmqError>(Arc::new(Lifecycle::new(self.endpoint.clone())))
+                Ok::<_, ZmqError>(Arc::new(Lifecycle::new(
+                    self.endpoint.clone(),
+                    self.read_ahead,
+                )))
             })
             .await?
             .clone();
@@ -195,7 +223,7 @@ impl Subscribe for ConnectedZmqQueue {
         let mut socket = PullSocket::new();
         self.lifecycle.attach_receiver(&mut socket).await?;
 
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = self.lifecycle.delivery_channel();
         let task = tokio::spawn(async move {
             loop {
                 match socket.recv().await {
@@ -206,12 +234,16 @@ impl Subscribe for ConnectedZmqQueue {
                                 headers,
                                 payload,
                             });
-                        if tx.send(item).is_err() {
+                        if tx.send(item).await.is_err() {
                             break;
                         }
                     }
                     Err(err) => {
-                        if tx.send(Err(ZmqError::Receive(err.to_string()))).is_err() {
+                        if tx
+                            .send(Err(ZmqError::Receive(err.to_string())))
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -242,11 +274,7 @@ impl std::fmt::Debug for ZmqSubscriber {
 }
 
 impl ZmqSubscriber {
-    pub(crate) fn from_parts(
-        name: String,
-        rx: mpsc::UnboundedReceiver<Result<ZmqMessage, ZmqError>>,
-        driver: DriverHandle,
-    ) -> Self {
+    pub(crate) fn from_parts(name: String, rx: DeliveryReceiver, driver: DriverHandle) -> Self {
         Self {
             name,
             inner: BufferedSubscriber::new(WireSubscriber {

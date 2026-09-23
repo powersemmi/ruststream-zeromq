@@ -63,7 +63,7 @@ The payload frame is whatever the framework's codec produced, so the peer only h
 
 - Delivery is **at most once** and there is no durability; acknowledgement is reported as `AckError::Unsupported`, never emulated.
 - A subscriber that connects after a publisher has started **misses what was sent before it arrived** (the slow joiner), and a fan-out message with no matching subscriber is dropped silently.
-- The implementation exposes **no high-water-mark configuration**: a slow reader exerts raw TCP back-pressure on senders.
+- A subscription reads **at most 1000 deliveries ahead** of its handler, or the bound its descriptor sets with `.read_ahead(n)`. Past it the subscription stops reading and the socket holds the sender back, so a slow handler slows the sender down instead of growing the service's memory. A PUB socket waits for its slowest matching subscriber the same way.
 - There is **no encryption layer**: use it on trusted networks, or inside an existing tunnel.
 - No consumer groups, no transactions, and **no native retry mechanism**: a delivery limit and a dead-letter destination declared with `.max_attempts(..)` and `.dead_letter(..)` are counted and applied by the framework, not by the transport.
 - **Nothing settles a delivery**, so a `retry_after` is served only by the copy the runtime publishes through the publisher the registration binds with `.out_retry(policy)`. The one-way patterns address their own subscription, so a mount site there names no destination; a `ZmqRpc` responder addresses nothing, so every registration on one names where its copies go or is refused before the subscription opens.
