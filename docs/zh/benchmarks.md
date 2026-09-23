@@ -32,9 +32,9 @@
 
 ## 数字 { #the-numbers }
 
-三个交错轮次中的最佳值，括号里是最差的一轮。速率那几列越大越好。
+三个交错轮次中的最佳值，括号里是中位的一轮。速率那几列越大越好。
 
-<div id="benchmark-results" data-benchmark-results="../../benchmarks/results.json" data-benchmark-labels='{"loading": "正在加载公布的结果...", "scenario": "场景", "raw": "裸客户端", "adapter": "ruststream-zeromq", "framework": "RustStream 服务", "adapterOverhead": "crate 的开销", "overhead": "总开销", "indistinguishable": "无法区分", "brokerBound": "受传输限制", "machine": "机器", "os": "操作系统", "broker": "传输", "roundTrip": "往返时间", "build": "构建", "versions": "版本", "measured": "测量于", "unavailable": "读不到结果。它们公布在 {url}。", "unknownSchema": "公布的结果声明的 schema 是 {schema}，这一页不渲染它。"}'></div>
+<div id="benchmark-results" data-benchmark-results="../../benchmarks/results.json" data-benchmark-labels='{"loading": "正在加载公布的结果...", "scenario": "场景", "raw": "裸客户端", "adapter": "ruststream-zeromq", "framework": "RustStream 服务", "adapterOverhead": "crate 的开销", "overhead": "总开销", "indistinguishable": "无法区分", "brokerBound": "受传输限制", "machine": "机器", "os": "操作系统", "broker": "传输", "roundTrip": "往返时间", "build": "构建", "versions": "版本", "measured": "测量于", "instructions": "每条消息的指令数", "allocations": "每条消息的内存分配次数", "cold": "冷启动（指令 / 分配）", "unavailable": "读不到结果。它们公布在 {url}。", "unknownSchema": "公布的结果声明的 schema 是 {schema}，这一页不渲染它。"}'></div>
 
 表格由浏览器从上一次运行写下的文档读出，所以这一页上没有任何会过期的副本。
 
@@ -57,6 +57,31 @@
 同一次运行的机器可读形式在
 [`benchmarks/results.json`](https://powersemmi.github.io/ruststream-zeromq/latest/benchmarks/results.json)，
 框架的站点用它拼出跨 Broker 的汇总表。
+
+## crate 自身的代码 { #the-crates-own-code }
+
+<div id="benchmark-code"></div>
+
+第二张表是这个 crate 自身在每条消息上的开销，是数出来的，不是计时得来的：指令数由 callgrind 统计，
+内存分配次数由 DHAT 统计。每个场景都是用户会写的那种服务，跑在生产环境的 Broker 上，绑定在回环地址的
+一个 TCP 端口上。另一端是一个在自己线程上的对端：一个裸 `zeromq` 套接字，按这个 crate 的三帧布局写消息。
+
+计入的是服务线程做的全部工作：框架的分发和编解码器，这个 crate 的订阅、帧布局和发布者，以及 `zeromq`
+客户端在这个线程上的分帧和套接字处理。对端的线程不计入，内核也不计入。
+
+对端在计数开始之前、服务还没有读取的时候写完所有消息，这些消息在内核的套接字缓冲区里等着。PUSH/PULL
+会为一个暂时不读的消费者留住它们，所以两行消费场景都用它。一个 PUSH/PULL 端点承载一条工作流，
+所以回复那一行用的是 DEALER/ROUTER：回复沿着请求进来的那条连接回到发出请求的对端。这一行的计数一直
+持续到对端读完所有回复。
+
+指令数和分配次数都是稳态下每条消息的值：1000 次投递的运行和 2000 次投递的运行之间的斜率。
+最后一列是启动服务、接受对端的连接并处理第一次投递一次性付出的开销。这些数字是绝对值，框架自身的开销
+也算在内；框架单独的开销由核心库在它的[基准测试页面](https://powersemmi.github.io/ruststream/latest/zh/benchmarks/)上公布。
+
+同一个二进制文件跑三次，消费那一行的指令数完全相同；另外两行的总数相差不到三分之一个百分点，因为对端
+读取回复的时机和凑满一批的截止时间都取决于时间。分配次数最多相差一个块。`just bench-code` 在分配次数
+超过场景声明的下限时失败，这个下限是这几次运行里的最大值再加百分之零点一；加上 `--baseline=main` 时，
+指令数多出百分之二以上也算失败。改变开销的合并请求要附上自己的数字。
 
 ## 机器 { #the-machine }
 
@@ -98,3 +123,11 @@ just bench
 没有测试台要起。这条 recipe 跑完两个场景，然后把测到的结果写回 `docs/benchmarks/results.json`。
 它要花几分钟，并且需要整台机器。消息条数不是固定的：一次试探运行会把它定下来，使得每一次被
 测量的运行在所在机器上都不短于五秒。
+
+```bash
+just bench-code
+```
+
+这条 recipe 在 valgrind 下统计代码表，并重写同一份文档里的 `code` 部分。这里同样没有测试台要起：
+服务绑定在回环地址上，对端是同一个进程里的一个套接字。它只需几秒，需要 valgrind 和基准测试运行器：
+`cargo install --locked gungraun-runner --version =0.19.4`。
