@@ -379,21 +379,30 @@ async fn second_worker(done: &Done) -> HandlerOutcome {
 
 /// The production queue policy pairs against the stand-in, so this mount site is the one a
 /// service ships - and the result is worked once, by one of the two consumers.
+///
+/// The results travel on a queue of their own. On PUSH/PULL a name is frame 0 rather than an
+/// address, so a result published on the queue the `jobs` subscription holds would come back to
+/// that subscription; the stand refuses it there, as the socket does.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_queue_policy_mounts_and_a_result_is_worked_once() {
-    let app =
-        RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(ZmqTestBroker::queue(), |b| {
-            b.include(work).out(Reply, ZmqQueuePublish);
+    let results = ZmqTestBroker::queue().bindable();
+    let to_results = results.bind(ZmqQueuePublish);
+    let app = RustStream::new(AppInfo::new("worker", "0.1.0"))
+        .with_broker_labeled("jobs", ZmqTestBroker::queue(), |b| {
+            b.include(work).out(Reply, to_results);
+        })
+        .with_broker_labeled("results", results, |b| {
             b.include(first_worker);
             b.include(second_worker);
         });
     let tb = TestApp::start(app).await.expect("the app starts");
 
-    tb.publish("jobs", &Job { id: 7 })
+    tb.broker_named("jobs")
+        .publish("jobs", &Job { id: 7 })
         .await
         .expect("the injection drives the reaction to a standstill");
 
-    tb.broker::<ZmqTestBroker<Queue>>()
+    tb.broker_named("results")
         .subscriber("results")
         .assert_called_once();
 
