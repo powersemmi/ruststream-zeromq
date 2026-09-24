@@ -70,15 +70,22 @@ use zeromq::{PubSocket, SubSocket};
 
 #[cfg(feature = "asyncapi")]
 use crate::bindings::{self, SocketPair};
+#[cfg(feature = "testing")]
+use crate::common::DeliveryReceiver;
 use crate::common::{
-    DEFAULT_READ_AHEAD, DriverHandle, Lifecycle, SharedLifecycle, delivery_channel,
+    DEFAULT_READ_AHEAD, DriverHandle, Lifecycle, Sender, SharedLifecycle, delivery_channel,
     dials_the_sender, send_with_retry,
 };
 use crate::endpoint::{Bind, Connect, Endpoint, EndpointRole, ZmqEndpoint};
 use crate::error::ZmqError;
-use crate::message::ZmqMessage;
+#[cfg(feature = "testing")]
+use crate::in_process::Pick;
 use crate::queue::ZmqSubscriber;
 use crate::wire;
+
+// A production publisher holds the socket it attached and nothing beside it.
+#[cfg(not(feature = "testing"))]
+const _: () = assert!(size_of::<Sender<PubSocket>>() == size_of::<PubSocket>());
 
 /// The PUB/SUB fan-out: each message reaches every subscriber whose name prefix matches.
 ///
@@ -189,11 +196,22 @@ impl<Role: EndpointRole> Broker for ZmqFanout<Role> {
     type Connected = ConnectedZmqFanout<Role>;
 
     async fn connect(self) -> Result<Self::Connected, Self::Error> {
+        self.connect_with(Lifecycle::new).await
+    }
+}
+
+impl<Role: EndpointRole> ZmqFanout<Role> {
+    /// The connect transition over the transport `lifecycle` builds: the sockets, or the
+    /// in-process transport the test harness connects instead.
+    pub(crate) async fn connect_with(
+        self,
+        lifecycle: fn(Endpoint) -> Lifecycle,
+    ) -> Result<ConnectedZmqFanout<Role>, ZmqError> {
         let lifecycle = self
             .cell
             .get_or_try_init(async || {
                 self.endpoint.validate()?;
-                Ok::<_, ZmqError>(Arc::new(Lifecycle::new(self.endpoint.clone())))
+                Ok::<_, ZmqError>(Arc::new(lifecycle(self.endpoint.clone())))
             })
             .await?
             .clone();
@@ -230,6 +248,11 @@ impl<Role> fmt::Debug for ConnectedZmqFanout<Role> {
 }
 
 impl<Role> ConnectedZmqFanout<Role> {
+    #[cfg(feature = "testing")]
+    pub(crate) fn lifecycle(&self) -> &Lifecycle {
+        &self.lifecycle
+    }
+
     /// The address a local subscription resolved by binding (useful with an ephemeral
     /// `tcp://...:0` endpoint); `None` until a subscription has bound.
     #[must_use]
@@ -250,6 +273,18 @@ impl<Role> ConnectedZmqFanout<Role> {
     /// name as a prefix.
     async fn open(&self, name: &str) -> Result<ZmqSubscriber, ZmqError> {
         self.lifecycle.ensure_open()?;
+        // The prefix filter is the transport's in process: it picks the subscriptions whose name
+        // prefixes a message's name frame, as a SUB socket's filter does.
+        #[cfg(feature = "testing")]
+        if let Some(bus) = self.lifecycle.in_process_bus() {
+            let slot = self.lifecycle.attach_in_process(name).await?;
+            let (rx, registration) = bus.subscribe(name, wire::read_delivery);
+            return Ok(ZmqSubscriber::from_parts(
+                name.to_owned(),
+                DeliveryReceiver::InProcess(rx),
+                DriverHandle::InProcess(registration, slot),
+            ));
+        }
         let mut socket = SubSocket::new();
         let slot = self.lifecycle.attach_receiver(&mut socket, name).await?;
         // The name frame doubles as the subscription prefix; filtering happens on the
@@ -266,12 +301,9 @@ impl<Role> ConnectedZmqFanout<Role> {
             loop {
                 match socket.recv().await {
                     Ok(message) => {
-                        let item =
-                            wire::decode(message).map(|(name, headers, payload)| ZmqMessage {
-                                name,
-                                headers,
-                                payload,
-                            });
+                        let Some(item) = wire::read_delivery(message) else {
+                            continue;
+                        };
                         if tx.send(item).await.is_err() {
                             break;
                         }
@@ -291,7 +323,7 @@ impl<Role> ConnectedZmqFanout<Role> {
         Ok(ZmqSubscriber::from_parts(
             name.to_owned(),
             rx,
-            DriverHandle { task },
+            DriverHandle::Task(task),
         ))
     }
 }
@@ -352,7 +384,7 @@ pub struct ZmqFanoutPublisher {
     // so something must serialise, and this one's uncontended lock and unlock are a pair of atomics
     // where tokio's semaphore also takes its waiter list. It costs 1.8 of the 9 points a publish
     // spends over a raw socket loop (#28).
-    socket: Arc<Mutex<Option<PubSocket>>>,
+    socket: Arc<Mutex<Option<Sender<PubSocket>>>>,
 }
 
 impl fmt::Debug for ZmqFanoutPublisher {
@@ -400,15 +432,38 @@ impl Publisher for ZmqFanoutPublisher {
         }
         let mut guard = self.socket.lock().await;
         if guard.is_none() {
-            let mut socket = PubSocket::new();
-            lifecycle.attach_sender(&mut socket).await?;
-            *guard = Some(socket);
+            *guard = Some(attach(lifecycle).await?);
         }
-        let socket = guard.as_mut().expect("just attached");
-        // PUB never reports "no peers": an unmatched message is dropped by design, so the
-        // retry helper only smooths transport-level failures.
-        send_with_retry(socket, name, frames).await
+        match guard.as_mut().expect("just attached") {
+            // PUB never reports "no peers": an unmatched message is dropped by design, so the
+            // retry helper only smooths transport-level failures.
+            Sender::Socket(socket) => send_with_retry(socket, name, frames).await,
+            #[cfg(feature = "testing")]
+            Sender::InProcess { bus, local } => {
+                let pick = if *local {
+                    Pick::Prefix(name)
+                } else {
+                    Pick::Nobody
+                };
+                bus.send(name, frames, None, pick);
+                Ok(())
+            }
+        }
     }
+}
+
+/// Attaches a PUB socket per the endpoint's side, or its in-process counterpart.
+async fn attach(lifecycle: &Lifecycle) -> Result<Sender<PubSocket>, ZmqError> {
+    #[cfg(feature = "testing")]
+    if let Some(bus) = lifecycle.in_process_bus() {
+        return Ok(Sender::InProcess {
+            bus: Arc::clone(bus),
+            local: lifecycle.local_listener().is_some(),
+        });
+    }
+    let mut socket = PubSocket::new();
+    lifecycle.attach_sender(&mut socket).await?;
+    Ok(Sender::Socket(socket))
 }
 
 /// The publish policy for [`ZmqFanoutPublisher`].
