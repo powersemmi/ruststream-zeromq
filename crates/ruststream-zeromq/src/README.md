@@ -564,32 +564,28 @@ crate rather than of a channel.
 
 # Testing
 
-The `testing` feature ships [`testing::ZmqTestBroker`], an in-process stand that reproduces this
-crate's routing with no sockets and no network. There is one stand per pattern, and the constructor
-picks it: `ZmqTestBroker::queue()`, `ZmqTestBroker::fanout()`, `ZmqTestBroker::rpc()`. Each answers
-what its own broker answers, so a routes file that compiles and starts under the harness compiles
-and starts against the socket, and each production policy pairs against the stand of its own
-pattern and no other. A stand describes itself as an in-process server over the protocol and ZMTP
-version its pattern reports, so a document generated under the harness is the one the service ships
-apart from where it says to attach.
-
-Drive it through the framework's
-[`TestApp`](https://docs.rs/ruststream/latest/ruststream/testing/index.html) harness:
+A test hands the harness the app `main` runs, and
+[`TestApp::start`](https://docs.rs/ruststream/latest/ruststream/testing/index.html) connects each
+broker of this crate in process: the production broker, its connected form and its publish
+policies, over a transport inside the test process instead of ZMTP sockets. A test addresses a
+broker by its production type, `tb.broker::<ZmqQueue>()`, or by the label it was mounted under.
+The in-process mode comes with the `testing` feature, which a service enables in its
+`[dev-dependencies]`.
 
 ```
 # #[cfg(feature = "testing")]
 # mod demo {
 use ruststream::testing::TestApp;
+use ruststream_zeromq::Connect;
 use ruststream_zeromq::queue::prelude::*;
-use ruststream_zeromq::testing::ZmqTestBroker;
 use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Outgoing)]
 struct Job {
     id: u64,
 }
 
-#[derive(Deserialize, Serialize, Outgoing)]
+#[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing)]
 #[outgoing(name = "results")]
 struct Done {
     id: u64,
@@ -600,25 +596,32 @@ async fn work(job: &Job) -> Done {
     Done { id: job.id }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_job_is_worked_and_its_result_published() {
-    let results = ZmqTestBroker::queue().bindable();
+/// The app `main` runs, and the one the tests hand the harness.
+pub fn app() -> RustStream {
+    let results = ZmqQueue::new(ZmqEndpoint::connect("tcp://sink:5556")).bindable();
     let to_results = results.bind(Publish);
-    let app = RustStream::new(AppInfo::new("worker", "0.1.0"))
-        .with_broker_labeled("jobs", ZmqTestBroker::queue(), |b| {
+    RustStream::new(AppInfo::new("worker", "0.1.0"))
+        .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
             b.include(work).out_reply(to_results);
         })
-        .with_broker_labeled("results", results, |_b| {});
-    let tb = TestApp::start(app).await.expect("the app starts");
+        .with_broker(results, |_b| {})
+}
 
-    tb.broker_named("jobs")
-        .publish("jobs", &Job { id: 7 })
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_job_is_worked_and_its_result_published() {
+    let tb = TestApp::start(app()).await.expect("the app starts");
+
+    tb.broker::<ZmqQueue>()
+        .message(&Job { id: 7 })
+        .to("jobs")
+        .publish()
         .await
-        .expect("the job is delivered");
+        .expect("the job is worked");
 
-    tb.broker_named("results")
+    tb.broker::<ZmqQueue<Connect>>()
         .published::<Done>("results")
-        .assert_called_once();
+        .assert_called_once()
+        .with(&Done { id: 7 });
 
     tb.shutdown().await.expect("the app shuts down");
 }
@@ -626,23 +629,38 @@ async fn a_job_is_worked_and_its_result_published() {
 # fn main() {}
 ```
 
-What has no counterpart in a channel is not imitated. There is no peer to connect, so a publish a
-real PUSH socket would fail after its retry window is recorded and dropped here, and a request
-timeout covers the wait for an answer alone. Delivery guarantees, high-water marks and the slow
-joiner stay transport behaviour: the loopback suites cover them, and they need no external service.
+The in-process transport carries the frames a socket carries. A publish is framed the way the
+socket publisher frames it, and a subscription reads the frames the way its socket does, so a
+header value the text frame cannot hold is refused and a request arrives stamped with the peer
+that sent it. It has no settings of its own: the side of each endpoint comes from the broker's
+type, and every refusal is the socket's, in the socket's words.
 
-Settlement is reproduced rather than softened. A delivery from a stand returns
-[`AckError::Unsupported`](ruststream::AckError::Unsupported) from `ack` and from `nack` and never
-comes back, exactly as a delivery over a socket does, so a handler that settles by retrying fails
-its test here instead of losing its message after deployment. A publish the socket would hand back
-to the service is refused the same way: once a subscription has opened on a queue stand, the
-stand's publisher sends under that subscription's name alone and refuses any other in the words
-the socket uses. A stand takes the side its broker takes - `ZmqTestBroker::queue().dialing()` for
-a `ZmqQueue<Connect>` - and on that side it refuses every publish once a subscription has opened,
-as the socket does. On the bind side it refuses a second subscription in the socket's words, and on
-the side that dials it hands what the harness injects to one worker, as a ventilator does. What the stand withholds, it withholds because the pattern does: `.batch(..)`
-on a responder does not compile against the stand either, and a responder mount or a dialing mount
-that names no retry destination is refused under the harness in the words the socket uses.
+Which subscriptions a message reaches is the pattern's own rule:
+
+* Queue. A subscription that binds takes whatever a peer pushes to its endpoint, whatever the name
+  frame says. Subscriptions that dial take a peer's pushes one at a time, in turn.
+* Fan-out. Every subscription whose name is a prefix of the message's name, on either side.
+* Request and reply. A request reaches the responder that binds, or one of the responders that
+  dial, in turn. The answer reaches the peer that asked and no subscription.
+* A publish of this service reaches its own subscription only through the listener that
+  subscription binds. On an endpoint the service dials, or binds with no subscription on it, the
+  message leaves for a peer in another process: in process it is recorded in `published` and
+  reaches no subscription.
+
+A test's input reaches a broker the way a foreign peer sends it. The service's own publishers and
+subscriptions meet the socket's refusals in process: a publish a bound queue would hand back to its
+own subscription, any publish on an endpoint a subscription dials, a second subscription on an
+endpoint the broker binds, an answer to a peer that is gone. Settlement is the socket's as well:
+`ack` and `nack` report [`AckError::Unsupported`](ruststream::AckError::Unsupported) and nothing
+comes back, so a handler that settles by retrying fails its test instead of losing its message in
+production.
+
+[`TestApp::start_live`](https://docs.rs/ruststream/latest/ruststream/testing/struct.TestApp.html#method.start_live)
+runs the same test body over real sockets. `ZeroMQ` needs no server, so a live test binds loopback
+ports and runs in every `cargo test`. Live, a test's input leaves through the broker's own
+publisher, so on a bound queue it carries the subscription's own name. Delivery guarantees,
+back-pressure and the fan-out's slow joiner belong to the sockets: a live fan-out test publishes
+until the filter has reached the publisher, and an in-process one needs no such loop.
 
 # Operations
 

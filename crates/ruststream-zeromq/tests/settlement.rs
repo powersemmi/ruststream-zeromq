@@ -1,4 +1,4 @@
-//! The stand-in settles the way the transport settles: not at all.
+//! The in-process mode settles the way the transport settles: not at all.
 //!
 //! `ZeroMQ` has no protocol frame to settle a delivery with, so a handler that asks for a retry
 //! gets none. The test that matters is the one that used to pass for the wrong reason: a retrying
@@ -11,11 +11,10 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use ruststream::prelude::*;
-use ruststream::testing::{TestApp, TestableBroker};
+use ruststream::testing::{InProcess, TestApp, TestableBroker};
 use ruststream::{
     AckError, ConnectedBroker, IncomingMessage, OutgoingMessage, Publisher, Subscribe, Subscriber,
 };
-use ruststream_zeromq::testing::{Queue, ZmqTestBroker};
 use ruststream_zeromq::{ZmqEndpoint, ZmqFanout, ZmqQueue, ZmqRpc};
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
@@ -30,17 +29,19 @@ async fn always_retry(_job: &Job) -> HandlerOutcome {
     HandlerOutcome::retry()
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_retrying_handler_is_not_called_again() {
-    let app = RustStream::new(AppInfo::new("zmq-settlement", "0.0.0")).with_broker(
-        ZmqTestBroker::queue(),
+fn worker() -> RustStream {
+    RustStream::new(AppInfo::new("zmq-settlement", "0.0.0")).with_broker(
+        ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")),
         |b| {
             b.include(always_retry);
         },
-    );
+    )
+}
 
-    let tb = TestApp::start(app).await.expect("the harness starts");
-    tb.broker::<ZmqTestBroker<Queue>>()
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_retrying_handler_is_not_called_again() {
+    let tb = TestApp::start(worker()).await.expect("the harness starts");
+    tb.broker::<ZmqQueue>()
         .message(&Job { id: 1 })
         .to("jobs")
         .publish()
@@ -48,18 +49,22 @@ async fn a_retrying_handler_is_not_called_again() {
         .expect("the job is published");
 
     // The transport cannot redeliver, so the retry the handler asked for never happens. A
-    // stand-in that requeued would report two calls and promise a guarantee production lacks.
-    tb.broker::<ZmqTestBroker<Queue>>()
+    // transport that requeued would report two calls and promise a guarantee production lacks.
+    tb.broker::<ZmqQueue>()
         .subscriber("jobs")
         .assert_called_once()
         .with(&Job { id: 1 });
+    tb.shutdown().await.expect("the app shuts down");
 }
 
 /// The settlement answer itself is the subject here, so this one reads it off the delivery
 /// rather than through the harness.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_delivery_refuses_to_settle() {
-    let connected = ZmqTestBroker::queue().connect().await.expect("connects");
+    let connected = ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"))
+        .connect_in_process()
+        .await
+        .expect("connects in process");
     let mut subscriber = connected.subscribe("jobs").await.expect("subscribes");
     connected.inject(OutgoingMessage::new("jobs", b"{\"id\":1}".as_slice()));
     connected.inject(OutgoingMessage::new("jobs", b"{\"id\":2}".as_slice()));
@@ -85,9 +90,9 @@ async fn a_delivery_refuses_to_settle() {
 
 // -- The same answer from the sockets ----------------------------------------------------------
 //
-// The stand above mirrors the handler's behaviour. What it cannot mirror is the transport: a
-// delivery over ZMTP has no frame to settle with, and the proof of that is a socket that neither
-// accepts an acknowledgement nor sends the delivery again.
+// The in-process mode above answers the handler the way the socket does. What only a socket can
+// prove is the transport: a delivery over ZMTP has no frame to settle with, and the proof of that
+// is a socket that neither accepts an acknowledgement nor sends the delivery again.
 
 /// Long enough for a handshake on a loaded machine.
 const LIVE_TIMEOUT: Duration = Duration::from_secs(10);

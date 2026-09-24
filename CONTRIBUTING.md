@@ -47,8 +47,9 @@ just test    # the test suite
 just ci      # both, plus codespell, cargo deny and zizmor
 ```
 
-The whole suite, conformance and lifecycle included, runs on loopback sockets inside `just test`:
-the two peers of a ZeroMQ exchange talk to each other directly.
+The whole suite, conformance and lifecycle included, runs inside `just test`, in process and on
+loopback sockets: the two peers of a ZeroMQ exchange talk to each other directly, so no server is
+started first.
 
 `just bench` measures what this crate and the framework's runtime cost over the raw `zeromq`
 sockets and rewrites `docs/benchmarks/results.json`. It takes minutes and wants the machine to

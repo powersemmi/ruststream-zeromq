@@ -10,6 +10,6 @@
     "Bind the retry publisher with `.out_retry(Publish)` on a `ZmqQueue` or `ZmqFanout` endpoint this service binds, which addresses its own subscription; on one it connects to, and on `ZmqRpc`, name the destination with `.out_retry(token).to(\"name\")` over another broker or a naming transform, or the registration is refused before the subscription opens.",
     "Address a reply on `ZmqRpc` with a publish transform declaring `Destination = Names` that reads the request's `reply-to` header; the reply type names no destination of its own, and `publish(\"..\")` at the mount site is the documented fallback.",
     "Batch only the one-way patterns with `.batch(n)`, assembled on the client behind a 20 ms deadline; `.batch(..)` on a `ZmqRpc` responder does not compile, and no pattern is seekable, partitioned or transactional.",
-    "Test with `ruststream::testing::TestApp` against `ZmqTestBroker::queue()`, `::fanout()` or `::rpc()` behind the `testing` feature, mounting the production policy; do not mock the broker traits."
+    "Test by handing `ruststream::testing::TestApp::start` the app `main` runs, with the `testing` feature enabled in dev-dependencies, and address a broker by its production type (`tb.broker::<ZmqQueue>()`); `TestApp::start_live` runs the same body over loopback sockets; do not mock the broker traits."
   ]
 }

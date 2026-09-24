@@ -6,6 +6,8 @@ mod bindings;
 mod common;
 mod endpoint;
 mod error;
+#[cfg(feature = "testing")]
+mod in_process;
 mod message;
 pub mod prelude;
 mod wire;
@@ -14,8 +16,6 @@ mod wire;
 pub mod fanout;
 pub mod queue;
 pub mod rpc;
-#[cfg(feature = "testing")]
-pub mod testing;
 
 pub use endpoint::{Bind, Connect, EndpointRole, ZmqEndpoint};
 pub use error::ZmqError;
