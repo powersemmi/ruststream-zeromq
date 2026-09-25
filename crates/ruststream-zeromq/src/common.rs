@@ -1,16 +1,19 @@
 //! Machinery shared by the three socket patterns.
 
-use std::future::Future;
+use std::future::{Future, poll_fn};
 use std::num::NonZeroUsize;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, PoisonError};
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
+use aliasable::boxed::AliasableBox;
 use futures::Stream;
 use ruststream::{Subscriber, nonzero};
+use selfie::SelfieMut;
+use selfie::refs::RefType;
 use tokio::sync::{OnceCell, mpsc};
-use tokio_util::sync::ReusableBoxFuture;
 use zeromq::prelude::*;
 use zeromq::{Socket, ZmqError as WireError, ZmqResult};
 
@@ -451,24 +454,36 @@ async fn retry<Attempt: Offer>(
     }
 }
 
-/// One send that owns its socket and hands it back with the outcome.
-type OwnedSend<S> = ReusableBoxFuture<'static, (S, ZmqResult<()>)>;
+/// The send the client returns for a socket, borrowing the socket for `'socket`.
+struct ClientSend;
+
+impl<'socket> RefType<'socket> for ClientSend {
+    type Ref = Pin<Box<dyn Future<Output = ZmqResult<()>> + Send + 'socket>>;
+}
+
+/// A socket at a fixed place on the heap, where the send in flight borrows it.
+type Held<S> = Pin<AliasableBox<S>>;
+
+/// A send in flight, stored beside the outbox it borrows its socket from.
+type InFlightSend<S> = SelfieMut<'static, AliasableBox<S>, ClientSend>;
 
 /// A sending socket whose send outlives the publish that started it.
 ///
 /// The client's round-robin send takes the peer it picked out of rotation and puts it back only
 /// once the frames are queued, so a send dropped while the peer applies back-pressure loses that
 /// peer for good: with one peer, every later send reports no connected peer. Each send therefore
-/// owns the socket and lives here rather than in the caller's future. A publish dropped mid-send
-/// leaves it parked, and the next publish completes it before starting its own. The retry wait
-/// runs outside it, with the socket back here, so a publish dropped while it waits sends nothing.
+/// lives here rather than in the caller's future, borrowing the socket the outbox keeps on the
+/// heap. A publish dropped mid-send leaves it parked, and the next publish completes it before
+/// starting its own. The retry wait runs outside it, with the socket back here, so a publish
+/// dropped while it waits sends nothing.
 ///
-/// The box is allocated by the first send and reused by every later one: the future is one type,
-/// so its layout never changes.
-pub(crate) struct Outbox<S> {
-    /// The socket while no send is in flight; the send owns it otherwise.
-    socket: Option<S>,
-    send: Option<OwnedSend<S>>,
+/// The socket is boxed once, when the outbox is made. A send is the client's own boxed future,
+/// stored and polled as the client returned it, so a publish adds no allocation and no indirect
+/// call to what the client already spends on it.
+pub(crate) struct Outbox<S: 'static> {
+    /// The socket while no send is in flight; the send holds it otherwise.
+    socket: Option<Held<S>>,
+    send: Option<InFlightSend<S>>,
     /// The name of a message whose publish was dropped mid-send, kept to report a failure of that
     /// send against it.
     dropped: Option<String>,
@@ -476,11 +491,11 @@ pub(crate) struct Outbox<S> {
 
 impl<S> Outbox<S>
 where
-    S: SocketSend + Send + 'static,
+    S: SocketSend + Send + Unpin + 'static,
 {
-    pub(crate) const fn new(socket: S) -> Self {
+    pub(crate) fn new(socket: S) -> Self {
         Self {
-            socket: Some(socket),
+            socket: Some(AliasableBox::from_unique_pin(Box::pin(socket))),
             send: None,
             dropped: None,
         }
@@ -498,47 +513,22 @@ where
         name: &str,
         message: zeromq::ZmqMessage,
     ) -> Result<(), ZmqError> {
+        if self.send.is_some() {
+            self.complete_dropped().await;
+        }
         retry(Parked { outbox: self, name }, message)
             .await
             .map_err(|failure| failure.into_error(name))
     }
 
-    async fn send_once(&mut self, name: &str, message: zeromq::ZmqMessage) -> ZmqResult<()> {
-        let socket = match self.socket.take() {
-            Some(socket) => socket,
-            None => self.complete_dropped().await,
-        };
-        let owned = async move {
-            let mut socket = socket;
-            let outcome = socket.send(message).await;
-            (socket, outcome)
-        };
-        let send = match &mut self.send {
-            Some(send) => {
-                send.set(owned);
-                send
-            }
-            None => self.send.insert(ReusableBoxFuture::new(owned)),
-        };
-        let mut in_flight = InFlight {
-            name,
-            dropped: &mut self.dropped,
-            done: false,
-        };
-        let (socket, outcome) = send.await;
-        in_flight.done = true;
-        self.socket = Some(socket);
-        outcome
-    }
-
-    /// Completes the send a dropped publish left parked and takes the socket back. Its outcome
+    /// Completes the send a dropped publish left parked and puts the socket back. Its outcome
     /// has no caller left, so a failure is logged against the message's name.
-    async fn complete_dropped(&mut self) -> S {
-        let send = self
-            .send
-            .as_mut()
-            .expect("the socket is out only while a send owns it");
-        let (socket, outcome) = send.await;
+    async fn complete_dropped(&mut self) {
+        let Some(send) = self.send.as_mut() else {
+            return;
+        };
+        let outcome = poll_fn(|cx| send.with_referential_mut(|send| send.as_mut().poll(cx))).await;
+        self.socket = self.send.take().map(SelfieMut::into_owned);
         let name = self.dropped.take().unwrap_or_default();
         if let Err(err) = outcome {
             let error = SendFailure::Wire(err).into_error(&name);
@@ -548,36 +538,67 @@ where
                 "a message whose publish was dropped mid-send did not leave"
             );
         }
-        socket
     }
 }
 
 /// A socket offered a message through its outbox, where a dropped offer stays parked.
-struct Parked<'a, S> {
+struct Parked<'a, S: 'static> {
     outbox: &'a mut Outbox<S>,
     name: &'a str,
 }
 
 impl<S> Offer for Parked<'_, S>
 where
-    S: SocketSend + Send + 'static,
+    S: SocketSend + Send + Unpin + 'static,
 {
+    #[inline]
     fn offer(&mut self, message: zeromq::ZmqMessage) -> impl Future<Output = ZmqResult<()>> + Send {
-        self.outbox.send_once(self.name, message)
+        let socket = self
+            .outbox
+            .socket
+            .take()
+            .expect("a parked send completes before the next offer");
+        self.outbox.send = Some(SelfieMut::new(socket, |socket| {
+            Pin::into_inner(socket).send(message)
+        }));
+        Sending {
+            outbox: &mut *self.outbox,
+            name: self.name,
+            done: false,
+        }
     }
 }
 
-/// Marks a send whose publish was dropped before the send completed, keeping its name.
-struct InFlight<'a> {
+/// The send an offer started, polled in its outbox. Dropped before it completes, it leaves the
+/// send parked there under the message's name.
+struct Sending<'a, S: 'static> {
+    outbox: &'a mut Outbox<S>,
     name: &'a str,
-    dropped: &'a mut Option<String>,
     done: bool,
 }
 
-impl Drop for InFlight<'_> {
+impl<S> Future for Sending<'_, S> {
+    type Output = ZmqResult<()>;
+
+    #[inline]
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<ZmqResult<()>> {
+        let this = &mut *self;
+        let send = this
+            .outbox
+            .send
+            .as_mut()
+            .expect("the send stays in the outbox until it completes");
+        let outcome = ready!(send.with_referential_mut(|send| send.as_mut().poll(cx)));
+        this.outbox.socket = this.outbox.send.take().map(SelfieMut::into_owned);
+        this.done = true;
+        Poll::Ready(outcome)
+    }
+}
+
+impl<S> Drop for Sending<'_, S> {
     fn drop(&mut self) {
         if !self.done {
-            *self.dropped = Some(self.name.to_owned());
+            self.outbox.dropped = Some(self.name.to_owned());
         }
     }
 }
