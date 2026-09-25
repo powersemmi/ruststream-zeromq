@@ -32,34 +32,33 @@ pub(crate) const BATCH_MAX_WAIT: Duration = Duration::from_millis(20);
 /// descriptor names another bound: the receive high-water mark `ZeroMQ` itself gives a socket.
 pub(crate) const DEFAULT_READ_AHEAD: NonZeroUsize = nonzero!(1000_usize);
 
-/// Shared lifecycle state: the endpoint, how far a subscription reads ahead of its handler, the
+/// The channel between a subscription's driver task and its handler, `read_ahead` deep.
+///
+/// Bounded, so a full channel stops the driver, the driver stops reading the socket, and the
+/// socket holds the sender back: a handler slower than the wire slows the wire down instead of
+/// accumulating the difference in memory. The bound is the connected form's own, taken from the
+/// descriptor it was connected from, so clones sharing one lifecycle keep their own bounds.
+pub(crate) fn delivery_channel(read_ahead: NonZeroUsize) -> (DeliverySender, DeliveryReceiver) {
+    mpsc::channel(read_ahead.get())
+}
+
+/// Shared lifecycle state: the endpoint, the
 /// address a local subscription resolved by binding (which is what a same-process publisher dials
 /// for the loopback arrangement), and the closed flag aliased handles trip over.
 #[derive(Debug)]
 pub(crate) struct Lifecycle {
     pub(crate) endpoint: ZmqEndpoint,
-    read_ahead: NonZeroUsize,
     pub(crate) resolved: OnceCell<String>,
     pub(crate) closed: AtomicBool,
 }
 
 impl Lifecycle {
-    pub(crate) fn new(endpoint: ZmqEndpoint, read_ahead: NonZeroUsize) -> Self {
+    pub(crate) fn new(endpoint: ZmqEndpoint) -> Self {
         Self {
             endpoint,
-            read_ahead,
             resolved: OnceCell::new(),
             closed: AtomicBool::new(false),
         }
-    }
-
-    /// The channel between a subscription's driver task and its handler.
-    ///
-    /// Bounded, so a full channel stops the driver, the driver stops reading the socket, and the
-    /// socket holds the sender back: a handler slower than the wire slows the wire down instead of
-    /// accumulating the difference in memory.
-    pub(crate) fn delivery_channel(&self) -> (DeliverySender, DeliveryReceiver) {
-        mpsc::channel(self.read_ahead.get())
     }
 
     pub(crate) fn ensure_open(&self) -> Result<(), ZmqError> {

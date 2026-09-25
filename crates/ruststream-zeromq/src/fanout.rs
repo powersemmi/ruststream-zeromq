@@ -67,7 +67,7 @@ use zeromq::{PubSocket, SubSocket};
 #[cfg(feature = "asyncapi")]
 use crate::bindings::{self, SocketPair};
 use crate::common::{
-    DEFAULT_READ_AHEAD, DriverHandle, Lifecycle, SharedLifecycle, send_with_retry,
+    DEFAULT_READ_AHEAD, DriverHandle, Lifecycle, SharedLifecycle, delivery_channel, send_with_retry,
 };
 use crate::endpoint::ZmqEndpoint;
 use crate::error::ZmqError;
@@ -149,15 +149,13 @@ impl Broker for ZmqFanout {
             .cell
             .get_or_try_init(async || {
                 self.endpoint.validate()?;
-                Ok::<_, ZmqError>(Arc::new(Lifecycle::new(
-                    self.endpoint.clone(),
-                    self.read_ahead,
-                )))
+                Ok::<_, ZmqError>(Arc::new(Lifecycle::new(self.endpoint.clone())))
             })
             .await?
             .clone();
         Ok(ConnectedZmqFanout {
             lifecycle,
+            read_ahead: self.read_ahead,
             cell: self.cell,
         })
     }
@@ -173,6 +171,8 @@ impl DescribeServer for ZmqFanout {
 #[derive(Debug)]
 pub struct ConnectedZmqFanout {
     lifecycle: SharedLifecycle,
+    /// How far this subscription reads ahead, from the descriptor this form was connected from.
+    read_ahead: NonZeroUsize,
     cell: Arc<OnceCell<SharedLifecycle>>,
 }
 
@@ -230,7 +230,7 @@ impl Subscribe for ConnectedZmqFanout {
             .await
             .map_err(|e| ZmqError::Receive(e.to_string()))?;
 
-        let (tx, rx) = self.lifecycle.delivery_channel();
+        let (tx, rx) = delivery_channel(self.read_ahead);
         let task = tokio::spawn(async move {
             loop {
                 match socket.recv().await {

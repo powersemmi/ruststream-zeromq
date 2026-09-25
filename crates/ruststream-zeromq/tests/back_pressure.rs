@@ -11,6 +11,8 @@ use ruststream::{
     Broker, ConnectedBroker, OutgoingMessage, Publisher, Subscribe, Subscriber, nonzero,
 };
 use ruststream_zeromq::{ZmqEndpoint, ZmqFanout, ZmqQueue};
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 
 /// Bodies large enough that the kernel's socket buffers hold only a handful of them, so what
 /// stops the publisher is the subscription's bound and not megabytes of socket memory.
@@ -27,18 +29,55 @@ const STALL: Duration = Duration::from_secs(2);
 const RECV_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Publishes until a send does not complete within [`STALL`], and returns how many completed.
-async fn publish_until_held<P>(publisher: &P, name: &str) -> usize
+/// Reads `subscriber` on a task of its own, answering when the first delivery arrived.
+fn read_on<S>(mut subscriber: S) -> (JoinHandle<()>, oneshot::Receiver<()>)
+where
+    S: Subscriber + Send + 'static,
+{
+    let (first_tx, first) = oneshot::channel();
+    let reader = tokio::spawn(async move {
+        let mut stream = pin!(subscriber.stream());
+        let mut first_tx = Some(first_tx);
+        while let Some(delivery) = stream.next().await {
+            delivery.expect("delivery is ok");
+            if let Some(first_tx) = first_tx.take() {
+                let _ = first_tx.send(());
+            }
+        }
+    });
+    (reader, first)
+}
+
+/// Publishes until a send does not complete within [`STALL`], then starts reading `subscriber` and
+/// asserts that very send completes once the reader makes room. Answers how many sends completed
+/// before the stall.
+///
+/// The stalled send is kept, not dropped: the claim is that the publisher is held back and then
+/// let through, and a send given up on midway proves nothing about that.
+async fn stalls_then_resumes<P, S>(publisher: &P, name: &str, subscriber: S) -> usize
 where
     P: Publisher<Options = ()>,
     P::Error: std::fmt::Debug,
+    S: Subscriber + Send + 'static,
 {
     let body = vec![0_u8; BODY];
     for sent in 0..CEILING {
-        let send = publisher.publish(OutgoingMessage::new(name, body.as_slice()), None);
-        match tokio::time::timeout(STALL, send).await {
-            Ok(outcome) => outcome.expect("publish succeeds"),
-            Err(_) => return sent,
+        let mut send = pin!(publisher.publish(OutgoingMessage::new(name, body.as_slice()), None));
+        if let Ok(outcome) = tokio::time::timeout(STALL, &mut send).await {
+            outcome.expect("publish succeeds");
+            continue;
         }
+        let (reader, first) = read_on(subscriber);
+        tokio::time::timeout(RECV_TIMEOUT, first)
+            .await
+            .expect("a held delivery arrives once the subscription is read")
+            .expect("the reader is running");
+        tokio::time::timeout(RECV_TIMEOUT, send)
+            .await
+            .expect("the held send completes once the subscription makes room")
+            .expect("publish succeeds");
+        reader.abort();
+        return sent;
     }
     CEILING
 }
@@ -50,25 +89,17 @@ async fn an_unread_queue_subscription_holds_its_publisher_back() {
         .connect()
         .await
         .expect("queue connects");
-    let mut subscriber = connected
+    let subscriber = connected
         .subscribe("jobs")
         .await
         .expect("subscription opens");
     let publisher = connected.publisher();
 
-    let accepted = publish_until_held(&publisher, "jobs").await;
+    let accepted = stalls_then_resumes(&publisher, "jobs", subscriber).await;
     assert!(
         accepted < CEILING,
         "the publisher ran {accepted} messages ahead of a subscription nobody read"
     );
-
-    // The publisher was held back, not failed: reading the subscription lets deliveries through.
-    let mut stream = pin!(subscriber.stream());
-    tokio::time::timeout(RECV_TIMEOUT, stream.next())
-        .await
-        .expect("a held delivery arrives once the subscription is read")
-        .expect("stream is open")
-        .expect("delivery is ok");
 
     connected.shutdown().await.expect("shutdown succeeds");
 }
@@ -83,7 +114,7 @@ async fn an_unread_fanout_subscription_holds_its_publisher_back() {
         .connect()
         .await
         .expect("fan-out connects");
-    let mut subscriber = connected
+    let subscriber = connected
         .subscribe("events")
         .await
         .expect("subscription opens");
@@ -91,18 +122,11 @@ async fn an_unread_fanout_subscription_holds_its_publisher_back() {
 
     // Sends before the subscription reached the publisher's filter table are dropped (the slow
     // joiner); they complete at once and only raise the count.
-    let accepted = publish_until_held(&publisher, "events").await;
+    let accepted = stalls_then_resumes(&publisher, "events", subscriber).await;
     assert!(
         accepted < CEILING,
         "the publisher ran {accepted} messages ahead of a subscription nobody read"
     );
-
-    let mut stream = pin!(subscriber.stream());
-    tokio::time::timeout(RECV_TIMEOUT, stream.next())
-        .await
-        .expect("a held delivery arrives once the subscription is read")
-        .expect("stream is open")
-        .expect("delivery is ok");
 
     connected.shutdown().await.expect("shutdown succeeds");
 }

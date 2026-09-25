@@ -90,7 +90,8 @@ use zeromq::{DealerSocket, RouterSendHalf, RouterSocket, SocketOptions};
 #[cfg(feature = "asyncapi")]
 use crate::bindings::{self, SocketPair};
 use crate::common::{
-    DEFAULT_READ_AHEAD, DriverHandle, Lifecycle, SharedLifecycle, WireSubscriber, send_with_retry,
+    DEFAULT_READ_AHEAD, DriverHandle, Lifecycle, SharedLifecycle, WireSubscriber, delivery_channel,
+    send_with_retry,
 };
 use crate::endpoint::ZmqEndpoint;
 use crate::error::ZmqError;
@@ -229,7 +230,7 @@ impl Broker for ZmqRpc {
             .get_or_try_init(async || {
                 self.endpoint.validate()?;
                 Ok::<_, ZmqError>(RpcShared {
-                    lifecycle: Arc::new(Lifecycle::new(self.endpoint.clone(), self.read_ahead)),
+                    lifecycle: Arc::new(Lifecycle::new(self.endpoint.clone())),
                     router_tx: Arc::new(OnceCell::new()),
                 })
             })
@@ -237,6 +238,7 @@ impl Broker for ZmqRpc {
             .clone();
         Ok(ConnectedZmqRpc {
             shared,
+            read_ahead: self.read_ahead,
             cell: self.cell,
         })
     }
@@ -252,6 +254,8 @@ impl DescribeServer for ZmqRpc {
 #[derive(Debug)]
 pub struct ConnectedZmqRpc {
     shared: RpcShared,
+    /// How far this subscription reads ahead, from the descriptor this form was connected from.
+    read_ahead: NonZeroUsize,
     cell: Arc<OnceCell<RpcShared>>,
 }
 
@@ -339,7 +343,7 @@ impl Subscribe for ConnectedZmqRpc {
         // One responder ROUTER per pattern instance: replies route through it.
         let _ = self.shared.router_tx.set(Arc::new(Mutex::new(send_half)));
 
-        let (tx, rx) = self.shared.lifecycle.delivery_channel();
+        let (tx, rx) = delivery_channel(self.read_ahead);
         let task = tokio::spawn(async move {
             loop {
                 match recv_half.recv().await {

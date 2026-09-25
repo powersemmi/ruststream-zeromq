@@ -71,7 +71,7 @@ use zeromq::{PullSocket, PushSocket};
 use crate::bindings::{self, SocketPair};
 use crate::common::{
     BATCH_MAX_WAIT, DEFAULT_READ_AHEAD, DeliveryReceiver, DriverHandle, Lifecycle, SharedLifecycle,
-    WireSubscriber, send_with_retry,
+    WireSubscriber, delivery_channel, send_with_retry,
 };
 use crate::endpoint::ZmqEndpoint;
 use crate::error::ZmqError;
@@ -148,15 +148,13 @@ impl Broker for ZmqQueue {
             .cell
             .get_or_try_init(async || {
                 self.endpoint.validate()?;
-                Ok::<_, ZmqError>(Arc::new(Lifecycle::new(
-                    self.endpoint.clone(),
-                    self.read_ahead,
-                )))
+                Ok::<_, ZmqError>(Arc::new(Lifecycle::new(self.endpoint.clone())))
             })
             .await?
             .clone();
         Ok(ConnectedZmqQueue {
             lifecycle,
+            read_ahead: self.read_ahead,
             cell: self.cell,
         })
     }
@@ -172,6 +170,8 @@ impl DescribeServer for ZmqQueue {
 #[derive(Debug)]
 pub struct ConnectedZmqQueue {
     lifecycle: SharedLifecycle,
+    /// How far this subscription reads ahead, from the descriptor this form was connected from.
+    read_ahead: NonZeroUsize,
     cell: Arc<OnceCell<SharedLifecycle>>,
 }
 
@@ -223,7 +223,7 @@ impl Subscribe for ConnectedZmqQueue {
         let mut socket = PullSocket::new();
         self.lifecycle.attach_receiver(&mut socket).await?;
 
-        let (tx, rx) = self.lifecycle.delivery_channel();
+        let (tx, rx) = delivery_channel(self.read_ahead);
         let task = tokio::spawn(async move {
             loop {
                 match socket.recv().await {
@@ -396,4 +396,26 @@ impl PublishPolicy<ConnectedZmqQueue> for ZmqQueuePublish {
 
 impl DefaultPublish for ConnectedZmqQueue {
     type Policy = ZmqQueuePublish;
+}
+
+#[cfg(test)]
+mod tests {
+    use ruststream::nonzero;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn clones_sharing_a_lifecycle_keep_their_own_read_ahead() {
+        let wide = ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"));
+        let narrow = wide.clone().read_ahead(nonzero!(4_usize));
+        let wide = wide.connect().await.expect("connects");
+        let narrow = narrow.connect().await.expect("connects");
+
+        assert!(
+            Arc::ptr_eq(&wide.lifecycle, &narrow.lifecycle),
+            "one lifecycle"
+        );
+        assert_eq!(wide.read_ahead, DEFAULT_READ_AHEAD);
+        assert_eq!(narrow.read_ahead, nonzero!(4_usize));
+    }
 }
