@@ -132,7 +132,7 @@ pub struct Fanout;
 pub struct Rpc;
 
 impl sealed::Sealed for Queue {
-    const FROM_PEER: Routing = Routing::Competing;
+    const FROM_PEER: Routing = Routing::AnyConsumer;
 }
 
 impl sealed::Sealed for Fanout {
@@ -140,7 +140,7 @@ impl sealed::Sealed for Fanout {
 }
 
 impl sealed::Sealed for Rpc {
-    const FROM_PEER: Routing = Routing::Competing;
+    const FROM_PEER: Routing = Routing::AnyConsumer;
 }
 
 impl TestPattern for Queue {
@@ -508,8 +508,8 @@ impl<Pattern: TestPattern, Role: EndpointRole> TestableBroker
     /// Injects a message the way the pattern's foreign peer sends it.
     ///
     /// On the queue and the responder the peer is a PUSH or a DEALER socket, which hands each
-    /// message to one of the subscriptions that dialed it, so an injection reaches one of the
-    /// subscriptions on the destination, taken in turn. On the fan-out the peer is a PUB socket,
+    /// message to one of the sockets that dialed it whatever their names, so an injection reaches
+    /// one of the stand's subscriptions, taken in turn. On the fan-out the peer is a PUB socket,
     /// so an injection reaches every subscription whose name is a prefix of the destination.
     ///
     /// It does not consult the closed flag the publishers consult: this is the harness reaching

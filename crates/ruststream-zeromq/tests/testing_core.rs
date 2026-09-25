@@ -695,3 +695,27 @@ async fn a_request_reply_pair_runs_under_the_harness() {
 
     tb.shutdown().await.expect("the app shuts down");
 }
+
+/// A foreign PUSH peer hands each message to one of the sockets that dialed it, whatever their
+/// names, so an injection on a dialing queue stand reaches the differently named workers in turn.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_injection_reaches_the_dialing_workers_whatever_their_names() {
+    let stand = ZmqTestBroker::queue()
+        .dialing()
+        .connect()
+        .await
+        .expect("the stand connects");
+    let mut billing = stand.subscribe("billing").await.expect("opens");
+    let mut shipping = stand.subscribe("shipping").await.expect("opens");
+    for payload in [b"one".as_slice(), b"two"] {
+        TestableBroker::inject(&stand, OutgoingMessage::new("jobs", payload));
+    }
+    for worker in [&mut billing, &mut shipping] {
+        let mut stream = pin!(worker.stream());
+        tokio::time::timeout(Duration::from_secs(1), stream.next())
+            .await
+            .expect("each worker takes one job")
+            .expect("stream is open")
+            .expect("delivery is ok");
+    }
+}

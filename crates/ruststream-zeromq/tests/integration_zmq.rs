@@ -511,6 +511,42 @@ where
     }
 }
 
+/// The endpoint belongs to the subscription while it is open: once it is dropped a subscription
+/// can bind it again on the same broker, and a same-process publisher reaches the new one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dropped_bound_subscription_frees_its_endpoint() {
+    let queue = ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"))
+        .connect()
+        .await
+        .expect("the queue connects");
+    drop(queue.subscribe("jobs").await.expect("the first binds"));
+
+    // The dropped subscription's task ends on the runtime; the endpoint is free once it has.
+    let mut reopened = None;
+    for _ in 0..1_000 {
+        match queue.subscribe("jobs").await {
+            Ok(subscriber) => {
+                reopened = Some(subscriber);
+                break;
+            }
+            Err(_) => tokio::task::yield_now().await,
+        }
+    }
+    let mut reopened = reopened.expect("the endpoint is free again");
+    queue
+        .publisher()
+        .publish(OutgoingMessage::new("jobs", b"again".as_slice()), None)
+        .await
+        .expect("the publisher reaches the new subscription");
+    let mut stream = pin!(reopened.stream());
+    let delivery = tokio::time::timeout(Duration::from_secs(5), stream.next())
+        .await
+        .expect("a delivery arrives")
+        .expect("stream is open")
+        .expect("delivery is ok");
+    assert_eq!(delivery.payload(), b"again");
+}
+
 /// Subscriptions that dial are separate sockets on the peer's endpoint, so two of them on one
 /// broker split the stream the peer pushes, as every worker behind a ventilator does.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -1,8 +1,8 @@
 //! Machinery shared by the three socket patterns.
 
 use std::num::NonZeroUsize;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex as StdMutex, PoisonError};
 use std::time::Duration;
 
 use futures::Stream;
@@ -48,7 +48,11 @@ pub(crate) fn delivery_channel(read_ahead: NonZeroUsize) -> (DeliverySender, Del
 #[derive(Debug)]
 pub(crate) struct Lifecycle {
     pub(crate) endpoint: Endpoint,
-    listener: OnceCell<Listener>,
+    /// The listener of the subscription bound here now; empty again once it has gone, so a later
+    /// subscription can bind the endpoint.
+    listener: Arc<StdMutex<Option<Arc<Listener>>>>,
+    /// Runs one bind at a time, so two subscriptions opening together cannot both bind.
+    binding: tokio::sync::Mutex<()>,
     /// The first subscription of this service that dialed the endpoint. The peer it reads from is
     /// the sending end of the pattern, which takes nothing, so a publisher of the same broker has
     /// nowhere to send.
@@ -67,7 +71,7 @@ pub(crate) struct Listener {
 }
 
 /// Where a sending socket attaches.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) enum SendTarget<'a> {
     /// Another process listens on the endpoint, so the socket dials it.
     Dial(&'a str),
@@ -75,12 +79,12 @@ pub(crate) enum SendTarget<'a> {
     Listen(&'a str),
     /// A subscription in this process bound the endpoint, so the socket dials the address that
     /// bind resolved to.
-    Local(&'a Listener),
+    Local(Arc<Listener>),
 }
 
-impl<'a> SendTarget<'a> {
+impl SendTarget<'_> {
     /// The address the socket attaches to.
-    pub(crate) fn address(self) -> &'a str {
+    pub(crate) fn address(&self) -> &str {
         match self {
             Self::Dial(address) | Self::Listen(address) => address,
             Self::Local(listener) => &listener.address,
@@ -92,7 +96,8 @@ impl Lifecycle {
     pub(crate) fn new(endpoint: Endpoint) -> Self {
         Self {
             endpoint,
-            listener: OnceCell::new(),
+            listener: Arc::new(StdMutex::new(None)),
+            binding: tokio::sync::Mutex::new(()),
             dialer: OnceCell::new(),
             closed: AtomicBool::new(false),
         }
@@ -105,7 +110,14 @@ impl Lifecycle {
 
     /// The address a local subscription resolved by binding, or `None` until one has bound.
     pub(crate) fn bound_address(&self) -> Option<String> {
-        self.listener.get().map(|listener| listener.address.clone())
+        self.listener().map(|listener| listener.address.clone())
+    }
+
+    fn listener(&self) -> Option<Arc<Listener>> {
+        self.listener
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     pub(crate) fn ensure_open(&self) -> Result<(), ZmqError> {
@@ -118,38 +130,42 @@ impl Lifecycle {
     /// Attaches a receiving socket for `subscription` per the endpoint's side, recording the
     /// listener on bind so a same-process publisher can dial it, and the dialing subscription on
     /// connect so a same-process publisher is refused before it dials a peer that only sends.
+    ///
+    /// On the bind side the answer is the slot the subscription holds: the subscription keeps it
+    /// for as long as its socket is open, and dropping it frees the endpoint for the next one.
     pub(crate) async fn attach_receiver<S: Socket>(
         &self,
         socket: &mut S,
         subscription: &str,
-    ) -> Result<(), ZmqError> {
+    ) -> Result<Option<BoundSlot>, ZmqError> {
         match self.endpoint.side() {
             Side::Bind => {
-                // The cell runs one bind at a time and keeps the first that succeeds, so two
-                // subscriptions opening together cannot both bind: the later one finds the
-                // listener and is refused. A bind that fails leaves the cell empty to try again.
-                let mut bound_here = false;
-                let listener = self
-                    .listener
-                    .get_or_try_init(async || {
-                        let resolved = socket.bind(self.endpoint.address()).await.map_err(|e| {
-                            ZmqError::Endpoint {
-                                endpoint: self.endpoint.address().to_owned(),
-                                source: box_err(e),
-                            }
-                        })?;
-                        bound_here = true;
-                        Ok::<_, ZmqError>(Listener {
-                            address: resolved.to_string(),
-                            subscription: subscription.to_owned(),
-                        })
-                    })
-                    .await?;
+                // One bind at a time: a subscription opening while another holds the endpoint
+                // finds its listener and is refused. A bind that fails leaves the slot empty.
+                let _binding = self.binding.lock().await;
                 // Refused at startup rather than by the type: how many subscriptions a scope
                 // mounts on one broker is decided by statements the type does not count.
-                if !bound_here {
-                    return Err(endpoint_taken(subscription, &listener.subscription));
+                if let Some(held) = self.listener() {
+                    return Err(endpoint_taken(subscription, &held.subscription));
                 }
+                let resolved =
+                    socket
+                        .bind(self.endpoint.address())
+                        .await
+                        .map_err(|e| ZmqError::Endpoint {
+                            endpoint: self.endpoint.address().to_owned(),
+                            source: box_err(e),
+                        })?;
+                let listener = Arc::new(Listener {
+                    address: resolved.to_string(),
+                    subscription: subscription.to_owned(),
+                });
+                *self.listener.lock().unwrap_or_else(PoisonError::into_inner) =
+                    Some(Arc::clone(&listener));
+                return Ok(Some(BoundSlot {
+                    slot: Arc::clone(&self.listener),
+                    listener,
+                }));
             }
             Side::Connect => {
                 socket
@@ -162,7 +178,7 @@ impl Lifecycle {
                 let _ = self.dialer.set(subscription.to_owned());
             }
         }
-        Ok(())
+        Ok(None)
     }
 
     /// Where a sending socket attaches: the endpoint itself when dialing out or when nothing in
@@ -171,7 +187,7 @@ impl Lifecycle {
     pub(crate) fn send_target(&self) -> SendTarget<'_> {
         match self.endpoint.side() {
             Side::Connect => SendTarget::Dial(self.endpoint.address()),
-            Side::Bind => self.listener.get().map_or_else(
+            Side::Bind => self.listener().map_or_else(
                 || SendTarget::Listen(self.endpoint.address()),
                 SendTarget::Local,
             ),
@@ -183,9 +199,9 @@ impl Lifecycle {
     pub(crate) async fn attach_sender<S: Socket>(
         &self,
         socket: &mut S,
-    ) -> Result<Option<&Listener>, ZmqError> {
+    ) -> Result<Option<Arc<Listener>>, ZmqError> {
         let target = self.send_target();
-        let outcome = match target {
+        let outcome = match &target {
             SendTarget::Listen(address) => socket.bind(address).await.map(|_| ()),
             SendTarget::Dial(address) => socket.connect(address).await,
             SendTarget::Local(listener) => socket.connect(&listener.address).await,
@@ -198,6 +214,26 @@ impl Lifecycle {
             SendTarget::Local(listener) => Some(listener),
             SendTarget::Dial(_) | SendTarget::Listen(_) => None,
         })
+    }
+}
+
+/// The endpoint a bound subscription holds: dropping it, when the subscription's socket closes,
+/// frees the endpoint for the next subscription, unless another has taken it since.
+#[derive(Debug)]
+pub(crate) struct BoundSlot {
+    slot: Arc<StdMutex<Option<Arc<Listener>>>>,
+    listener: Arc<Listener>,
+}
+
+impl Drop for BoundSlot {
+    fn drop(&mut self) {
+        let mut slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
+        if slot
+            .as_ref()
+            .is_some_and(|held| Arc::ptr_eq(held, &self.listener))
+        {
+            *slot = None;
+        }
     }
 }
 
