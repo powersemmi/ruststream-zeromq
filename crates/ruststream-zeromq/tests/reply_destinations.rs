@@ -6,6 +6,7 @@
 #![cfg(feature = "testing")]
 
 use std::io;
+use std::net::TcpListener;
 use std::pin::pin;
 use std::time::Duration;
 
@@ -201,6 +202,40 @@ async fn the_stand_refuses_a_publish_the_bound_queue_would_hand_back_in_the_sock
         "the refusal must name the destination and the subscription, got: {on_socket}",
     );
     assert_eq!(on_socket, on_stand);
+
+    stand.shutdown().await.expect("the stand shuts down");
+    socket.shutdown().await.expect("the queue shuts down");
+}
+
+/// A second subscription under another name cannot bind the queue endpoint the first one holds:
+/// the socket refuses it as it opens, and the stand refuses it there too, so a test finds the
+/// invalid mount at startup.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_second_name_on_a_bound_queue_is_refused_as_it_opens() {
+    // A fixed port: a second bind of port 0 would take another ephemeral port and succeed.
+    let port = TcpListener::bind("127.0.0.1:0")
+        .and_then(|listener| listener.local_addr())
+        .expect("a free port")
+        .port();
+    let socket = ZmqQueue::new(ZmqEndpoint::bind(format!("tcp://127.0.0.1:{port}")))
+        .connect()
+        .await
+        .expect("the queue connects");
+    let _jobs = socket.subscribe("jobs").await.expect("the first binds");
+    assert!(
+        socket.subscribe("other").await.is_err(),
+        "the socket refuses a second bind"
+    );
+
+    let stand = ZmqTestBroker::queue()
+        .connect()
+        .await
+        .expect("the stand connects");
+    let _stand_jobs = stand.subscribe("jobs").await.expect("the first opens");
+    assert!(
+        stand.subscribe("other").await.is_err(),
+        "the stand refuses what the socket refuses"
+    );
 
     stand.shutdown().await.expect("the stand shuts down");
     socket.shutdown().await.expect("the queue shuts down");
