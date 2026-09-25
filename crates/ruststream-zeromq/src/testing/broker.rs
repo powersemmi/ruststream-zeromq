@@ -1,5 +1,6 @@
 //! [`ZmqTestBroker`]: the in-process stands, one per socket pattern, and their connected forms.
 
+use std::any::TypeId;
 use std::fmt;
 use std::future::{Future, ready};
 use std::marker::PhantomData;
@@ -28,8 +29,10 @@ use crate::testing::subscriber::{ZmqTestRpcSubscriber, ZmqTestSubscriber};
 pub(crate) struct TestState {
     pub(crate) router: AddressRouter,
     coordinator: OnceLock<Coordinator>,
-    /// The side the stand's `Role` names, read the way the socket brokers read it.
-    side: Side,
+    /// Whether the stand dials the endpoint: the side its `Role` names, read the way the socket
+    /// brokers read it. Set by [`ZmqTestBroker::dialing`], which keeps the state a publisher or a
+    /// clone taken earlier shares.
+    dials: AtomicBool,
     /// The first subscription opened on the stand. On the bind side it stands for the
     /// subscription that binds the endpoint, which every publish of a queue then reaches; on the
     /// connect side, for the one that dials the peer that only sends.
@@ -42,15 +45,19 @@ impl TestState {
         Self {
             router: AddressRouter::default(),
             coordinator: OnceLock::new(),
-            side,
+            dials: AtomicBool::new(matches!(side, Side::Connect)),
             holder: OnceLock::new(),
             closed: AtomicBool::new(false),
         }
     }
 
     /// The side of the endpoint the stand stands in for.
-    pub(crate) const fn side(&self) -> Side {
-        self.side
+    pub(crate) fn side(&self) -> Side {
+        if self.dials.load(Ordering::Acquire) {
+            Side::Connect
+        } else {
+            Side::Bind
+        }
     }
 
     fn coordinator(&self) -> Option<&Coordinator> {
@@ -120,6 +127,18 @@ pub struct Rpc;
 impl sealed::Sealed for Queue {}
 impl sealed::Sealed for Fanout {}
 impl sealed::Sealed for Rpc {}
+/// How a foreign peer of `Pattern` reaches the subscriptions: the socket's own rule. Resolved
+/// per stand type when the harness injects, which is test code only.
+fn injection_routing<Pattern: 'static>() -> Routing {
+    if TypeId::of::<Pattern>() == TypeId::of::<Queue>() {
+        Routing::Competing
+    } else if TypeId::of::<Pattern>() == TypeId::of::<Fanout>() {
+        Routing::Prefix
+    } else {
+        Routing::Exact
+    }
+}
+
 impl TestPattern for Queue {
     const STAND: &'static str = "ZmqTestBroker::queue";
 }
@@ -188,7 +207,13 @@ impl<Pattern> ZmqTestBroker<Pattern, Bind> {
     /// # let _ = worker;
     /// ```
     pub fn dialing(self) -> ZmqTestBroker<Pattern, Connect> {
-        ZmqTestBroker::stand()
+        // The same state: a publisher or a clone taken earlier sees the dialing side too, as the
+        // handles of one socket broker share its endpoint.
+        self.state.dials.store(true, Ordering::Release);
+        ZmqTestBroker {
+            state: self.state,
+            pattern: PhantomData,
+        }
     }
 }
 
@@ -469,11 +494,10 @@ impl<Pattern: TestPattern, Role: EndpointRole> TestableBroker
         let _ = self.state.coordinator.set(coordinator);
     }
 
-    /// Injects a message the way a foreign peer would, by exact destination.
-    ///
-    /// Injection carries no pattern - a name is all the harness has - so it reaches every
-    /// subscription spelled exactly like the destination. To exercise a pattern's own rule
-    /// (competing consumers, prefix filtering), publish through that pattern's policy instead.
+    /// Injects a message the way a foreign peer of the pattern would send it: a PUSH peer hands
+    /// it to one of the queue's workers in turn, a PUB peer to every subscription whose name is a
+    /// prefix of the destination, and on the RPC pattern it reaches the subscription spelled like
+    /// the destination.
     ///
     /// It does not consult the closed flag the publishers consult: this is the harness reaching
     /// into the transport, not a handle a service holds, and it has no error to report through.
@@ -482,7 +506,7 @@ impl<Pattern: TestPattern, Role: EndpointRole> TestableBroker
             message.name(),
             Bytes::copy_from_slice(message.payload()),
             message.headers().clone(),
-            Routing::Exact,
+            injection_routing::<Pattern>(),
         );
     }
 

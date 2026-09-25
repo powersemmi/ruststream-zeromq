@@ -14,12 +14,12 @@ use std::pin::pin;
 use std::time::Duration;
 
 use bytes::Bytes;
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use ruststream::prelude::*;
 // The two `Outgoing` names live in different namespaces: the prelude's is the derive on a reply
 // type, and the value a publish transform rewrites is the type `ruststream::runtime::Outgoing`.
 use ruststream::runtime::{Bindable, Outgoing, PublishContext, RETRY_COUNT_HEADER};
-use ruststream::testing::TestApp;
+use ruststream::testing::{TestApp, TestableBroker};
 use ruststream::{
     AddressedCopies, BatchSubscriber, Broker, ConnectedBroker, IncomingMessage, NamedCopies,
     OutgoingMessage, Publisher, RedeliveryAddress, RedeliveryAddressed, Subscribe, Subscriber,
@@ -1012,4 +1012,64 @@ async fn a_connect_role_fan_out_publish_is_refused_in_the_sockets_words_on_the_s
     );
     assert_eq!(on_socket, on_stand);
     watcher.shutdown().await.expect("the watcher shuts down");
+}
+
+/// A publisher taken before the stand turned to the dialing side shares its state, as the handles
+/// of one socket broker share its endpoint: it is refused the way the dialing stand's own is.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_early_publisher_follows_the_stand_to_the_dialing_side() {
+    let bind_side = ZmqTestBroker::queue();
+    let early = bind_side.publisher();
+    let stand = bind_side
+        .dialing()
+        .connect()
+        .await
+        .expect("the stand connects");
+    let _dialed = stand
+        .subscribe("jobs")
+        .await
+        .expect("the stand subscription opens");
+
+    let refused = early
+        .publish(OutgoingMessage::new("jobs", b"copy".as_slice()), None)
+        .await
+        .expect_err("the early publisher is refused as the stand's own is")
+        .to_string();
+    assert!(refused.contains("PUSH"), "got: {refused}");
+    stand.shutdown().await.expect("the stand shuts down");
+}
+
+/// A foreign peer reaches the subscriptions by its socket's rule: a PUB peer every subscription
+/// whose name is a prefix of the topic, a PUSH peer one worker of the queue.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_injection_follows_the_patterns_rule() {
+    let fanout = ZmqTestBroker::fanout()
+        .dialing()
+        .connect()
+        .await
+        .expect("the stand connects");
+    let mut orders = fanout.subscribe("orders").await.expect("opens");
+    TestableBroker::inject(&fanout, OutgoingMessage::new("orders.eu", b"eu".as_slice()));
+    let mut stream = pin!(orders.stream());
+    let delivery = timeout(Duration::from_secs(1), stream.next())
+        .await
+        .expect("the prefix subscription receives it")
+        .expect("stream is open")
+        .expect("delivery is ok");
+    assert_eq!(delivery.payload(), b"eu");
+
+    let queue = ZmqTestBroker::queue()
+        .connect()
+        .await
+        .expect("the stand connects");
+    let mut first = queue.subscribe("jobs").await.expect("opens");
+    let mut second = queue.subscribe("jobs").await.expect("opens");
+    TestableBroker::inject(&queue, OutgoingMessage::new("jobs", b"one".as_slice()));
+    let mut received = 0;
+    for subscriber in [&mut first, &mut second] {
+        if pin!(subscriber.stream()).next().now_or_never().is_some() {
+            received += 1;
+        }
+    }
+    assert_eq!(received, 1, "one worker takes the job");
 }

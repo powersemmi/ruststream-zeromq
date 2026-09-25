@@ -388,14 +388,16 @@ impl Publisher for ZmqFanoutPublisher {
         // Framed before the socket is touched: a message that cannot be written costs no attach.
         let (name, payload, headers) = msg.into_parts();
         let frames = wire::encode_to(name, name, &headers, payload.freeze())?;
+        // Checked here rather than by the type: whether one broker both subscribes and publishes is
+        // decided by the scopes a service mounts, and the peer at the far end is the deployment's,
+        // so the refusal comes before the handshake would give it. Checked on every publish, not
+        // only on the attach: a subscription that dials after the socket attached turns the
+        // publisher's peer into its own. One load of a set-once cell.
+        if let Some(subscription) = lifecycle.dialer() {
+            return Err(dials_the_sender(name, subscription, "PUB", "fan-out"));
+        }
         let mut guard = self.socket.lock().await;
         if guard.is_none() {
-            // Checked here rather than by the type: whether one broker both subscribes and
-            // publishes is decided by the scopes a service mounts, and the peer at the far end is
-            // the deployment's, so the refusal comes before the handshake would give it.
-            if let Some(subscription) = lifecycle.dialer() {
-                return Err(dials_the_sender(name, subscription, "PUB", "fan-out"));
-            }
             let mut socket = PubSocket::new();
             lifecycle.attach_sender(&mut socket).await?;
             *guard = Some(socket);
