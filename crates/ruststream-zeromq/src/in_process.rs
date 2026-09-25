@@ -172,7 +172,7 @@ impl Bus {
         frames: WireMessage,
         identity: Option<&Bytes>,
         pick: Pick<'_>,
-    ) {
+    ) -> usize {
         let mut state = self.state();
         record(&mut state, destination, &frames);
         let chosen: Vec<_> = match pick {
@@ -201,6 +201,7 @@ impl Bus {
         if let Some(identity) = identity {
             received.push_front(identity.clone());
         }
+        let reached = chosen.len();
         for (deliveries, read) in chosen {
             let Some(delivery) = read(received.clone()) else {
                 continue;
@@ -218,6 +219,7 @@ impl Bus {
             // delivery drops here and gives its count back.
             let _ = deliveries.send(delivery);
         }
+        reached
     }
 
     /// Answers the peer whose identity leads `frames`, the way a ROUTER routes a reply: to a
@@ -235,7 +237,11 @@ impl Bus {
         let mut state = self.state();
         let waiting = match state.peers.get(&identity) {
             Some(Peer::Waiting(inbox)) => Some(inbox.clone()),
-            Some(Peer::Foreign) => None,
+            Some(Peer::Foreign) => {
+                // A foreign peer the harness connected asks once, and leaves with its answer.
+                state.peers.remove(&identity);
+                None
+            }
             None => {
                 return Err(ZmqError::Send {
                     name: destination.to_owned(),
@@ -423,7 +429,10 @@ impl TestableBroker for ConnectedZmqRpc {
                 Side::Connect => Pick::OneInTurn,
             };
             let identity = bus.foreign_peer();
-            bus.send(message.name(), foreign(&message), Some(&identity), pick);
+            if bus.send(message.name(), foreign(&message), Some(&identity), pick) == 0 {
+                // No responder took the request, so no answer will come for the peer.
+                bus.close_inbox(&identity);
+            }
         }
     }
 
@@ -462,8 +471,13 @@ pub(crate) async fn request(
 ) -> Result<ZmqMessage, ZmqError> {
     let identity = peer_identity();
     let mut inbox = bus.open_inbox(identity.clone());
+    // Disconnects the DEALER however the request ends, a caller dropping it included.
+    let _connected = Connected {
+        bus,
+        identity: &identity,
+    };
     let pick = if local { Pick::All } else { Pick::Nobody };
-    bus.send(name, frames, Some(&identity), pick);
+    let _ = bus.send(name, frames, Some(&identity), pick);
     let exchange = async {
         while let Some(reply) = inbox.recv().await {
             let (name, headers, payload) = wire::decode(reply)?;
@@ -473,9 +487,68 @@ pub(crate) async fn request(
         }
         Err(ZmqError::RequestTimeout)
     };
-    let answer = tokio::time::timeout(timeout, exchange)
+    tokio::time::timeout(timeout, exchange)
         .await
-        .unwrap_or(Err(ZmqError::RequestTimeout));
-    bus.close_inbox(&identity);
-    answer
+        .unwrap_or(Err(ZmqError::RequestTimeout))
+}
+
+/// A DEALER of this service connected at `identity` for one request.
+struct Connected<'a> {
+    bus: &'a Bus,
+    identity: &'a Bytes,
+}
+
+impl Drop for Connected<'_> {
+    fn drop(&mut self) {
+        self.bus.close_inbox(self.identity);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::FutureExt;
+    use ruststream::HeaderMap;
+
+    use super::*;
+    use crate::endpoint::ZmqEndpoint;
+
+    impl Bus {
+        fn peers(&self) -> usize {
+            self.state().peers.len()
+        }
+    }
+
+    #[tokio::test]
+    async fn an_injected_request_no_responder_takes_leaves_no_peer() {
+        let rpc = ZmqRpc::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"))
+            .connect_in_process()
+            .await
+            .expect("connects in process");
+        TestableBroker::inject(&rpc, OutgoingMessage::new("orders", b"x".as_slice()));
+        let bus = rpc.lifecycle().in_process_bus().expect("in process");
+        assert_eq!(bus.peers(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_request_dropped_while_it_waits_leaves_no_peer() {
+        let bus = Bus::default();
+        let frames = wire::encode_to(
+            "orders",
+            "orders",
+            &HeaderMap::new(),
+            Bytes::from_static(b"x"),
+        )
+        .expect("frames");
+        let pending = request(
+            &bus,
+            false,
+            "orders",
+            frames,
+            "c-1",
+            Duration::from_secs(60),
+        )
+        .now_or_never();
+        assert!(pending.is_none(), "the request was still waiting");
+        assert_eq!(bus.peers(), 0);
+    }
 }
