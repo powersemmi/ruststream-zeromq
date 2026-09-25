@@ -675,9 +675,11 @@ until the filter has reached the publisher, and an in-process one needs no such 
   sender waits, so a slow handler slows the sender down instead of growing this process's memory.
   On PUB/SUB the waiting sender is the PUB socket, held back by its slowest matching subscriber; a
   message that matches no subscriber is still dropped without an error.
-* Cancel safety: no publish here is cancel-safe. Dropping a publish future can leave a message
-  half-handed to the socket, and dropping a `request` future closes the DEALER the request went
-  out on. Publish from a task of its own and give up through the request timeout, not by
-  cancelling a `select!` arm.
+* Cancel safety: a queue publish is cancel-safe. One dropped mid-send, while the peer applies
+  back-pressure, leaves its message with the publisher, and the next publish completes that send
+  before its own. A fan-out publish and a reply are not: dropping one can leave a message
+  half-handed to the socket. Dropping a `request` future closes the DEALER the request went out on.
+  Publish those from a task of its own and give up through the request timeout, not by cancelling
+  a `select!` arm.
 * Durability: none. Nothing is stored, so a subscriber that attaches late has no backlog to read
   and a restart replays nothing.

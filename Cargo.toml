@@ -28,6 +28,8 @@ thiserror = "2.0.3"
 # it, a `zeromq` socket reader that ran out of budget woke itself inside its own fair-queue poll
 # and spun a worker thread forever.
 tokio = { version = "1.44", features = ["rt-multi-thread", "macros", "sync", "time"] }
+# The client's send is parked here when a publish is dropped mid-send; the box is reused.
+tokio-util = "0.7.10"
 tracing = "0.1.40"
 
 [workspace.lints.rust]
