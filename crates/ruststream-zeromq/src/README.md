@@ -212,7 +212,10 @@ dead-letter destination on the subscription's own endpoint does not leave the su
 spent delivery is dropped with a warning. On [`ZmqFanout`] `jobs.dead` matches the prefix `jobs`
 and arrives on the subscription that gave up on it, so a handler that keeps failing keeps making
 copies. A dead-letter destination belongs to a publisher on another endpoint - `.out_retry(token)`
-over a second broker - and the retry copies leave through it as well.
+over a second broker - and the retry copies leave through it as well: they reach that endpoint's
+subscription, not the worker's queue, so such a registration trades its retries for dead-lettering.
+A handler that should see its retries again uses `.out_retry(policy)` on its own endpoint and no
+dead-letter destination.
 
 Where a copy goes is a property of the pattern, and each pattern states it on its type.
 [`ZmqQueue`] and [`ZmqFanout`] address their own subscription, so `.out_retry(policy)` binds the

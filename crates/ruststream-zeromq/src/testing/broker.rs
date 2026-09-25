@@ -330,8 +330,22 @@ impl Subscribe for ConnectedZmqTestBroker<Queue> {
 
     /// Opens the subscription, and the first one opened holds the stand: a publish through the
     /// queue's policy then reaches it under its own name and is refused under any other, the
-    /// answer the socket gives once a subscription has bound the endpoint.
+    /// answer the socket gives once a subscription has bound the endpoint. A subscription under
+    /// another name is refused as it opens, as its socket fails to bind the endpoint the first
+    /// one holds.
     fn subscribe(&self, name: &str) -> impl Future<Output = Result<Self::Subscriber, Self::Error>> {
+        if let Some(holder) = self.state.holder.get()
+            && holder != name
+        {
+            return ready(Err(ZmqError::Endpoint {
+                endpoint: format!("the queue endpoint the subscription {holder:?} binds"),
+                source: format!(
+                    "the subscription {name:?} cannot bind it again: one queue endpoint carries \
+                     one subscription name"
+                )
+                .into(),
+            }));
+        }
         let opened = self.open(name);
         if opened.is_ok() {
             self.state.holder.get_or_init(|| name.to_owned());
