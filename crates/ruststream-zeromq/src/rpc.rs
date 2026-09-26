@@ -416,8 +416,11 @@ impl Subscribe for ConnectedZmqRpc {
             .router_tx
             .get_or_init(async || ReplyRoute::Router(Arc::new(Mutex::new(None))))
             .await;
-        if let ReplyRoute::Router(router) = route {
-            *router.lock().await = Some(send_half);
+        match route {
+            ReplyRoute::Router(router) => *router.lock().await = Some(send_half),
+            // A socket subscription never opens on a broker connected in process.
+            #[cfg(feature = "testing")]
+            ReplyRoute::InProcess(_) => {}
         }
 
         let (tx, rx) = delivery_channel(self.read_ahead);
