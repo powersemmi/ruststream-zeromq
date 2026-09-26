@@ -24,7 +24,10 @@ zeromq = { version = "0.6", default-features = false, features = ["tokio-runtime
 bytes = "1.5"
 futures = "0.3.30"
 thiserror = "2.0.3"
-tokio = { version = "1.38", features = ["rt-multi-thread", "macros", "sync", "time"] }
+# 1.44 is the first release whose cooperative budget defers the wake of a task it yields. Before
+# it, a `zeromq` socket reader that ran out of budget woke itself inside its own fair-queue poll
+# and spun a worker thread forever.
+tokio = { version = "1.44", features = ["rt-multi-thread", "macros", "sync", "time"] }
 # A send in flight lives beside the socket it borrows, so a publish dropped mid-send leaves it
 # parked instead of losing the peer the client took out of rotation: the pair is a `selfie`, the
 # socket an `aliasable` box it may alias.
