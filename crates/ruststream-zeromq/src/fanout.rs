@@ -30,8 +30,9 @@ pub use self::ZmqFanoutPublish as Publish;
 ///
 /// #[ruststream::app]
 /// fn app() -> impl App {
+///     // The watcher binds and the publishers dial it, so a retry copy returns to its listener.
 ///     RustStream::new(AppInfo::new("watcher", "0.1.0")).with_broker(
-///         ZmqFanout::new(ZmqEndpoint::connect("tcp://ml:5556")),
+///         ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")),
 ///         |b| {
 ///             b.include(handle);
 ///         },
@@ -49,16 +50,19 @@ pub mod prelude {
     pub use super::{Publish, ZmqFanout};
 }
 
+use std::fmt;
 use std::future::{Future, ready};
+use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use futures::lock::Mutex;
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::Bindings;
 use ruststream::{
     AddressedCopies, Broker, BytesMut, ConnectedBroker, DefaultPublish, DescribeServer,
-    OutgoingMessage, PairError, PublishPolicy, Publisher, ServerSpec, Subscribe, Take,
+    NamedCopies, OutgoingMessage, PairError, PublishPolicy, Publisher, ServerSpec, Subscribe, Take,
 };
 use tokio::sync::OnceCell;
 use zeromq::prelude::*;
@@ -67,15 +71,22 @@ use zeromq::{PubSocket, SubSocket};
 #[cfg(feature = "asyncapi")]
 use crate::bindings::{self, SocketPair};
 use crate::common::{
-    DEFAULT_READ_AHEAD, DriverHandle, Lifecycle, SharedLifecycle, delivery_channel, send_with_retry,
+    DEFAULT_READ_AHEAD, DriverHandle, Lifecycle, SharedLifecycle, delivery_channel,
+    dials_the_sender, send_with_retry,
 };
-use crate::endpoint::ZmqEndpoint;
+use crate::endpoint::{Bind, Connect, Endpoint, EndpointRole, ZmqEndpoint};
 use crate::error::ZmqError;
 use crate::message::ZmqMessage;
 use crate::queue::ZmqSubscriber;
 use crate::wire;
 
 /// The PUB/SUB fan-out: each message reaches every subscriber whose name prefix matches.
+///
+/// `Role` is the side of the endpoint this process takes, fixed by the endpoint's constructor:
+/// [`Bind`] for `ZmqEndpoint::bind`, [`Connect`] for `ZmqEndpoint::connect`. It decides where a
+/// retry copy goes. A subscription that binds takes a copy this service publishes to its own
+/// listener, so a mount site names no destination; one that dials reads from a PUB peer that
+/// takes nothing, so a mount site names where its copies go.
 ///
 /// # Examples
 ///
@@ -86,24 +97,36 @@ use crate::wire;
 /// let subscriber_side = ZmqFanout::new(ZmqEndpoint::connect("tcp://events:5556"));
 /// # let _ = (publisher_side, subscriber_side);
 /// ```
-#[derive(Debug, Clone)]
 #[must_use]
-pub struct ZmqFanout {
-    endpoint: ZmqEndpoint,
+pub struct ZmqFanout<Role = Bind> {
+    endpoint: Endpoint,
     read_ahead: NonZeroUsize,
     cell: Arc<OnceCell<SharedLifecycle>>,
+    role: PhantomData<fn() -> Role>,
 }
 
-impl ZmqFanout {
+impl<Role: EndpointRole> ZmqFanout<Role> {
     /// Records the endpoint. No I/O.
-    pub fn new(endpoint: ZmqEndpoint) -> Self {
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ruststream_zeromq::{ZmqEndpoint, ZmqFanout};
+    ///
+    /// let watcher = ZmqFanout::new(ZmqEndpoint::connect("tcp://events:5556"));
+    /// # let _ = watcher;
+    /// ```
+    pub fn new(endpoint: ZmqEndpoint<Role>) -> Self {
         Self {
-            endpoint,
+            endpoint: endpoint.into_inner(),
             read_ahead: DEFAULT_READ_AHEAD,
             cell: Arc::new(OnceCell::new()),
+            role: PhantomData,
         }
     }
+}
 
+impl<Role> ZmqFanout<Role> {
     /// How many deliveries a subscription reads off its socket ahead of the handler; 1000 unless
     /// set, the receive high-water mark `ZeroMQ` itself gives a socket.
     ///
@@ -140,9 +163,30 @@ impl ZmqFanout {
     }
 }
 
-impl Broker for ZmqFanout {
+// Written out rather than derived: `Role` is a type-level tag, and a derive would demand of it
+// what is only asked of the fields.
+impl<Role> Clone for ZmqFanout<Role> {
+    fn clone(&self) -> Self {
+        Self {
+            endpoint: self.endpoint.clone(),
+            read_ahead: self.read_ahead,
+            cell: Arc::clone(&self.cell),
+            role: PhantomData,
+        }
+    }
+}
+
+impl<Role> fmt::Debug for ZmqFanout<Role> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ZmqFanout")
+            .field("endpoint", &self.endpoint)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<Role: EndpointRole> Broker for ZmqFanout<Role> {
     type Error = ZmqError;
-    type Connected = ConnectedZmqFanout;
+    type Connected = ConnectedZmqFanout<Role>;
 
     async fn connect(self) -> Result<Self::Connected, Self::Error> {
         let lifecycle = self
@@ -157,26 +201,35 @@ impl Broker for ZmqFanout {
             lifecycle,
             read_ahead: self.read_ahead,
             cell: self.cell,
+            role: PhantomData,
         })
     }
 }
 
-impl DescribeServer for ZmqFanout {
+impl<Role: EndpointRole> DescribeServer for ZmqFanout<Role> {
     fn describe_server(&self) -> ServerSpec {
         self.endpoint.server_spec()
     }
 }
 
 /// The connected form of [`ZmqFanout`].
-#[derive(Debug)]
-pub struct ConnectedZmqFanout {
+pub struct ConnectedZmqFanout<Role = Bind> {
     lifecycle: SharedLifecycle,
     /// How far this subscription reads ahead, from the descriptor this form was connected from.
     read_ahead: NonZeroUsize,
     cell: Arc<OnceCell<SharedLifecycle>>,
+    role: PhantomData<fn() -> Role>,
 }
 
-impl ConnectedZmqFanout {
+impl<Role> fmt::Debug for ConnectedZmqFanout<Role> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConnectedZmqFanout")
+            .field("lifecycle", &self.lifecycle)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<Role> ConnectedZmqFanout<Role> {
     /// The address a local subscription resolved by binding (useful with an ephemeral
     /// `tcp://...:0` endpoint); `None` until a subscription has bound.
     #[must_use]
@@ -192,34 +245,10 @@ impl ConnectedZmqFanout {
             socket: Arc::new(Mutex::new(None)),
         }
     }
-}
 
-impl ConnectedBroker for ConnectedZmqFanout {
-    type Error = ZmqError;
-    type Closed = ();
-
-    fn shutdown(self) -> impl Future<Output = Result<(), Self::Error>> {
-        self.lifecycle
-            .closed
-            .store(true, std::sync::atomic::Ordering::Release);
-        ready(Ok(()))
-    }
-}
-
-impl Subscribe for ConnectedZmqFanout {
-    type Subscriber = ZmqSubscriber;
-
-    /// The subscribe name is the address, because the two ends of this pattern are the same
-    /// broker: the PUB socket a registration publishes through is attached to the endpoint the
-    /// SUB socket subscribed on, and a name is a prefix of itself, so a publish by this process
-    /// reaches its own subscriber. That is what a retry copy needs.
-    ///
-    /// The pattern's own scope applies to the copy as it does to any other message: every
-    /// subscription whose prefix matches receives it, and a publisher whose filter table has not
-    /// propagated yet drops it (the slow joiner).
-    type Copies = AddressedCopies;
-
-    async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
+    /// Opens a SUB subscription on the endpoint, bound or dialed per the side, filtering on the
+    /// name as a prefix.
+    async fn open(&self, name: &str) -> Result<ZmqSubscriber, ZmqError> {
         self.lifecycle.ensure_open()?;
         let mut socket = SubSocket::new();
         self.lifecycle.attach_receiver(&mut socket, name).await?;
@@ -265,10 +294,55 @@ impl Subscribe for ConnectedZmqFanout {
     }
 }
 
+impl<Role: EndpointRole> ConnectedBroker for ConnectedZmqFanout<Role> {
+    type Error = ZmqError;
+    type Closed = ();
+
+    fn shutdown(self) -> impl Future<Output = Result<(), Self::Error>> {
+        self.lifecycle.closed.store(true, Ordering::Release);
+        ready(Ok(()))
+    }
+}
+
+impl Subscribe for ConnectedZmqFanout<Bind> {
+    type Subscriber = ZmqSubscriber;
+
+    /// The subscribe name is the address, because the two ends of this pattern are the same
+    /// broker: the subscription binds the endpoint, the PUB socket a registration publishes
+    /// through dials that listener, and a name is a prefix of itself, so a publish by this
+    /// process reaches its own subscriber. That is what a retry copy needs.
+    ///
+    /// The pattern's own scope applies to the copy as it does to any other message: every
+    /// subscription whose prefix matches receives it, and a publisher whose filter table has not
+    /// propagated yet drops it (the slow joiner).
+    type Copies = AddressedCopies;
+
+    async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
+        self.open(name).await
+    }
+}
+
+impl Subscribe for ConnectedZmqFanout<Connect> {
+    type Subscriber = ZmqSubscriber;
+
+    /// A subscription that dials reads from the PUB peer at the endpoint, which publishes and
+    /// takes nothing, so a copy published back to it is refused by the handshake. The
+    /// subscription therefore addresses no copy, and every registration names where its copies
+    /// go: `.out_retry(policy).to("name")` over a broker that reaches a consumer, or a transform
+    /// that names one per delivery. A registration that names neither is refused before the
+    /// subscription opens, and a `.build()` chain that names neither does not compile.
+    type Copies = NamedCopies;
+
+    async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
+        self.open(name).await
+    }
+}
+
 /// Publishes to the fan-out over a lazily attached PUB socket.
 ///
 /// A message with no matching subscriber is dropped silently - that is the pattern's
-/// contract, not an error.
+/// contract, not an error. On an endpoint a subscription of this service dials, the peer there
+/// only publishes, so every publish returns [`ZmqError::Send`] naming that subscription.
 #[derive(Clone)]
 pub struct ZmqFanoutPublisher {
     cell: Arc<OnceCell<SharedLifecycle>>,
@@ -279,8 +353,8 @@ pub struct ZmqFanoutPublisher {
     socket: Arc<Mutex<Option<PubSocket>>>,
 }
 
-impl std::fmt::Debug for ZmqFanoutPublisher {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for ZmqFanoutPublisher {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ZmqFanoutPublisher").finish_non_exhaustive()
     }
 }
@@ -314,6 +388,14 @@ impl Publisher for ZmqFanoutPublisher {
         // Framed before the socket is touched: a message that cannot be written costs no attach.
         let (name, payload, headers) = msg.into_parts();
         let frames = wire::encode_to(name, name, &headers, payload.freeze())?;
+        // Checked here rather than by the type: whether one broker both subscribes and publishes is
+        // decided by the scopes a service mounts, and the peer at the far end is the deployment's,
+        // so the refusal comes before the handshake would give it. Checked on every publish, not
+        // only on the attach: a subscription that dials after the socket attached turns the
+        // publisher's peer into its own. One load of a set-once cell.
+        if let Some(subscription) = lifecycle.dialer() {
+            return Err(dials_the_sender(name, subscription, "PUB", "fan-out"));
+        }
         let mut guard = self.socket.lock().await;
         if guard.is_none() {
             let mut socket = PubSocket::new();
@@ -341,12 +423,12 @@ impl Publisher for ZmqFanoutPublisher {
 #[must_use]
 pub struct ZmqFanoutPublish;
 
-impl PublishPolicy<ConnectedZmqFanout> for ZmqFanoutPublish {
+impl<Role: EndpointRole> PublishPolicy<ConnectedZmqFanout<Role>> for ZmqFanoutPublish {
     type Live = ZmqFanoutPublisher;
 
     fn pair(
         self,
-        connected: &ConnectedZmqFanout,
+        connected: &ConnectedZmqFanout<Role>,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(connected.publisher()))
     }
@@ -359,6 +441,6 @@ impl PublishPolicy<ConnectedZmqFanout> for ZmqFanoutPublish {
     }
 }
 
-impl DefaultPublish for ConnectedZmqFanout {
+impl<Role: EndpointRole> DefaultPublish for ConnectedZmqFanout<Role> {
     type Policy = ZmqFanoutPublish;
 }

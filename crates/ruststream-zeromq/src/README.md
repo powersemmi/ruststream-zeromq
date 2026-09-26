@@ -59,8 +59,8 @@ that builds its live publisher, and a subscriber.
 
 | Broker | Sockets | Shape | Publish policy | Where a retry copy goes |
 | --- | --- | --- | --- | --- |
-| [`ZmqQueue`] | PUSH/PULL | Competing consumers, round-robin: one message reaches one consumer. | [`ZmqQueuePublish`] | The subscription addresses it. |
-| [`ZmqFanout`] | PUB/SUB | Broadcast: one message reaches every subscription whose name is a prefix of it. | [`ZmqFanoutPublish`] | The subscription addresses it. |
+| [`ZmqQueue`] | PUSH/PULL | Competing consumers, round-robin: one message reaches one consumer. | [`ZmqQueuePublish`] | Bound: the subscription addresses it. Dialed: the mount site names it. |
+| [`ZmqFanout`] | PUB/SUB | Broadcast: one message reaches every subscription whose name is a prefix of it. | [`ZmqFanoutPublish`] | Bound: the subscription addresses it. Dialed: the mount site names it. |
 | [`ZmqRpc`] | DEALER/ROUTER | Request and reply, answered per requesting peer. | [`ZmqRpcPublish`] | The mount site names it. |
 
 Each pattern's policy is also the default of its connected form, so a handler mounted with no
@@ -71,7 +71,7 @@ bare name `Publish`, so the mount site does not change. See [the prelude](#the-p
 
 # Endpoints
 
-[`ZmqEndpoint`] is an address plus the role this process takes on it, because the pattern decides
+[`ZmqEndpoint`] is an address plus the side this process takes on it, because the pattern decides
 who receives and the endpoint decides who listens:
 
 * `ZmqEndpoint::bind("tcp://0.0.0.0:5555")` - this process listens.
@@ -80,6 +80,13 @@ who receives and the endpoint decides who listens:
 
 Any other scheme is refused when the broker connects, before a socket is opened, and the error
 names the address.
+
+The side is a type. `ZmqEndpoint::bind` returns a `ZmqEndpoint<Bind>` and `ZmqEndpoint::connect` a
+`ZmqEndpoint<Connect>`, and the broker built on it carries the same [`Bind`] or [`Connect`] as its
+`Role` parameter: `ZmqQueue::new(ZmqEndpoint::connect(..))` is a `ZmqQueue<Connect>`. A mount site
+writes the side only where it names the type, as in `Router::<ZmqQueue<Connect>>::new()`; the
+parameter defaults to [`Bind`]. The side decides where a retry copy of a one-way subscription can
+go, and [Retries](#retries) shows the two mounts.
 
 An address with port zero (`tcp://127.0.0.1:0`) leaves the port to the operating system. The port
 settles when a subscription binds, and `bound_address()` on the connected form reports it, or
@@ -93,6 +100,13 @@ retry copy, or a job the service feeds itself. A message under any other name re
 [`ZmqError::Send`](ZmqError::Send), naming it and the subscription, because the subscription would
 receive it as its next delivery. A reply, a result or a dead letter therefore leaves through a
 queue on an endpoint of its own; [Replies](#replies) shows the mount.
+
+A subscription that dials reads from the sending end of its pattern - a ventilator's PUSH socket,
+a publisher's PUB socket - and that peer takes nothing. Once a subscription of this service has
+dialed the endpoint, a publish through the same [`ZmqQueue`] or [`ZmqFanout`] returns
+[`ZmqError::Send`](ZmqError::Send), naming the subscription, instead of dialing a peer the
+handshake would refuse. A broker that dials either consumes or produces; one that only publishes,
+such as a producer dialing a sink, sends as usual.
 
 The lifecycle is the framework's ladder of consuming transitions: `ZmqQueue::new(endpoint)` records
 configuration and performs no I/O, `connect` hands back [`ConnectedZmqQueue`], and `shutdown`
@@ -217,10 +231,59 @@ subscription, not the worker's queue, so such a registration trades its retries 
 A handler that should see its retries again uses `.out_retry(policy)` on its own endpoint and no
 dead-letter destination.
 
-Where a copy goes is a property of the pattern, and each pattern states it on its type.
-[`ZmqQueue`] and [`ZmqFanout`] address their own subscription, so `.out_retry(policy)` binds the
-publisher and names nothing: a retry on the queue goes back into the queue and whichever worker is
-free takes it, and a retry on the fan-out reaches the audience the original had.
+Where a copy goes is a property of the pattern and, on the one-way patterns, of the side, and the
+type states it. A [`ZmqQueue`] or [`ZmqFanout`] subscription that binds addresses itself, so
+`.out_retry(policy)` binds the publisher and names nothing: a retry on the queue goes back into the
+queue and whichever worker is free takes it, and a retry on the fan-out reaches the audience the
+original had.
+
+A subscription that dials addresses nothing, because the peer it reads from only sends. Its mount
+site names where the copies go. A worker behind a ventilator sends them to a queue it binds itself,
+where the same handler takes them:
+
+```
+use std::time::Duration;
+
+use ruststream_zeromq::queue::prelude::*;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct Job {
+    id: u64,
+}
+
+#[subscriber("jobs")]
+async fn handle(job: &Job) -> HandlerOutcome {
+    if job.id == 0 {
+        return HandlerOutcome::retry_after(Duration::from_secs(30));
+    }
+    HandlerOutcome::ack()
+}
+
+#[ruststream::app]
+fn app() -> impl App {
+    let retries = ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5560")).bindable();
+    let copies = retries.bind(Publish);
+    RustStream::new(AppInfo::new("worker", "0.1.0"))
+        .with_broker(ZmqQueue::new(ZmqEndpoint::connect("tcp://ventilator:5555")), |b| {
+            b.include(handle)
+                .max_attempts(nonzero!(5u32))
+                .out_retry(copies)
+                .to("jobs");
+        })
+        .with_broker(retries, |b| {
+            b.include(handle).max_attempts(nonzero!(5u32));
+        })
+}
+```
+
+The copies carry the framework's counter, so the cap holds across both subscriptions. A
+registration on a subscription that dials and names no destination is refused before the
+subscription opens, with an error naming the subscription and the fix, and a
+[`Router`](ruststream::runtime::Router) chain that names none does not compile. That includes a
+registration that never asks for a retry, because the runtime pairs the publisher either way. The
+worker's own queue is no destination: its publisher refuses every publish once the subscription has
+dialed, as [Endpoints](#endpoints) describes.
 
 [`ZmqRpc`] addresses nothing, because a copy of a request has no address of its own: replies route
 to the peer identity the request carried, and the reply publisher refuses a plain name. Every
@@ -568,9 +631,11 @@ comes back, exactly as a delivery over a socket does, so a handler that settles 
 its test here instead of losing its message after deployment. A publish the socket would hand back
 to the service is refused the same way: once a subscription has opened on a queue stand, the
 stand's publisher sends under that subscription's name alone and refuses any other in the words
-the socket uses. What the stand withholds, it withholds because the pattern does: `.batch(..)` on
-a responder does not compile against the stand either, and a responder mount that names no retry
-destination is refused under the harness in the words the socket uses.
+the socket uses. A stand takes the side its broker takes - `ZmqTestBroker::queue().dialing()` for
+a `ZmqQueue<Connect>` - and on that side it refuses every publish once a subscription has opened,
+as the socket does. What the stand withholds, it withholds because the pattern does: `.batch(..)`
+on a responder does not compile against the stand either, and a responder mount or a dialing mount
+that names no retry destination is refused under the harness in the words the socket uses.
 
 # Operations
 

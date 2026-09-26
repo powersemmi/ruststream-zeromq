@@ -1,5 +1,6 @@
 //! [`ZmqTestBroker`]: the in-process stands, one per socket pattern, and their connected forms.
 
+use std::any::TypeId;
 use std::fmt;
 use std::future::{Future, ready};
 use std::marker::PhantomData;
@@ -9,36 +10,61 @@ use std::sync::{Arc, OnceLock};
 use bytes::Bytes;
 use ruststream::testing::{Coordinator, TestableBroker};
 use ruststream::{
-    AddressedCopies, Broker, ConnectedBroker, DescribeServer, NamedCopies, OutgoingMessage,
-    RawMessage, ServerSpec, Subscribe,
+    AddressedCopies, Broker, ConnectedBroker, DescribeServer, HeaderMap, NamedCopies,
+    OutgoingMessage, RawMessage, ServerSpec, Subscribe,
 };
 
 #[cfg(feature = "asyncapi")]
 use crate::bindings;
-use crate::endpoint::ZMTP_VERSION;
+use crate::endpoint::{Bind, Connect, EndpointRole, Side, ZMTP_VERSION};
 use crate::error::ZmqError;
 use crate::testing::publisher::{ZmqTestPublisher, ZmqTestRpcPublisher};
 use crate::testing::router::{AddressRouter, Routing};
 use crate::testing::subscriber::{ZmqTestRpcSubscriber, ZmqTestSubscriber};
 
-/// Shared state of one in-process broker: the router, the harness coordinator, the subscription
-/// holding a queue stand, and whether the transport is still open.
-#[derive(Debug, Default)]
+/// Shared state of one in-process broker: the router, the harness coordinator, the side of the
+/// endpoint the stand stands in for, the subscription holding it, and whether the transport is
+/// still open.
+#[derive(Debug)]
 pub(crate) struct TestState {
     pub(crate) router: AddressRouter,
     coordinator: OnceLock<Coordinator>,
-    /// The first subscription opened on a queue stand. It stands for the subscription that binds
-    /// the endpoint on a socket, which every publish of the same broker then reaches.
+    /// Whether the stand dials the endpoint: the side its `Role` names, read the way the socket
+    /// brokers read it. Set by [`ZmqTestBroker::dialing`], which keeps the state a publisher or a
+    /// clone taken earlier shares.
+    dials: AtomicBool,
+    /// The first subscription opened on the stand. On the bind side it stands for the
+    /// subscription that binds the endpoint, which every publish of a queue then reaches; on the
+    /// connect side, for the one that dials the peer that only sends.
     holder: OnceLock<String>,
     closed: AtomicBool,
 }
 
 impl TestState {
+    fn new(side: Side) -> Self {
+        Self {
+            router: AddressRouter::default(),
+            coordinator: OnceLock::new(),
+            dials: AtomicBool::new(matches!(side, Side::Connect)),
+            holder: OnceLock::new(),
+            closed: AtomicBool::new(false),
+        }
+    }
+
+    /// The side of the endpoint the stand stands in for.
+    pub(crate) fn side(&self) -> Side {
+        if self.dials.load(Ordering::Acquire) {
+            Side::Connect
+        } else {
+            Side::Bind
+        }
+    }
+
     fn coordinator(&self) -> Option<&Coordinator> {
         self.coordinator.get()
     }
 
-    /// The subscription holding a queue stand, once one has opened.
+    /// The subscription holding the stand, once one has opened.
     pub(crate) fn holder(&self) -> Option<&str> {
         self.holder.get().map(String::as_str)
     }
@@ -66,13 +92,7 @@ impl TestState {
         Ok(())
     }
 
-    pub(crate) fn publish(
-        &self,
-        name: &str,
-        payload: Bytes,
-        headers: ruststream::HeaderMap,
-        routing: Routing,
-    ) {
+    pub(crate) fn publish(&self, name: &str, payload: Bytes, headers: HeaderMap, routing: Routing) {
         self.router
             .publish(name, payload, headers, routing, self.coordinator());
     }
@@ -107,6 +127,18 @@ pub struct Rpc;
 impl sealed::Sealed for Queue {}
 impl sealed::Sealed for Fanout {}
 impl sealed::Sealed for Rpc {}
+/// How a foreign peer of `Pattern` reaches the subscriptions: the socket's own rule. Resolved
+/// per stand type when the harness injects, which is test code only.
+fn injection_routing<Pattern: 'static>() -> Routing {
+    if TypeId::of::<Pattern>() == TypeId::of::<Queue>() {
+        Routing::Competing
+    } else if TypeId::of::<Pattern>() == TypeId::of::<Fanout>() {
+        Routing::Prefix
+    } else {
+        Routing::Exact
+    }
+}
+
 impl TestPattern for Queue {
     const STAND: &'static str = "ZmqTestBroker::queue";
 }
@@ -130,6 +162,9 @@ impl TestPattern for Rpc {
 /// where a retry copy is addressed - so a routes file that compiles and starts against a stand
 /// compiles and starts against the socket it stands in for.
 ///
+/// `Role` is the side of the endpoint the stand stands in for, as on the socket brokers: a
+/// constructor gives the [`Bind`] side, and [`dialing`](Self::dialing) the [`Connect`] one.
+///
 /// # Examples
 ///
 /// ```
@@ -141,15 +176,42 @@ impl TestPattern for Rpc {
 /// # let _ = (worker, watcher, responder);
 /// ```
 #[must_use]
-pub struct ZmqTestBroker<Pattern> {
+pub struct ZmqTestBroker<Pattern, Role = Bind> {
     state: Arc<TestState>,
-    pattern: PhantomData<fn() -> Pattern>,
+    pattern: PhantomData<fn() -> (Pattern, Role)>,
 }
 
-impl<Pattern> ZmqTestBroker<Pattern> {
+impl<Pattern, Role: EndpointRole> ZmqTestBroker<Pattern, Role> {
     fn stand() -> Self {
         Self {
-            state: Arc::new(TestState::default()),
+            state: Arc::new(TestState::new(Side::of::<Role>())),
+            pattern: PhantomData,
+        }
+    }
+}
+
+impl<Pattern> ZmqTestBroker<Pattern, Bind> {
+    /// The same stand on the side that dials the endpoint, as `ZmqEndpoint::connect` is.
+    ///
+    /// Synchronous and I/O-free. On this side a one-way subscription reads from a peer that only
+    /// sends, so it addresses no retry copy, and once a subscription has opened the stand's
+    /// publisher refuses every publish in the words the socket uses.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ruststream_zeromq::Connect;
+    /// use ruststream_zeromq::testing::{Queue, ZmqTestBroker};
+    ///
+    /// let worker: ZmqTestBroker<Queue, Connect> = ZmqTestBroker::queue().dialing();
+    /// # let _ = worker;
+    /// ```
+    pub fn dialing(self) -> ZmqTestBroker<Pattern, Connect> {
+        // The same state: a publisher or a clone taken earlier sees the dialing side too, as the
+        // handles of one socket broker share its endpoint.
+        self.state.dials.store(true, Ordering::Release);
+        ZmqTestBroker {
+            state: self.state,
             pattern: PhantomData,
         }
     }
@@ -160,7 +222,9 @@ impl ZmqTestBroker<Queue> {
     pub fn queue() -> Self {
         Self::stand()
     }
+}
 
+impl<Role> ZmqTestBroker<Queue, Role> {
     /// A publisher usable before `connect`, mirroring the real broker's early-publisher path.
     #[must_use]
     pub fn publisher(&self) -> ZmqTestPublisher {
@@ -173,7 +237,9 @@ impl ZmqTestBroker<Fanout> {
     pub fn fanout() -> Self {
         Self::stand()
     }
+}
 
+impl<Role> ZmqTestBroker<Fanout, Role> {
     /// A publisher usable before `connect`, mirroring the real broker's early-publisher path.
     #[must_use]
     pub fn publisher(&self) -> ZmqTestPublisher {
@@ -186,7 +252,9 @@ impl ZmqTestBroker<Rpc> {
     pub fn rpc() -> Self {
         Self::stand()
     }
+}
 
+impl<Role> ZmqTestBroker<Rpc, Role> {
     /// A publisher usable before `connect`, mirroring the real broker's early-publisher path.
     #[must_use]
     pub fn publisher(&self) -> ZmqTestRpcPublisher {
@@ -194,9 +262,9 @@ impl ZmqTestBroker<Rpc> {
     }
 }
 
-// Written out rather than derived: the marker is a type-level tag, and a derive would demand
-// `Pattern: Clone` and `Pattern: Debug` from a type that is never held.
-impl<Pattern> Clone for ZmqTestBroker<Pattern> {
+// Written out rather than derived: the markers are type-level tags, and a derive would demand
+// `Clone` and `Debug` from types that are never held.
+impl<Pattern, Role> Clone for ZmqTestBroker<Pattern, Role> {
     fn clone(&self) -> Self {
         Self {
             state: Arc::clone(&self.state),
@@ -205,13 +273,13 @@ impl<Pattern> Clone for ZmqTestBroker<Pattern> {
     }
 }
 
-impl<Pattern> fmt::Debug for ZmqTestBroker<Pattern> {
+impl<Pattern, Role> fmt::Debug for ZmqTestBroker<Pattern, Role> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ZmqTestBroker").finish_non_exhaustive()
     }
 }
 
-impl<Pattern: TestPattern> DescribeServer for ZmqTestBroker<Pattern> {
+impl<Pattern: TestPattern, Role: EndpointRole> DescribeServer for ZmqTestBroker<Pattern, Role> {
     /// A stand has no coordinate to attach to, so it describes itself as an in-process server
     /// over the `zeromq` protocol its pattern speaks, greeting with the ZMTP version the real
     /// implementation greets with.
@@ -227,9 +295,9 @@ impl<Pattern: TestPattern> DescribeServer for ZmqTestBroker<Pattern> {
     }
 }
 
-impl<Pattern: TestPattern> Broker for ZmqTestBroker<Pattern> {
+impl<Pattern: TestPattern, Role: EndpointRole> Broker for ZmqTestBroker<Pattern, Role> {
     type Error = ZmqError;
-    type Connected = ConnectedZmqTestBroker<Pattern>;
+    type Connected = ConnectedZmqTestBroker<Pattern, Role>;
 
     fn connect(self) -> impl Future<Output = Result<Self::Connected, Self::Error>> {
         ready(Ok(ConnectedZmqTestBroker {
@@ -242,27 +310,31 @@ impl<Pattern: TestPattern> Broker for ZmqTestBroker<Pattern> {
 /// The connected form of [`ZmqTestBroker`]; implements
 /// [`TestableBroker`](ruststream::testing::TestableBroker) for the harness and the conformance
 /// suite.
-pub struct ConnectedZmqTestBroker<Pattern> {
+pub struct ConnectedZmqTestBroker<Pattern, Role = Bind> {
     state: Arc<TestState>,
-    pattern: PhantomData<fn() -> Pattern>,
+    pattern: PhantomData<fn() -> (Pattern, Role)>,
 }
 
-impl<Pattern> ConnectedZmqTestBroker<Pattern> {
+impl<Pattern, Role> ConnectedZmqTestBroker<Pattern, Role> {
     /// The subscription every stand opens; the pattern decides what it is wrapped in.
+    ///
+    /// The first one opened holds the stand, as the first subscription to attach holds a socket
+    /// broker's endpoint: a publish through the stand is then refused where the socket refuses
+    /// it.
     fn open(&self, name: &str) -> Result<ZmqTestSubscriber, ZmqError> {
-        self.state.ensure_open().map(|()| {
-            let (id, rx) = self.state.router.subscribe(name.to_owned());
-            ZmqTestSubscriber::new(
-                Arc::clone(&self.state),
-                id,
-                rx,
-                self.state.coordinator().cloned(),
-            )
-        })
+        self.state.ensure_open()?;
+        let (id, rx) = self.state.router.subscribe(name.to_owned());
+        self.state.holder.get_or_init(|| name.to_owned());
+        Ok(ZmqTestSubscriber::new(
+            Arc::clone(&self.state),
+            id,
+            rx,
+            self.state.coordinator().cloned(),
+        ))
     }
 }
 
-impl<Pattern> Clone for ConnectedZmqTestBroker<Pattern> {
+impl<Pattern, Role> Clone for ConnectedZmqTestBroker<Pattern, Role> {
     fn clone(&self) -> Self {
         Self {
             state: Arc::clone(&self.state),
@@ -271,14 +343,14 @@ impl<Pattern> Clone for ConnectedZmqTestBroker<Pattern> {
     }
 }
 
-impl<Pattern> fmt::Debug for ConnectedZmqTestBroker<Pattern> {
+impl<Pattern, Role> fmt::Debug for ConnectedZmqTestBroker<Pattern, Role> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ConnectedZmqTestBroker")
             .finish_non_exhaustive()
     }
 }
 
-impl ConnectedZmqTestBroker<Queue> {
+impl<Role> ConnectedZmqTestBroker<Queue, Role> {
     /// A publisher into the queue: each message reaches one of the consumers on the destination.
     #[must_use]
     pub fn publisher(&self) -> ZmqTestPublisher {
@@ -286,7 +358,7 @@ impl ConnectedZmqTestBroker<Queue> {
     }
 }
 
-impl ConnectedZmqTestBroker<Fanout> {
+impl<Role> ConnectedZmqTestBroker<Fanout, Role> {
     /// A publisher into the fan-out: each message reaches every subscription whose name is a
     /// prefix of the destination, and none when nothing matches.
     #[must_use]
@@ -295,7 +367,7 @@ impl ConnectedZmqTestBroker<Fanout> {
     }
 }
 
-impl ConnectedZmqTestBroker<Rpc> {
+impl<Role> ConnectedZmqTestBroker<Rpc, Role> {
     /// A publisher for the request-reply exchange: it routes a reply to the address the request
     /// carried, and issues requests through [`RequestReply`](ruststream::RequestReply).
     #[must_use]
@@ -304,7 +376,9 @@ impl ConnectedZmqTestBroker<Rpc> {
     }
 }
 
-impl<Pattern: TestPattern> ConnectedBroker for ConnectedZmqTestBroker<Pattern> {
+impl<Pattern: TestPattern, Role: EndpointRole> ConnectedBroker
+    for ConnectedZmqTestBroker<Pattern, Role>
+{
     type Error = ZmqError;
     type Closed = ();
 
@@ -320,10 +394,10 @@ impl<Pattern: TestPattern> ConnectedBroker for ConnectedZmqTestBroker<Pattern> {
     }
 }
 
-impl Subscribe for ConnectedZmqTestBroker<Queue> {
+impl Subscribe for ConnectedZmqTestBroker<Queue, Bind> {
     type Subscriber = ZmqTestSubscriber;
 
-    /// What [`ConnectedZmqQueue`](crate::ConnectedZmqQueue) declares: a publish under the
+    /// What [`ConnectedZmqQueue<Bind>`](crate::ConnectedZmqQueue) declares: a publish under the
     /// subscribe name reaches the subscription, so a mount site binds the retry publisher and
     /// names no destination.
     type Copies = AddressedCopies;
@@ -354,11 +428,27 @@ impl Subscribe for ConnectedZmqTestBroker<Queue> {
     }
 }
 
-impl Subscribe for ConnectedZmqTestBroker<Fanout> {
+impl Subscribe for ConnectedZmqTestBroker<Queue, Connect> {
     type Subscriber = ZmqTestSubscriber;
 
-    /// What [`ConnectedZmqFanout`](crate::ConnectedZmqFanout) declares, for the same reason: a
-    /// name is a prefix of itself, so a publish under it comes back on the subscription.
+    /// What [`ConnectedZmqQueue<Connect>`](crate::ConnectedZmqQueue) declares: the peer a
+    /// dialing subscription reads from only pushes, so a mount site names where the copies go.
+    type Copies = NamedCopies;
+
+    /// Opens the subscription, and the first one opened holds the stand: a publish through the
+    /// queue's policy is then refused, the answer the socket gives once a subscription has
+    /// dialed the peer that only pushes.
+    fn subscribe(&self, name: &str) -> impl Future<Output = Result<Self::Subscriber, Self::Error>> {
+        ready(self.open(name))
+    }
+}
+
+impl Subscribe for ConnectedZmqTestBroker<Fanout, Bind> {
+    type Subscriber = ZmqTestSubscriber;
+
+    /// What [`ConnectedZmqFanout<Bind>`](crate::ConnectedZmqFanout) declares, for the same
+    /// reason: a name is a prefix of itself, so a publish under it comes back on the
+    /// subscription.
     type Copies = AddressedCopies;
 
     fn subscribe(&self, name: &str) -> impl Future<Output = Result<Self::Subscriber, Self::Error>> {
@@ -366,7 +456,22 @@ impl Subscribe for ConnectedZmqTestBroker<Fanout> {
     }
 }
 
-impl Subscribe for ConnectedZmqTestBroker<Rpc> {
+impl Subscribe for ConnectedZmqTestBroker<Fanout, Connect> {
+    type Subscriber = ZmqTestSubscriber;
+
+    /// What [`ConnectedZmqFanout<Connect>`](crate::ConnectedZmqFanout) declares: the peer a
+    /// dialing subscription reads from only publishes, so a mount site names where the copies go.
+    type Copies = NamedCopies;
+
+    /// Opens the subscription, and the first one opened holds the stand: a publish through the
+    /// fan-out's policy is then refused, the answer the socket gives once a subscription has
+    /// dialed the peer that only publishes.
+    fn subscribe(&self, name: &str) -> impl Future<Output = Result<Self::Subscriber, Self::Error>> {
+        ready(self.open(name))
+    }
+}
+
+impl<Role: EndpointRole> Subscribe for ConnectedZmqTestBroker<Rpc, Role> {
     /// A responder answers one request at a time, so this subscriber is deliberately no
     /// [`BatchSubscriber`](ruststream::BatchSubscriber): `.batch(..)` on a responder mount fails
     /// to compile here exactly as it fails against [`ZmqRpc`](crate::ZmqRpc).
@@ -382,16 +487,17 @@ impl Subscribe for ConnectedZmqTestBroker<Rpc> {
     }
 }
 
-impl<Pattern: TestPattern> TestableBroker for ConnectedZmqTestBroker<Pattern> {
+impl<Pattern: TestPattern, Role: EndpointRole> TestableBroker
+    for ConnectedZmqTestBroker<Pattern, Role>
+{
     fn install_coordinator(&self, coordinator: Coordinator) {
         let _ = self.state.coordinator.set(coordinator);
     }
 
-    /// Injects a message the way a foreign peer would, by exact destination.
-    ///
-    /// Injection carries no pattern - a name is all the harness has - so it reaches every
-    /// subscription spelled exactly like the destination. To exercise a pattern's own rule
-    /// (competing consumers, prefix filtering), publish through that pattern's policy instead.
+    /// Injects a message the way a foreign peer of the pattern would send it: a PUSH peer hands
+    /// it to one of the queue's workers in turn, a PUB peer to every subscription whose name is a
+    /// prefix of the destination, and on the RPC pattern it reaches the subscription spelled like
+    /// the destination.
     ///
     /// It does not consult the closed flag the publishers consult: this is the harness reaching
     /// into the transport, not a handle a service holds, and it has no error to report through.
@@ -400,7 +506,7 @@ impl<Pattern: TestPattern> TestableBroker for ConnectedZmqTestBroker<Pattern> {
             message.name(),
             Bytes::copy_from_slice(message.payload()),
             message.headers().clone(),
-            Routing::Exact,
+            injection_routing::<Pattern>(),
         );
     }
 
@@ -409,6 +515,9 @@ impl<Pattern: TestPattern> TestableBroker for ConnectedZmqTestBroker<Pattern> {
     }
 }
 
-ruststream::register_testable_broker!(ConnectedZmqTestBroker<Queue>);
-ruststream::register_testable_broker!(ConnectedZmqTestBroker<Fanout>);
-ruststream::register_testable_broker!(ConnectedZmqTestBroker<Rpc>);
+ruststream::register_testable_broker!(ConnectedZmqTestBroker<Queue, Bind>);
+ruststream::register_testable_broker!(ConnectedZmqTestBroker<Queue, Connect>);
+ruststream::register_testable_broker!(ConnectedZmqTestBroker<Fanout, Bind>);
+ruststream::register_testable_broker!(ConnectedZmqTestBroker<Fanout, Connect>);
+ruststream::register_testable_broker!(ConnectedZmqTestBroker<Rpc, Bind>);
+ruststream::register_testable_broker!(ConnectedZmqTestBroker<Rpc, Connect>);

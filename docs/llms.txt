@@ -15,7 +15,7 @@ This site holds the entry pages. The crate's guide is its module overview on doc
 
 - [Overview](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html): the transport, what it does not do, and a service
 - [The three patterns](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#the-three-patterns): which pattern fits which messaging shape
-- [Endpoints](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#endpoints): `ZmqEndpoint::bind` and `ZmqEndpoint::connect` on `tcp://` and `ipc://`
+- [Endpoints](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#endpoints): `ZmqEndpoint::bind` and `ZmqEndpoint::connect` on `tcp://` and `ipc://`, and the side the broker carries as its type
 - [Subscribing](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#subscribing): subscriptions, client-side batches and retries republished by the framework
 - [Publishing](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#publishing): publish policies, replies, and request and reply on `ZmqRpc`
 - [The wire contract](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#the-wire-contract): the three-frame layout a non-Rust peer composes messages against
