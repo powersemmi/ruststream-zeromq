@@ -50,6 +50,7 @@ pub mod prelude {
 }
 
 use std::future::{Future, ready};
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use futures::lock::Mutex;
@@ -59,13 +60,15 @@ use ruststream::{
     AddressedCopies, Broker, BytesMut, ConnectedBroker, DefaultPublish, DescribeServer,
     OutgoingMessage, PairError, PublishPolicy, Publisher, ServerSpec, Subscribe, Take,
 };
-use tokio::sync::{OnceCell, mpsc};
+use tokio::sync::OnceCell;
 use zeromq::prelude::*;
 use zeromq::{PubSocket, SubSocket};
 
 #[cfg(feature = "asyncapi")]
 use crate::bindings::{self, SocketPair};
-use crate::common::{DriverHandle, Lifecycle, SharedLifecycle, send_with_retry};
+use crate::common::{
+    DEFAULT_READ_AHEAD, DriverHandle, Lifecycle, SharedLifecycle, delivery_channel, send_with_retry,
+};
 use crate::endpoint::ZmqEndpoint;
 use crate::error::ZmqError;
 use crate::message::ZmqMessage;
@@ -87,6 +90,7 @@ use crate::wire;
 #[must_use]
 pub struct ZmqFanout {
     endpoint: ZmqEndpoint,
+    read_ahead: NonZeroUsize,
     cell: Arc<OnceCell<SharedLifecycle>>,
 }
 
@@ -95,8 +99,35 @@ impl ZmqFanout {
     pub fn new(endpoint: ZmqEndpoint) -> Self {
         Self {
             endpoint,
+            read_ahead: DEFAULT_READ_AHEAD,
             cell: Arc::new(OnceCell::new()),
         }
+    }
+
+    /// How many deliveries a subscription reads off its socket ahead of the handler; 1000 unless
+    /// set, the receive high-water mark `ZeroMQ` itself gives a socket.
+    ///
+    /// Past this bound the subscription stops reading, the socket's buffers fill, and the sender
+    /// waits: a handler slower than the wire slows the sender down rather than growing this
+    /// process's memory.
+    ///
+    /// On PUB/SUB the sender that is held back is the PUB socket, and it waits for its slowest
+    /// matching subscriber: the `zeromq` implementation writes a message to each matching peer in
+    /// turn.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ruststream::nonzero;
+    /// use ruststream_zeromq::{ZmqFanout, ZmqEndpoint};
+    ///
+    /// let subscriber_side = ZmqFanout::new(ZmqEndpoint::connect("tcp://events:5556"))
+    ///     .read_ahead(nonzero!(64_usize));
+    /// # let _ = subscriber_side;
+    /// ```
+    pub const fn read_ahead(mut self, read_ahead: NonZeroUsize) -> Self {
+        self.read_ahead = read_ahead;
+        self
     }
 
     /// A publisher sharing this fan-out's state; buildable before `connect`.
@@ -124,6 +155,7 @@ impl Broker for ZmqFanout {
             .clone();
         Ok(ConnectedZmqFanout {
             lifecycle,
+            read_ahead: self.read_ahead,
             cell: self.cell,
         })
     }
@@ -139,6 +171,8 @@ impl DescribeServer for ZmqFanout {
 #[derive(Debug)]
 pub struct ConnectedZmqFanout {
     lifecycle: SharedLifecycle,
+    /// How far this subscription reads ahead, from the descriptor this form was connected from.
+    read_ahead: NonZeroUsize,
     cell: Arc<OnceCell<SharedLifecycle>>,
 }
 
@@ -196,7 +230,7 @@ impl Subscribe for ConnectedZmqFanout {
             .await
             .map_err(|e| ZmqError::Receive(e.to_string()))?;
 
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = delivery_channel(self.read_ahead);
         let task = tokio::spawn(async move {
             loop {
                 match socket.recv().await {
@@ -207,12 +241,16 @@ impl Subscribe for ConnectedZmqFanout {
                                 headers,
                                 payload,
                             });
-                        if tx.send(item).is_err() {
+                        if tx.send(item).await.is_err() {
                             break;
                         }
                     }
                     Err(err) => {
-                        if tx.send(Err(ZmqError::Receive(err.to_string()))).is_err() {
+                        if tx
+                            .send(Err(ZmqError::Receive(err.to_string())))
+                            .await
+                            .is_err()
+                        {
                             break;
                         }
                     }
