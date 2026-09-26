@@ -17,7 +17,7 @@ use ruststream::runtime::{
     AppInfo, DefaultSlot, ForReply, HandlerOutcome, Names, Out, Outgoing, PublishContext,
     PublishTransform, Reply, RustStream,
 };
-use ruststream::testing::TestApp;
+use ruststream::testing::{TestApp, TestableBroker};
 use ruststream::{
     Broker, ConnectedBroker, IncomingMessage, Outgoing, OutgoingMessage, Publisher, RequestReply,
     Str, Subscribe, Subscriber, subscriber,
@@ -25,7 +25,9 @@ use ruststream::{
 use ruststream_zeromq::testing::{
     ConnectedZmqTestBroker, Fanout, Queue, Rpc, ZmqTestBroker, ZmqTestSubscriber,
 };
-use ruststream_zeromq::{ZmqError, ZmqFanoutPublish, ZmqQueuePublish, ZmqRpcPublish};
+use ruststream_zeromq::{
+    ZmqEndpoint, ZmqError, ZmqFanoutPublish, ZmqQueue, ZmqQueuePublish, ZmqRpcPublish,
+};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
@@ -187,20 +189,21 @@ async fn answering_after_shutdown_errors() {
     }
 }
 
-/// PUSH hands each message to one of the peers connected to it, so mounting a second worker
-/// spreads the load instead of doubling the work. The stand-in picks in subscription order.
+/// PUSH hands each message to one of the peers connected to it, so a second worker dialing the
+/// ventilator spreads the load instead of doubling the work. The stand-in picks in subscription
+/// order, and an injection is the ventilator's push.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_queue_hands_each_message_to_one_consumer_in_turn() {
-    let broker = queue().await;
+    let broker = ZmqTestBroker::queue()
+        .dialing()
+        .connect()
+        .await
+        .expect("the queue stand connects");
     let mut first = broker.subscribe("jobs").await.expect("the first worker");
     let mut second = broker.subscribe("jobs").await.expect("the second worker");
-    let publisher = broker.publisher();
 
     for payload in [b"one".as_slice(), b"two".as_slice(), b"three".as_slice()] {
-        publisher
-            .publish(OutgoingMessage::new("jobs", payload), None)
-            .await
-            .expect("the publish succeeds");
+        broker.inject(OutgoingMessage::new("jobs", payload));
     }
 
     assert_eq!(next_payload(&mut first).await, b"one");
@@ -208,29 +211,27 @@ async fn the_queue_hands_each_message_to_one_consumer_in_turn() {
     assert_eq!(next_payload(&mut first).await, b"three");
     expect_idle(
         &mut second,
-        "a queued message goes to one consumer, so the second worker must not see `three` too",
+        "a pushed message goes to one consumer, so the second worker must not see `three` too",
     )
     .await;
 
     broker.shutdown().await.expect("the broker shuts down");
 }
 
-/// PUB/SUB filters by name prefix on the publisher side, and drops what no subscription matches.
+/// PUB/SUB filters by name prefix on the publisher side: a message from the PUB peer the
+/// watchers dial reaches every subscription whose name prefixes it, and none other.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_fanout_delivers_to_every_prefix_match_and_drops_the_rest() {
-    let broker = fanout().await;
+async fn a_fan_out_peer_reaches_every_prefix_match_and_nothing_else() {
+    let broker = ZmqTestBroker::fanout()
+        .dialing()
+        .connect()
+        .await
+        .expect("the fan-out stand connects");
     let mut eu = broker.subscribe("orders.eu").await.expect("the eu watcher");
     let mut all = broker.subscribe("orders").await.expect("the broad watcher");
     let mut other = broker.subscribe("shipments").await.expect("the outsider");
-    let publisher = broker.publisher();
 
-    publisher
-        .publish(
-            OutgoingMessage::new("orders.eu.1", b"kept".as_slice()),
-            None,
-        )
-        .await
-        .expect("the publish succeeds");
+    broker.inject(OutgoingMessage::new("orders.eu.1", b"kept".as_slice()));
 
     assert_eq!(next_payload(&mut eu).await, b"kept");
     assert_eq!(next_payload(&mut all).await, b"kept");
@@ -240,7 +241,26 @@ async fn the_fanout_delivers_to_every_prefix_match_and_drops_the_rest() {
     )
     .await;
 
-    // Nothing matches this one: the pattern drops it rather than failing the publish.
+    broker.shutdown().await.expect("the broker shuts down");
+}
+
+/// The fan-out's own publisher keeps the same filter, and drops what no subscription matches
+/// rather than failing the publish.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_fanout_publisher_keeps_the_prefix_and_drops_the_rest() {
+    let broker = fanout().await;
+    let mut all = broker.subscribe("orders").await.expect("the watcher");
+    let publisher = broker.publisher();
+
+    publisher
+        .publish(
+            OutgoingMessage::new("orders.eu.1", b"kept".as_slice()),
+            None,
+        )
+        .await
+        .expect("the publish succeeds");
+    assert_eq!(next_payload(&mut all).await, b"kept");
+
     publisher
         .publish(
             OutgoingMessage::new("unheard.1", b"dropped".as_slice()),
@@ -248,7 +268,7 @@ async fn the_fanout_delivers_to_every_prefix_match_and_drops_the_rest() {
         )
         .await
         .expect("an unmatched fan-out publish is not an error");
-    expect_idle(&mut eu, "an unmatched message reaches no subscription").await;
+    expect_idle(&mut all, "an unmatched message reaches no subscription").await;
 
     broker.shutdown().await.expect("the broker shuts down");
 }
@@ -378,7 +398,7 @@ async fn second_worker(done: &Done) -> HandlerOutcome {
 }
 
 /// The production queue policy pairs against the stand-in, so this mount site is the one a
-/// service ships - and the result is worked once, by one of the two consumers.
+/// service ships, and the result reaches the subscription that holds the results queue.
 ///
 /// The results travel on a queue of their own. On PUSH/PULL a name is frame 0 rather than an
 /// address, so a result published on the queue the `jobs` subscription holds would come back to
@@ -393,12 +413,43 @@ async fn the_queue_policy_mounts_and_a_result_is_worked_once() {
         })
         .with_broker_labeled("results", results, |b| {
             b.include(first_worker);
-            b.include(second_worker);
         });
     let tb = TestApp::start(app).await.expect("the app starts");
 
     tb.broker_named("jobs")
         .publish("jobs", &Job { id: 7 })
+        .await
+        .expect("the injection drives the reaction to a standstill");
+
+    tb.broker_named("results")
+        .subscriber("results")
+        .assert_called_once();
+
+    tb.shutdown().await.expect("the app shuts down");
+}
+
+/// Two workers that dial one ventilator compete for its pushes, so a result is worked once, by
+/// one of them. Each mount names where its retry copies go, because the peer they read from
+/// takes nothing back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_workers_dialing_one_peer_work_a_result_once() {
+    let retries = ZmqTestBroker::queue().bindable();
+    let first_copies = retries.bind(ZmqQueuePublish);
+    let second_copies = retries.bind(ZmqQueuePublish);
+    let app = RustStream::new(AppInfo::new("worker", "0.1.0"))
+        .with_broker_labeled("results", ZmqTestBroker::queue().dialing(), |b| {
+            b.include(first_worker)
+                .out_retry(first_copies)
+                .to("results");
+            b.include(second_worker)
+                .out_retry(second_copies)
+                .to("results");
+        })
+        .with_broker_labeled("retries", retries, |_b| {});
+    let tb = TestApp::start(app).await.expect("the app starts");
+
+    tb.broker_named("results")
+        .publish("results", &Done { id: 3 })
         .await
         .expect("the injection drives the reaction to a standstill");
 
@@ -420,18 +471,18 @@ async fn auditor(note: &Note) -> HandlerOutcome {
     HandlerOutcome::ack()
 }
 
-/// A mount that names no reply policy takes its own pattern's default, so a fan-out reply still
-/// reaches every prefix match.
+/// A mount that names no reply policy takes its own pattern's default, so a fan-out reply leaves
+/// through the fan-out.
 ///
-/// A stand that answered the queue's default instead would route this reply to the exact name and
-/// deliver it to nobody, and the mount would only find that out on deployment.
+/// A stand that answered the queue's default instead would refuse this reply, because a queue
+/// sends only under the name of the subscription holding it, and the mount would only find that
+/// out on deployment.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_fan_out_mount_that_names_no_reply_policy_still_fans_out() {
     let app = RustStream::new(AppInfo::new("watcher", "0.1.0")).with_broker(
         ZmqTestBroker::fanout(),
         |b| {
             b.include(watch);
-            b.include(auditor);
         },
     );
     let tb = TestApp::start(app).await.expect("the app starts");
@@ -441,34 +492,80 @@ async fn a_fan_out_mount_that_names_no_reply_policy_still_fans_out() {
         .expect("the injection drives the reaction to a standstill");
 
     tb.broker::<ZmqTestBroker<Fanout>>()
-        .subscriber("audit")
+        .published::<Note>("audit.high")
         .assert_called_once();
 
     tb.shutdown().await.expect("the app shuts down");
 }
 
 /// The production fan-out policy pairs against the stand-in and keeps the pattern's filter: a
-/// subscription on `audit` receives what was published to `audit.high`.
+/// subscription on `audit` receives what was published to `audit.high`. The audit fan-out is an
+/// endpoint of its own, bound by the subscription that reads it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_fanout_policy_mounts_and_the_prefix_subscription_receives() {
-    let app = RustStream::new(AppInfo::new("watcher", "0.1.0")).with_broker(
-        ZmqTestBroker::fanout(),
-        |b| {
-            b.include(watch).out(Reply, ZmqFanoutPublish);
+    let audit = ZmqTestBroker::fanout().bindable();
+    let to_audit = audit.bind(ZmqFanoutPublish);
+    let app = RustStream::new(AppInfo::new("watcher", "0.1.0"))
+        .with_broker_labeled("events", ZmqTestBroker::fanout(), |b| {
+            b.include(watch).out(Reply, to_audit);
+        })
+        .with_broker_labeled("audit", audit, |b| {
             b.include(auditor);
-        },
-    );
+        });
     let tb = TestApp::start(app).await.expect("the app starts");
 
-    tb.publish("events", &Event { id: 3 })
+    tb.broker_named("events")
+        .publish("events", &Event { id: 3 })
         .await
         .expect("the injection drives the reaction to a standstill");
 
-    tb.broker::<ZmqTestBroker<Fanout>>()
+    tb.broker_named("audit")
         .subscriber("audit")
         .assert_called_once();
 
     tb.shutdown().await.expect("the app shuts down");
+}
+
+#[subscriber("reports")]
+async fn file_report(done: &Done) -> HandlerOutcome {
+    let _ = done.id;
+    HandlerOutcome::ack()
+}
+
+/// A bound endpoint belongs to the subscription that bound it, so a second registration on the
+/// same broker is refused at startup, on the socket and on the stand in the same words. A stand
+/// that started it would pass a routes file whose second subscription never receives.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_second_subscription_on_a_bound_endpoint_is_refused_on_the_stand_as_on_the_socket() {
+    let socket = RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
+        ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")),
+        |b| {
+            b.include(first_worker);
+            b.include(file_report);
+        },
+    );
+    let stand =
+        RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(ZmqTestBroker::queue(), |b| {
+            b.include(first_worker);
+            b.include(file_report);
+        });
+
+    let on_socket = socket
+        .start()
+        .await
+        .expect_err("the second subscription on the bound endpoint must not start")
+        .to_string();
+    let on_stand = stand
+        .start()
+        .await
+        .expect_err("the stand must refuse what the socket refuses")
+        .to_string();
+
+    assert!(
+        on_socket.contains("'results'") && on_socket.contains("'reports'"),
+        "the refusal must name both subscriptions, got: {on_socket}",
+    );
+    assert_eq!(on_socket, on_stand);
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -554,13 +651,18 @@ async fn ask(request: &AskFor, Out(rpc): Out<impl RequestReply>) -> HandlerOutco
 /// The whole request-reply wiring under the harness: a handler binding `Out<impl RequestReply>`
 /// mounts on the stand-in, its request reaches the responder, and the responder's answer comes
 /// back correlated to the caller that asked.
+///
+/// The asks arrive on a queue of their own: the responder binds the exchange's endpoint, and a
+/// bound endpoint serves the one subscription that bound it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_request_reply_pair_runs_under_the_harness() {
     let (tx, mut rx) = mpsc::unbounded_channel();
     ANSWERS.set(tx).expect("one request-reply app per binary");
 
-    let app =
-        RustStream::new(AppInfo::new("greeter", "0.1.0")).with_broker(ZmqTestBroker::rpc(), |b| {
+    let exchange = ZmqTestBroker::rpc().bindable();
+    let requests = exchange.bind(ZmqRpcPublish);
+    let app = RustStream::new(AppInfo::new("greeter", "0.1.0"))
+        .with_broker_labeled("exchange", exchange, |b| {
             // A responder addresses no retry copies, so every mount on it names where they go -
             // the same line the deployment writes, and the stand asks for it because the socket
             // does.
@@ -569,22 +671,21 @@ async fn a_request_reply_pair_runs_under_the_harness() {
                 .transform(ReplyToRequester)
                 .out_retry(ZmqRpcPublish)
                 .to("greeter.retry");
-            b.include(ask)
-                .out(DefaultSlot, ZmqRpcPublish)
-                .out_retry(ZmqRpcPublish)
-                .to("asks.retry")
-                .build();
+        })
+        .with_broker_labeled("asks", ZmqTestBroker::queue(), |b| {
+            b.include(ask).out(DefaultSlot, requests).build();
         });
     let tb = TestApp::start(app).await.expect("the app starts");
 
-    tb.publish(
-        "asks",
-        &AskFor {
-            who: "world".to_owned(),
-        },
-    )
-    .await
-    .expect("the injection drives the exchange to a standstill");
+    tb.broker_named("asks")
+        .publish(
+            "asks",
+            &AskFor {
+                who: "world".to_owned(),
+            },
+        )
+        .await
+        .expect("the injection drives the exchange to a standstill");
 
     let answer = tokio::time::timeout(WAIT, rx.recv())
         .await
@@ -593,4 +694,28 @@ async fn a_request_reply_pair_runs_under_the_harness() {
     assert_eq!(answer, "hello world");
 
     tb.shutdown().await.expect("the app shuts down");
+}
+
+/// A foreign PUSH peer hands each message to one of the sockets that dialed it, whatever their
+/// names, so an injection on a dialing queue stand reaches the differently named workers in turn.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_injection_reaches_the_dialing_workers_whatever_their_names() {
+    let stand = ZmqTestBroker::queue()
+        .dialing()
+        .connect()
+        .await
+        .expect("the stand connects");
+    let mut billing = stand.subscribe("billing").await.expect("opens");
+    let mut shipping = stand.subscribe("shipping").await.expect("opens");
+    for payload in [b"one".as_slice(), b"two"] {
+        TestableBroker::inject(&stand, OutgoingMessage::new("jobs", payload));
+    }
+    for worker in [&mut billing, &mut shipping] {
+        let mut stream = pin!(worker.stream());
+        tokio::time::timeout(Duration::from_secs(1), stream.next())
+            .await
+            .expect("each worker takes one job")
+            .expect("stream is open")
+            .expect("delivery is ok");
+    }
 }

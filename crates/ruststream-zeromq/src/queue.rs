@@ -250,10 +250,12 @@ impl<Role> ConnectedZmqQueue<Role> {
     async fn open(&self, name: &str) -> Result<ZmqSubscriber, ZmqError> {
         self.lifecycle.ensure_open()?;
         let mut socket = PullSocket::new();
-        self.lifecycle.attach_receiver(&mut socket, name).await?;
+        let slot = self.lifecycle.attach_receiver(&mut socket, name).await?;
 
         let (tx, rx) = delivery_channel(self.read_ahead);
         let task = tokio::spawn(async move {
+            // Held for as long as the socket is open: the endpoint is free again once it closes.
+            let _slot = slot;
             loop {
                 match socket.recv().await {
                     Ok(message) => {

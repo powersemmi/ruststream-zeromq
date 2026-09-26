@@ -1058,7 +1058,9 @@ async fn an_injection_follows_the_patterns_rule() {
         .expect("delivery is ok");
     assert_eq!(delivery.payload(), b"eu");
 
+    // Two workers of one queue dial it: a bound endpoint is one socket, read by one subscription.
     let queue = ZmqTestBroker::queue()
+        .dialing()
         .connect()
         .await
         .expect("the stand connects");

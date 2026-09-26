@@ -176,7 +176,7 @@ pub struct ZmqRpc {
 pub(crate) struct RpcShared {
     lifecycle: SharedLifecycle,
     /// The responder's ROUTER send half; set when a subscription attaches.
-    router_tx: Arc<OnceCell<Arc<Mutex<RouterSendHalf>>>>,
+    router_tx: Arc<OnceCell<Arc<Mutex<Option<RouterSendHalf>>>>>,
 }
 
 impl fmt::Debug for RpcShared {
@@ -351,16 +351,27 @@ impl Subscribe for ConnectedZmqRpc {
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
         self.shared.lifecycle.ensure_open()?;
         let mut socket = RouterSocket::new();
-        self.shared
+        let slot = self
+            .shared
             .lifecycle
             .attach_receiver(&mut socket, name)
             .await?;
         let (send_half, mut recv_half) = socket.split();
-        // One responder ROUTER per pattern instance: replies route through it.
-        let _ = self.shared.router_tx.set(Arc::new(Mutex::new(send_half)));
+        // One responder ROUTER per pattern instance: replies route through it. A responder that
+        // reopens after the last one closed replaces the half, inside the lock a reply takes
+        // anyway.
+        *self
+            .shared
+            .router_tx
+            .get_or_init(async || Arc::new(Mutex::new(None)))
+            .await
+            .lock()
+            .await = Some(send_half);
 
         let (tx, rx) = delivery_channel(self.read_ahead);
         let task = tokio::spawn(async move {
+            // Held for as long as the socket is open: the endpoint is free again once it closes.
+            let _slot = slot;
             loop {
                 match recv_half.recv().await {
                     Ok(message) => {
@@ -486,8 +497,16 @@ impl Publisher for ZmqRpcPublisher {
             &headers,
             payload.freeze(),
         )?;
-        let mut router = router.lock().await;
-        router.send(message).await.map_err(|e| ZmqError::Send {
+        let mut guard = router.lock().await;
+        let Some(half) = guard.as_mut() else {
+            return Err(ZmqError::Send {
+                name: name.to_owned(),
+                reason: "no responder subscription is attached".to_owned(),
+            });
+        };
+        let sent = half.send(message).await;
+        drop(guard);
+        sent.map_err(|e| ZmqError::Send {
             name: name.to_owned(),
             reason: e.to_string(),
         })

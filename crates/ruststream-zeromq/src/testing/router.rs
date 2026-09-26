@@ -39,17 +39,23 @@ struct Subscription {
 
 /// Which subscriptions one publish reaches: the difference between the crate's three patterns,
 /// and the semantics a service writes tests about.
+///
+/// Public inside this private module so a pattern's sealed trait can name the one its foreign
+/// peer delivers by, without the type being nameable outside the crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Routing {
-    /// PUSH/PULL: exactly one of the consumers on the destination, taken in turn, so a job is
-    /// worked once however many workers are mounted.
+pub enum Routing {
+    /// PUSH/PULL and a DEALER's request: exactly one of the consumers on the destination, taken
+    /// in turn, so a job is worked once however many workers dial the peer.
     Competing,
+    /// A foreign PUSH or DEALER peer: one of every subscription on the stand, taken in turn,
+    /// whatever its name. The peer knows no names; it hands each message to one of the sockets
+    /// that dialed it.
+    AnyConsumer,
     /// PUB/SUB: every subscription whose name is a prefix of the destination, which is the
     /// protocol's own filter, and none at all when nothing matches.
     Prefix,
     /// Every subscription spelled exactly like the destination. Reply addresses are minted per
-    /// request, so this delivers a reply to the one requester waiting on it; harness injection
-    /// uses it as the pattern-neutral way in.
+    /// request, so this delivers a reply to the one requester waiting on it.
     Exact,
 }
 
@@ -167,19 +173,26 @@ fn select(state: &mut RouterState, address: &str, routing: Routing) -> Vec<Deliv
         .filter(|(_, sub)| match routing {
             Routing::Prefix => address.starts_with(&sub.address),
             Routing::Competing | Routing::Exact => sub.address == address,
+            Routing::AnyConsumer => true,
         })
         .map(|(id, sub)| (*id, sub.sender.clone()))
         .collect();
     matching.sort_by_key(|(id, _)| id.0);
 
     match routing {
-        Routing::Competing if !matching.is_empty() => {
-            let cursor = state.next_consumer.entry(address.to_owned()).or_default();
+        Routing::Competing | Routing::AnyConsumer if !matching.is_empty() => {
+            // The peer rotates over every socket that dialed it, under one cursor.
+            let key = if routing == Routing::AnyConsumer {
+                ""
+            } else {
+                address
+            };
+            let cursor = state.next_consumer.entry(key.to_owned()).or_default();
             let picked = *cursor % matching.len();
             *cursor = cursor.wrapping_add(1);
             vec![matching.swap_remove(picked).1]
         }
-        Routing::Competing => Vec::new(),
+        Routing::Competing | Routing::AnyConsumer => Vec::new(),
         Routing::Prefix | Routing::Exact => matching.into_iter().map(|(_, tx)| tx).collect(),
     }
 }
