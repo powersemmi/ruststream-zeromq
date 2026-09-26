@@ -195,6 +195,13 @@ def code_total(found: dict, key: str, floor: int) -> dict:
             f"benchmark {key} reports {measured['instructions']} instructions, below the floor of "
             f"{floor}: collection did not cover the measured region"
         )
+    # Every run starts a service, which allocates: none at all means DHAT attributed nothing to
+    # the measured frame, and a slope read off that would publish a cost of zero.
+    if measured["allocations"] is None or measured["allocations"] < 1:
+        sys.exit(
+            f"benchmark {key} reports {measured['allocations']} allocations: DHAT did not attribute "
+            "the measured region"
+        )
     return measured
 
 
@@ -242,9 +249,22 @@ def main() -> int:
     source, out = Path(args[0]), Path(args[1])
     previous = json.loads(out.read_text(encoding="utf-8")) if out.exists() else {}
     if code:
+        # The code costs join a paired document: the page shows them beside its scenarios and
+        # renders nothing without them.
+        if "scenarios" not in previous:
+            sys.exit(
+                f"{out} holds no paired results to add the code costs to: run `just bench` first"
+            )
         document = previous
         document["schema"] = 3
         document["code"] = code_section(source)
+        # The code costs carry their own provenance: the paired numbers beside them may come
+        # from another run, on another version, on another day.
+        document["code_measured"] = {
+            "crate_version": crate_version(),
+            "core_version": locked_version("ruststream"),
+            "measured_at": date.today().isoformat(),
+        }
         document.setdefault("environment", {})["valgrind"] = valgrind()
     else:
         summary = json.loads(source.read_text(encoding="utf-8"))
@@ -259,6 +279,8 @@ def main() -> int:
         }
         if "code" in previous:
             document["code"] = previous["code"]
+            if "code_measured" in previous:
+                document["code_measured"] = previous["code_measured"]
             if "valgrind" in previous.get("environment", {}):
                 document["environment"]["valgrind"] = previous["environment"]["valgrind"]
     out.parent.mkdir(parents=True, exist_ok=True)
