@@ -575,7 +575,7 @@ async fn the_routes_are_the_patterns_own_rule() {
 
     let fanout = bound_fanout().await;
     assert_eq!(fanout.routes("orders.eu", &["orders"]), [0]);
-    assert!(fanout.routes("shipments", &["orders"]).is_empty());
+    assert_eq!(fanout.routes("shipments", &["orders"]), [0; 0]);
 
     let rpc = bound_rpc().await;
     assert_eq!(rpc.routes("greeter", &["greeter"]), [0]);
