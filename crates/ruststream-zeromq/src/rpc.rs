@@ -401,11 +401,18 @@ impl Subscribe for ConnectedZmqRpc {
                 },
             });
         }
-        let mut socket = RouterSocket::new();
-        let slot = self
+        let lifecycle = Arc::clone(&self.shared.lifecycle);
+        let subscription = name.to_owned();
+        let (socket, slot) = self
             .shared
             .lifecycle
-            .attach_receiver(&mut socket, name)
+            .on_runtime(async move {
+                let mut socket = RouterSocket::new();
+                let slot = lifecycle
+                    .attach_receiver(&mut socket, &subscription)
+                    .await?;
+                Ok((socket, slot))
+            })
             .await?;
         let (send_half, mut recv_half) = socket.split();
         // One responder ROUTER per pattern instance: replies route through it. A responder that
@@ -424,7 +431,7 @@ impl Subscribe for ConnectedZmqRpc {
         }
 
         let (tx, rx) = delivery_channel(self.read_ahead);
-        let task = tokio::spawn(async move {
+        let task = self.shared.lifecycle.spawn(async move {
             // Held for as long as the socket is open: the endpoint is free again once it closes.
             let _slot = slot;
             loop {
