@@ -20,6 +20,7 @@ use ruststream::{
 
 #[cfg(feature = "asyncapi")]
 use crate::bindings::{self, SocketPair};
+use crate::common::returns_to_subscription;
 use crate::error::ZmqError;
 #[cfg(feature = "asyncapi")]
 use crate::rpc::REPLY_ADDRESS_LOCATION;
@@ -35,7 +36,11 @@ use crate::{ZmqFanoutPublish, ZmqQueuePublish, ZmqRpcPublish};
 /// the pattern whose policy paired it.
 ///
 /// A queue publisher hands each message to one of the consumers on the destination, taken in
-/// turn, so a job mounted on two workers is worked once. A fan-out publisher hands it to every
+/// turn, so a job mounted on two workers is worked once. Once a subscription has opened on the
+/// stand, the stand is that subscription's queue, as an endpoint is the queue of the subscription
+/// that bound it: a publish under its name reaches it, and one under any other name returns
+/// [`ZmqError::Send`] in the words the socket publisher uses, since over the socket it would
+/// arrive at that subscription as its next delivery. A fan-out publisher hands it to every
 /// subscription whose name is a prefix of the destination - the protocol's own filter - and to
 /// none when nothing matches. Both are client-side selection, so they are reproduced rather than
 /// approximated.
@@ -68,6 +73,12 @@ impl ZmqTestPublisher {
 
     fn route(&self, msg: OutgoingMessage<'_, BytesMut>) -> Result<(), ZmqError> {
         self.state.ensure_open()?;
+        if self.routing == Routing::Competing
+            && let Some(holder) = self.state.holder()
+            && holder != msg.name()
+        {
+            return Err(returns_to_subscription(msg.name(), holder));
+        }
         let (name, payload, headers) = msg.into_parts();
         self.state
             .publish(name, payload.freeze(), headers, self.routing);
