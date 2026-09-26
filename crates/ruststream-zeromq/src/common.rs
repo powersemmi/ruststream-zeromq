@@ -2,6 +2,7 @@
 
 use std::future::{Future, poll_fn};
 use std::num::NonZeroUsize;
+use std::panic;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, PoisonError};
@@ -13,7 +14,9 @@ use futures::Stream;
 use ruststream::{Subscriber, nonzero};
 use selfie::SelfieMut;
 use selfie::refs::RefType;
+use tokio::runtime::Handle;
 use tokio::sync::{OnceCell, mpsc};
+use tokio::task::JoinHandle;
 use zeromq::prelude::*;
 use zeromq::{Socket, ZmqError as WireError, ZmqResult};
 
@@ -81,6 +84,11 @@ pub(crate) struct Lifecycle {
     /// nowhere to send.
     dialer: OnceCell<String>,
     pub(crate) closed: AtomicBool,
+    /// The runtime the broker connected on. A socket registers its connection with the runtime
+    /// that binds or dials it and starts its accept loop and peer tasks there, so every socket
+    /// attaches here and every driver task runs here, whichever runtime asked: a handler on a
+    /// thread of its own publishes from a runtime that stops before the broker does.
+    runtime: Handle,
 }
 
 /// The socket a subscription in this process bound on the endpoint.
@@ -125,6 +133,8 @@ impl Lifecycle {
             binding: tokio::sync::Mutex::new(()),
             dialer: OnceCell::new(),
             closed: AtomicBool::new(false),
+            // Built inside `connect`, which the runtime the broker connects on polls.
+            runtime: Handle::current(),
         }
     }
 
@@ -162,6 +172,32 @@ impl Lifecycle {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+
+    /// Runs `attach` on the runtime the broker connected on and returns its outcome: one spawn
+    /// per subscription or publisher attach, never per message.
+    pub(crate) async fn on_runtime<Attach, Output>(
+        &self,
+        attach: Attach,
+    ) -> Result<Output, ZmqError>
+    where
+        Attach: Future<Output = Result<Output, ZmqError>> + Send + 'static,
+        Output: Send + 'static,
+    {
+        match self.runtime.spawn(attach).await {
+            Ok(outcome) => outcome,
+            Err(err) if err.is_panic() => panic::resume_unwind(err.into_panic()),
+            // Cancelled only by that runtime shutting down, which takes the broker with it.
+            Err(_) => Err(ZmqError::NotConnected),
+        }
+    }
+
+    /// Starts a subscription's driver task on the runtime the broker connected on.
+    pub(crate) fn spawn<Task>(&self, task: Task) -> JoinHandle<()>
+    where
+        Task: Future<Output = ()> + Send + 'static,
+    {
+        self.runtime.spawn(task)
     }
 
     pub(crate) fn ensure_open(&self) -> Result<(), ZmqError> {
@@ -610,7 +646,7 @@ impl<S> Drop for Sending<'_, S> {
 /// peerless socket pends forever by design of the implementation. In process it is the
 /// subscription's place on the transport, which dropping gives up.
 pub(crate) enum DriverHandle {
-    Task(tokio::task::JoinHandle<()>),
+    Task(JoinHandle<()>),
     /// The subscription's place on the transport, and the endpoint it holds when it binds, as
     /// its socket would hold the listener.
     #[cfg(feature = "testing")]
@@ -619,7 +655,7 @@ pub(crate) enum DriverHandle {
 
 // A production subscription holds its driver task and nothing beside it.
 #[cfg(not(feature = "testing"))]
-const _: () = assert!(size_of::<DriverHandle>() == size_of::<tokio::task::JoinHandle<()>>());
+const _: () = assert!(size_of::<DriverHandle>() == size_of::<JoinHandle<()>>());
 
 impl Drop for DriverHandle {
     fn drop(&mut self) {

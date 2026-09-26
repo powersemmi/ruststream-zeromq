@@ -285,17 +285,27 @@ impl<Role> ConnectedZmqFanout<Role> {
                 DriverHandle::InProcess(registration, slot),
             ));
         }
-        let mut socket = SubSocket::new();
-        let slot = self.lifecycle.attach_receiver(&mut socket, name).await?;
-        // The name frame doubles as the subscription prefix; filtering happens on the
-        // publisher side, per the protocol.
-        socket
-            .subscribe(name)
-            .await
-            .map_err(|e| ZmqError::Receive(e.to_string()))?;
+        let lifecycle = Arc::clone(&self.lifecycle);
+        let subscription = name.to_owned();
+        let (mut socket, slot) = self
+            .lifecycle
+            .on_runtime(async move {
+                let mut socket = SubSocket::new();
+                let slot = lifecycle
+                    .attach_receiver(&mut socket, &subscription)
+                    .await?;
+                // The name frame doubles as the subscription prefix; filtering happens on the
+                // publisher side, per the protocol.
+                socket
+                    .subscribe(&subscription)
+                    .await
+                    .map_err(|e| ZmqError::Receive(e.to_string()))?;
+                Ok((socket, slot))
+            })
+            .await?;
 
         let (tx, rx) = delivery_channel(self.read_ahead);
-        let task = tokio::spawn(async move {
+        let task = self.lifecycle.spawn(async move {
             // Held for as long as the socket is open: the endpoint is free again once it closes.
             let _slot = slot;
             loop {
@@ -453,7 +463,7 @@ impl Publisher for ZmqFanoutPublisher {
 }
 
 /// Attaches a PUB socket per the endpoint's side, or its in-process counterpart.
-async fn attach(lifecycle: &Lifecycle) -> Result<Sender<PubSocket>, ZmqError> {
+async fn attach(lifecycle: &SharedLifecycle) -> Result<Sender<PubSocket>, ZmqError> {
     #[cfg(feature = "testing")]
     if let Some(bus) = lifecycle.in_process_bus() {
         return Ok(Sender::InProcess {
@@ -461,8 +471,14 @@ async fn attach(lifecycle: &Lifecycle) -> Result<Sender<PubSocket>, ZmqError> {
             local: lifecycle.local_listener().is_some(),
         });
     }
-    let mut socket = PubSocket::new();
-    lifecycle.attach_sender(&mut socket).await?;
+    let attaching = Arc::clone(lifecycle);
+    let socket = lifecycle
+        .on_runtime(async move {
+            let mut socket = PubSocket::new();
+            attaching.attach_sender(&mut socket).await?;
+            Ok(socket)
+        })
+        .await?;
     Ok(Sender::Socket(socket))
 }
 

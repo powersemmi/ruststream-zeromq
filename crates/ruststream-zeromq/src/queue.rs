@@ -281,11 +281,21 @@ impl<Role> ConnectedZmqQueue<Role> {
                 DriverHandle::InProcess(registration, slot),
             ));
         }
-        let mut socket = PullSocket::new();
-        let slot = self.lifecycle.attach_receiver(&mut socket, name).await?;
+        let lifecycle = Arc::clone(&self.lifecycle);
+        let subscription = name.to_owned();
+        let (mut socket, slot) = self
+            .lifecycle
+            .on_runtime(async move {
+                let mut socket = PullSocket::new();
+                let slot = lifecycle
+                    .attach_receiver(&mut socket, &subscription)
+                    .await?;
+                Ok((socket, slot))
+            })
+            .await?;
 
         let (tx, rx) = delivery_channel(self.read_ahead);
-        let task = tokio::spawn(async move {
+        let task = self.lifecycle.spawn(async move {
             // Held for as long as the socket is open: the endpoint is free again once it closes.
             let _slot = slot;
             loop {
@@ -437,7 +447,7 @@ struct Attached {
 
 impl Attached {
     /// Attaches a PUSH socket per the endpoint's side, or its in-process counterpart.
-    async fn attach(lifecycle: &Lifecycle) -> Result<Self, ZmqError> {
+    async fn attach(lifecycle: &SharedLifecycle) -> Result<Self, ZmqError> {
         #[cfg(feature = "testing")]
         if let Some(bus) = lifecycle.in_process_bus() {
             let local = lifecycle
@@ -451,11 +461,17 @@ impl Attached {
                 local,
             });
         }
-        let mut socket = PushSocket::new();
-        let local = lifecycle
-            .attach_sender(&mut socket)
-            .await?
-            .map(|listener| listener.subscription.clone());
+        let attaching = Arc::clone(lifecycle);
+        let (socket, local) = lifecycle
+            .on_runtime(async move {
+                let mut socket = PushSocket::new();
+                let local = attaching
+                    .attach_sender(&mut socket)
+                    .await?
+                    .map(|listener| listener.subscription.clone());
+                Ok((socket, local))
+            })
+            .await?;
         Ok(Self {
             socket: Sender::Socket(Outbox::new(socket)),
             local,
