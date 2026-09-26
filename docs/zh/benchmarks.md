@@ -34,7 +34,7 @@
 
 三个交错轮次中的最佳值，括号里是中位的一轮。速率那几列越大越好。
 
-<div id="benchmark-results" data-benchmark-results="../../benchmarks/results.json" data-benchmark-labels='{"loading": "正在加载公布的结果...", "scenario": "场景", "raw": "裸客户端", "adapter": "ruststream-zeromq", "framework": "RustStream 服务", "adapterOverhead": "crate 的开销", "overhead": "总开销", "indistinguishable": "无法区分", "brokerBound": "受传输限制", "machine": "机器", "os": "操作系统", "broker": "传输", "roundTrip": "往返时间", "build": "构建", "versions": "版本", "measured": "测量于", "instructions": "每条消息的指令数", "allocations": "每条消息的内存分配次数", "cold": "冷启动（指令 / 分配）", "unavailable": "读不到结果。它们公布在 {url}。", "unknownSchema": "公布的结果声明的 schema 是 {schema}，这一页不渲染它。"}'></div>
+<div id="benchmark-results" data-benchmark-results="../../benchmarks/results.json" data-benchmark-labels='{"loading": "正在加载公布的结果...", "scenario": "场景", "raw": "裸客户端", "adapter": "ruststream-zeromq", "framework": "RustStream 服务", "adapterOverhead": "crate 的开销", "overhead": "总开销", "indistinguishable": "无法区分", "brokerBound": "受传输限制", "machine": "机器", "os": "操作系统", "broker": "传输", "roundTrip": "往返时间", "build": "构建", "versions": "版本", "measured": "测量于", "codeMeasured": "代码开销测量于", "instructions": "每条消息的指令数", "allocations": "每条消息的内存分配次数", "cold": "冷启动（指令 / 分配）", "unavailable": "读不到结果。它们公布在 {url}。", "unknownSchema": "公布的结果声明的 schema 是 {schema}，这一页不渲染它。"}'></div>
 
 表格由浏览器从上一次运行写下的文档读出，所以这一页上没有任何会过期的副本。
 
