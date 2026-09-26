@@ -76,9 +76,8 @@ use zeromq::{PullSocket, PushSocket};
 #[cfg(feature = "asyncapi")]
 use crate::bindings::{self, SocketPair};
 use crate::common::{
-    BATCH_MAX_WAIT, DEFAULT_READ_AHEAD, DeliveryReceiver, DriverHandle, Lifecycle, Sender,
+    BATCH_MAX_WAIT, DEFAULT_READ_AHEAD, DeliveryReceiver, DriverHandle, Lifecycle, Outbox, Sender,
     SharedLifecycle, WireSubscriber, delivery_channel, dials_the_sender, returns_to_subscription,
-    send_with_retry,
 };
 use crate::endpoint::{Bind, Connect, Endpoint, EndpointRole, ZmqEndpoint};
 use crate::error::ZmqError;
@@ -87,9 +86,9 @@ use crate::in_process::Pick;
 use crate::message::ZmqMessage;
 use crate::wire;
 
-// A production publisher holds the socket it attached and nothing beside it.
+// A production publisher holds the outbox of the socket it attached and nothing beside it.
 #[cfg(not(feature = "testing"))]
-const _: () = assert!(size_of::<Sender<PushSocket>>() == size_of::<PushSocket>());
+const _: () = assert!(size_of::<Sender<Outbox<PushSocket>>>() == size_of::<Outbox<PushSocket>>());
 
 /// The PUSH/PULL queue: each message reaches one of the competing consumers.
 ///
@@ -430,7 +429,7 @@ pub struct ZmqQueuePublisher {
 
 /// A PUSH socket, and the subscription of this service it reaches when it dialed one.
 struct Attached {
-    socket: Sender<PushSocket>,
+    socket: Sender<Outbox<PushSocket>>,
     /// Set when a subscription of this service bound the endpoint and the socket dialed it: that
     /// subscription receives every message sent, so only its own name may be sent.
     local: Option<String>,
@@ -458,14 +457,14 @@ impl Attached {
             .await?
             .map(|listener| listener.subscription.clone());
         Ok(Self {
-            socket: Sender::Socket(socket),
+            socket: Sender::Socket(Outbox::new(socket)),
             local,
         })
     }
 
     async fn send(&mut self, name: &str, frames: zeromq::ZmqMessage) -> Result<(), ZmqError> {
         match &mut self.socket {
-            Sender::Socket(socket) => send_with_retry(socket, name, frames).await,
+            Sender::Socket(outbox) => outbox.send(name, frames).await,
             // The subscription that bound the endpoint takes whatever is pushed into it.
             #[cfg(feature = "testing")]
             Sender::InProcess { bus, local } => {
@@ -496,9 +495,10 @@ impl Publisher for ZmqQueuePublisher {
 
     /// # Cancel safety
     ///
-    /// Not cancel-safe. Dropping the future can leave the message half-handed to the socket: the
-    /// attach and the send share one guard, and a send that has begun is not undone. Publish from
-    /// a task of its own rather than inside a `select!` arm.
+    /// Cancel-safe. A publish dropped before the socket takes its message sends nothing. One
+    /// dropped mid-send, while the peer applies back-pressure, leaves its message with the
+    /// publisher: the next publish through it or a clone completes that send before its own, and
+    /// a failure of it is logged against its name.
     // The socket guard intentionally spans the lazy attach and the send: the socket takes
     // &mut for every operation.
     #[allow(clippy::significant_drop_tightening)]

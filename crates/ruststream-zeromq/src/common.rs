@@ -1,17 +1,21 @@
 //! Machinery shared by the three socket patterns.
 
-use std::future::Future;
+use std::future::{Future, poll_fn};
 use std::num::NonZeroUsize;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, PoisonError};
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
+use aliasable::boxed::AliasableBox;
 use futures::Stream;
 use ruststream::{Subscriber, nonzero};
+use selfie::SelfieMut;
+use selfie::refs::RefType;
 use tokio::sync::{OnceCell, mpsc};
 use zeromq::prelude::*;
-use zeromq::{Socket, ZmqError as WireError};
+use zeromq::{Socket, ZmqError as WireError, ZmqResult};
 
 use crate::endpoint::{Endpoint, Side};
 use crate::error::{ZmqError, box_err};
@@ -375,39 +379,226 @@ pub(crate) fn dials_the_sender(
 
 /// Sends with a bounded retry while the handshake settles; `ReturnToSender` hands the message
 /// back, so nothing is lost by retrying.
-///
-/// The window is the time the peer is given to appear, so it opens at the first refusal rather
-/// than at the call: a send that is taken keeps the clock out of the publish path entirely.
 pub(crate) async fn send_with_retry<S: SocketSend>(
     socket: &mut S,
     name: &str,
     message: zeromq::ZmqMessage,
 ) -> Result<(), ZmqError> {
+    retry(Plain(socket), message)
+        .await
+        .map_err(|failure| failure.into_error(name))
+}
+
+/// One attempt at handing a message to a socket, which [`retry`] repeats while the handshake
+/// settles.
+trait Offer {
+    fn offer(&mut self, message: zeromq::ZmqMessage) -> impl Future<Output = ZmqResult<()>> + Send;
+}
+
+/// A socket offered a message directly, in the caller's future.
+struct Plain<'a, S>(&'a mut S);
+
+impl<S: SocketSend> Offer for Plain<'_, S> {
+    fn offer(&mut self, message: zeromq::ZmqMessage) -> impl Future<Output = ZmqResult<()>> + Send {
+        self.0.send(message)
+    }
+}
+
+/// Why a send did not leave, before it is reported against the name it carried.
+#[derive(Debug)]
+pub(crate) enum SendFailure {
+    /// No peer attached within the retry window.
+    NoPeer,
+    /// The socket refused the message for another reason.
+    Wire(WireError),
+}
+
+impl SendFailure {
+    pub(crate) fn into_error(self, name: &str) -> ZmqError {
+        ZmqError::Send {
+            name: name.to_owned(),
+            reason: match self {
+                Self::NoPeer => "no connected peer".to_owned(),
+                Self::Wire(err) => err.to_string(),
+            },
+        }
+    }
+}
+
+/// Offers `message` to `send` until it is taken, while the handshake settles.
+///
+/// The window is the time the peer is given to appear, so it opens at the first refusal rather
+/// than at the call: a send that is taken keeps the clock out of the publish path entirely.
+async fn retry<Attempt: Offer>(
+    mut attempt: Attempt,
+    message: zeromq::ZmqMessage,
+) -> Result<(), SendFailure> {
     let mut pending = message;
     let mut deadline = None;
     loop {
-        match socket.send(pending).await {
+        match attempt.offer(pending).await {
             Ok(()) => return Ok(()),
             Err(WireError::ReturnToSender { message, .. }) => {
                 match deadline {
                     None => deadline = Some(tokio::time::Instant::now() + SEND_RETRY_WINDOW),
                     Some(at) if tokio::time::Instant::now() >= at => {
-                        return Err(ZmqError::Send {
-                            name: name.to_owned(),
-                            reason: "no connected peer".to_owned(),
-                        });
+                        return Err(SendFailure::NoPeer);
                     }
                     Some(_) => {}
                 }
                 pending = message;
                 tokio::time::sleep(SEND_RETRY_STEP).await;
             }
-            Err(err) => {
-                return Err(ZmqError::Send {
-                    name: name.to_owned(),
-                    reason: err.to_string(),
-                });
-            }
+            Err(err) => return Err(SendFailure::Wire(err)),
+        }
+    }
+}
+
+/// The send the client returns for a socket, borrowing the socket for `'socket`.
+struct ClientSend;
+
+impl<'socket> RefType<'socket> for ClientSend {
+    type Ref = Pin<Box<dyn Future<Output = ZmqResult<()>> + Send + 'socket>>;
+}
+
+/// A socket at a fixed place on the heap, where the send in flight borrows it.
+type Held<S> = Pin<AliasableBox<S>>;
+
+/// A send in flight, stored beside the outbox it borrows its socket from.
+type InFlightSend<S> = SelfieMut<'static, AliasableBox<S>, ClientSend>;
+
+/// A sending socket whose send outlives the publish that started it.
+///
+/// The client's round-robin send takes the peer it picked out of rotation and puts it back only
+/// once the frames are queued, so a send dropped while the peer applies back-pressure loses that
+/// peer for good: with one peer, every later send reports no connected peer. Each send therefore
+/// lives here rather than in the caller's future, borrowing the socket the outbox keeps on the
+/// heap. A publish dropped mid-send leaves it parked, and the next publish completes it before
+/// starting its own. The retry wait runs outside it, with the socket back here, so a publish
+/// dropped while it waits sends nothing.
+///
+/// The socket is boxed once, when the outbox is made. A send is the client's own boxed future,
+/// stored and polled as the client returned it, so a publish adds no allocation and no indirect
+/// call to what the client already spends on it.
+pub(crate) struct Outbox<S: 'static> {
+    /// The socket while no send is in flight; the send holds it otherwise.
+    socket: Option<Held<S>>,
+    send: Option<InFlightSend<S>>,
+    /// The name of a message whose publish was dropped mid-send, kept to report a failure of that
+    /// send against it.
+    dropped: Option<String>,
+}
+
+impl<S> Outbox<S>
+where
+    S: SocketSend + Send + Unpin + 'static,
+{
+    pub(crate) fn new(socket: S) -> Self {
+        Self {
+            socket: Some(AliasableBox::from_unique_pin(Box::pin(socket))),
+            send: None,
+            dropped: None,
+        }
+    }
+
+    /// Sends `message` under `name` with the handshake retry, after completing a send whose
+    /// publish was dropped.
+    ///
+    /// # Cancel safety
+    ///
+    /// Cancel-safe. Dropped before the socket takes the message, it sends nothing; dropped
+    /// after, it leaves the send parked for the next call to complete.
+    pub(crate) async fn send(
+        &mut self,
+        name: &str,
+        message: zeromq::ZmqMessage,
+    ) -> Result<(), ZmqError> {
+        if self.send.is_some() {
+            self.complete_dropped().await;
+        }
+        retry(Parked { outbox: self, name }, message)
+            .await
+            .map_err(|failure| failure.into_error(name))
+    }
+
+    /// Completes the send a dropped publish left parked and puts the socket back. Its outcome
+    /// has no caller left, so a failure is logged against the message's name.
+    async fn complete_dropped(&mut self) {
+        let Some(send) = self.send.as_mut() else {
+            return;
+        };
+        let outcome = poll_fn(|cx| send.with_referential_mut(|send| send.as_mut().poll(cx))).await;
+        self.socket = self.send.take().map(SelfieMut::into_owned);
+        let name = self.dropped.take().unwrap_or_default();
+        if let Err(err) = outcome {
+            let error = SendFailure::Wire(err).into_error(&name);
+            tracing::warn!(
+                name = %name,
+                error = %error,
+                "a message whose publish was dropped mid-send did not leave"
+            );
+        }
+    }
+}
+
+/// A socket offered a message through its outbox, where a dropped offer stays parked.
+struct Parked<'a, S: 'static> {
+    outbox: &'a mut Outbox<S>,
+    name: &'a str,
+}
+
+impl<S> Offer for Parked<'_, S>
+where
+    S: SocketSend + Send + Unpin + 'static,
+{
+    #[inline]
+    fn offer(&mut self, message: zeromq::ZmqMessage) -> impl Future<Output = ZmqResult<()>> + Send {
+        let socket = self
+            .outbox
+            .socket
+            .take()
+            .expect("a parked send completes before the next offer");
+        self.outbox.send = Some(SelfieMut::new(socket, |socket| {
+            Pin::into_inner(socket).send(message)
+        }));
+        Sending {
+            outbox: &mut *self.outbox,
+            name: self.name,
+            done: false,
+        }
+    }
+}
+
+/// The send an offer started, polled in its outbox. Dropped before it completes, it leaves the
+/// send parked there under the message's name.
+struct Sending<'a, S: 'static> {
+    outbox: &'a mut Outbox<S>,
+    name: &'a str,
+    done: bool,
+}
+
+impl<S> Future for Sending<'_, S> {
+    type Output = ZmqResult<()>;
+
+    #[inline]
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<ZmqResult<()>> {
+        let this = &mut *self;
+        let send = this
+            .outbox
+            .send
+            .as_mut()
+            .expect("the send stays in the outbox until it completes");
+        let outcome = ready!(send.with_referential_mut(|send| send.as_mut().poll(cx)));
+        this.outbox.socket = this.outbox.send.take().map(SelfieMut::into_owned);
+        this.done = true;
+        Poll::Ready(outcome)
+    }
+}
+
+impl<S> Drop for Sending<'_, S> {
+    fn drop(&mut self) {
+        if !self.done {
+            self.outbox.dropped = Some(self.name.to_owned());
         }
     }
 }
@@ -510,10 +701,14 @@ pub(crate) type SharedLifecycle = Arc<Lifecycle>;
 
 #[cfg(test)]
 mod tests {
+    use std::pin::pin;
+    use std::sync::Mutex;
+
     use async_trait::async_trait;
     use bytes::Bytes;
+    use futures::poll;
+    use tokio::sync::Notify;
     use tokio::time::advance;
-    use zeromq::ZmqResult;
 
     use super::*;
 
@@ -561,5 +756,63 @@ mod tests {
         )
         .await
         .expect("the peer refused once and then took the message");
+    }
+
+    /// A socket whose first send waits for the peer to open a gate, as one under back-pressure
+    /// does, and which records the payload of every send it completes.
+    struct Gated {
+        gate: Arc<Notify>,
+        held: bool,
+        sent: Arc<Mutex<Vec<Bytes>>>,
+    }
+
+    #[async_trait]
+    impl SocketSend for Gated {
+        async fn send(&mut self, message: zeromq::ZmqMessage) -> ZmqResult<()> {
+            if self.held {
+                self.gate.notified().await;
+                self.held = false;
+            }
+            let payload = message.get(0).cloned().unwrap_or_default();
+            self.sent.lock().expect("not poisoned").push(payload);
+            Ok(())
+        }
+    }
+
+    /// A send dropped while the socket holds it stays with the outbox, and the next send
+    /// completes it before its own: nothing the dropped publish handed over is lost or reordered.
+    #[tokio::test]
+    async fn a_send_dropped_mid_flight_completes_before_the_next() {
+        let gate = Arc::new(Notify::new());
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let mut outbox = Outbox::new(Gated {
+            gate: Arc::clone(&gate),
+            held: true,
+            sent: Arc::clone(&sent),
+        });
+
+        {
+            let dropped = pin!(outbox.send(
+                "first",
+                zeromq::ZmqMessage::from(Bytes::from_static(b"first"))
+            ));
+            assert!(
+                poll!(dropped).is_pending(),
+                "the socket holds the first send"
+            );
+        }
+        gate.notify_one();
+        outbox
+            .send(
+                "second",
+                zeromq::ZmqMessage::from(Bytes::from_static(b"second")),
+            )
+            .await
+            .expect("the second send leaves");
+
+        assert_eq!(
+            *sent.lock().expect("not poisoned"),
+            [Bytes::from_static(b"first"), Bytes::from_static(b"second")],
+        );
     }
 }

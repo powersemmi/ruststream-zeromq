@@ -12,6 +12,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "aliasable"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "250f629c0161ad8107cf89319e990051fae62832fd343083bea452d93e2205fd"
+dependencies = [
+ "aliasable_deref_trait",
+ "stable_deref_trait",
+]
+
+[[package]]
+name = "aliasable_deref_trait"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab4b104ec50ee182c641f83f7354fd689ef7d1e456febc02a05d26d0bac67f29"
+
+[[package]]
 name = "async-io"
 version = "2.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -603,10 +619,12 @@ dependencies = [
 name = "ruststream-zeromq"
 version = "0.7.0"
 dependencies = [
+ "aliasable",
  "async-trait",
  "bytes",
  "futures",
  "ruststream",
+ "selfie",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -696,6 +714,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1836bad8bdc9c6d665b63202da3d9c6d60ed1e597cae63620e21ebf89a3595a9"
 dependencies = [
  "saa",
+]
+
+[[package]]
+name = "selfie"
+version = "0.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7b9062d2ec6c5a972298b4983e1025a59036a0c1af274e5ecf16f183568cdb8"
+dependencies = [
+ "stable_deref_trait",
 ]
 
 [[package]]
@@ -805,6 +832,12 @@ dependencies = [
  "libc",
  "windows-sys",
 ]
+
+[[package]]
+name = "stable_deref_trait"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "syn"
