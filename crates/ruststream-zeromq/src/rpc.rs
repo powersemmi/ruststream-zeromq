@@ -91,12 +91,16 @@ use zeromq::{DealerSocket, RouterSendHalf, RouterSocket, SocketOptions};
 
 #[cfg(feature = "asyncapi")]
 use crate::bindings::{self, SocketPair};
+#[cfg(feature = "testing")]
+use crate::common::DeliveryReceiver;
 use crate::common::{
     DEFAULT_READ_AHEAD, DriverHandle, Lifecycle, SharedLifecycle, WireSubscriber, delivery_channel,
     send_with_retry,
 };
 use crate::endpoint::{Endpoint, EndpointRole, ZmqEndpoint};
 use crate::error::ZmqError;
+#[cfg(feature = "testing")]
+use crate::in_process::{self, Bus};
 use crate::message::ZmqMessage;
 use crate::wire;
 
@@ -118,9 +122,8 @@ pub(crate) const REPLY_ADDRESS_LOCATION: &str = "$message.header#/reply-to";
 
 /// Builds the reply destination addressing one requesting peer.
 ///
-/// The responder's ROUTER derives `identity` from the peer that sent the request; the in-process
-/// stand-in mints one per request. Both go through here, so a publish transform that rewrites a
-/// reply destination reads the same shape under the harness as it does over a socket.
+/// The responder's ROUTER derives `identity` from the peer that sent the request, over a socket and
+/// in process alike.
 pub(crate) fn reply_address(identity: &[u8]) -> String {
     format!("{REPLY_PREFIX}{}", hex_encode(identity))
 }
@@ -175,9 +178,25 @@ pub struct ZmqRpc {
 #[derive(Clone)]
 pub(crate) struct RpcShared {
     lifecycle: SharedLifecycle,
-    /// The responder's ROUTER send half; set when a subscription attaches.
-    router_tx: Arc<OnceCell<Arc<Mutex<Option<RouterSendHalf>>>>>,
+    /// What replies route through; set when a subscription attaches.
+    router_tx: Arc<OnceCell<ReplyRoute>>,
 }
+
+/// What a reply routes through: the responder's ROUTER send half, or, in process, the transport
+/// that routes by the same identities.
+///
+/// Without the `testing` feature it is the send half itself: one variant, no tag, no branch.
+#[derive(Clone)]
+enum ReplyRoute {
+    /// The responder's ROUTER send half; empty between a responder closing and the next one
+    /// opening.
+    Router(Arc<Mutex<Option<RouterSendHalf>>>),
+    #[cfg(feature = "testing")]
+    InProcess(Arc<Bus>),
+}
+
+#[cfg(not(feature = "testing"))]
+const _: () = assert!(size_of::<ReplyRoute>() == size_of::<Arc<Mutex<Option<RouterSendHalf>>>>());
 
 impl fmt::Debug for RpcShared {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -241,12 +260,23 @@ impl Broker for ZmqRpc {
     type Connected = ConnectedZmqRpc;
 
     async fn connect(self) -> Result<Self::Connected, Self::Error> {
+        self.connect_with(Lifecycle::new).await
+    }
+}
+
+impl ZmqRpc {
+    /// The connect transition over the transport `lifecycle` builds: the sockets, or the
+    /// in-process transport the test harness connects instead.
+    pub(crate) async fn connect_with(
+        self,
+        lifecycle: fn(Endpoint) -> Lifecycle,
+    ) -> Result<ConnectedZmqRpc, ZmqError> {
         let shared = self
             .cell
             .get_or_try_init(async || {
                 self.endpoint.validate()?;
                 Ok::<_, ZmqError>(RpcShared {
-                    lifecycle: Arc::new(Lifecycle::new(self.endpoint.clone())),
+                    lifecycle: Arc::new(lifecycle(self.endpoint.clone())),
                     router_tx: Arc::new(OnceCell::new()),
                 })
             })
@@ -276,6 +306,11 @@ pub struct ConnectedZmqRpc {
 }
 
 impl ConnectedZmqRpc {
+    #[cfg(feature = "testing")]
+    pub(crate) fn lifecycle(&self) -> &Lifecycle {
+        &self.shared.lifecycle
+    }
+
     /// The address the responder resolved by binding (useful with an ephemeral
     /// `tcp://...:0` endpoint); `None` until a subscription has bound.
     #[must_use]
@@ -350,6 +385,22 @@ impl Subscribe for ConnectedZmqRpc {
 
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
         self.shared.lifecycle.ensure_open()?;
+        #[cfg(feature = "testing")]
+        if let Some(bus) = self.shared.lifecycle.in_process_bus() {
+            let slot = self.shared.lifecycle.attach_in_process(name).await?;
+            let (rx, registration) = bus.subscribe(name, read_request);
+            let _ = self
+                .shared
+                .router_tx
+                .set(ReplyRoute::InProcess(Arc::clone(bus)));
+            return Ok(ZmqRpcSubscriber {
+                name: name.to_owned(),
+                inner: WireSubscriber {
+                    rx: DeliveryReceiver::InProcess(rx),
+                    _driver: DriverHandle::InProcess(registration, slot),
+                },
+            });
+        }
         let mut socket = RouterSocket::new();
         let slot = self
             .shared
@@ -360,13 +411,17 @@ impl Subscribe for ConnectedZmqRpc {
         // One responder ROUTER per pattern instance: replies route through it. A responder that
         // reopens after the last one closed replaces the half, inside the lock a reply takes
         // anyway.
-        *self
+        let route = self
             .shared
             .router_tx
-            .get_or_init(async || Arc::new(Mutex::new(None)))
-            .await
-            .lock()
-            .await = Some(send_half);
+            .get_or_init(async || ReplyRoute::Router(Arc::new(Mutex::new(None))))
+            .await;
+        match route {
+            ReplyRoute::Router(router) => *router.lock().await = Some(send_half),
+            // A socket subscription never opens on a broker connected in process.
+            #[cfg(feature = "testing")]
+            ReplyRoute::InProcess(_) => {}
+        }
 
         let (tx, rx) = delivery_channel(self.read_ahead);
         let task = tokio::spawn(async move {
@@ -375,30 +430,9 @@ impl Subscribe for ConnectedZmqRpc {
             loop {
                 match recv_half.recv().await {
                     Ok(message) => {
-                        let mut frames = message.into_vecdeque();
-                        let Some(identity) = frames.pop_front() else {
+                        let Some(item) = read_request(message) else {
                             continue;
                         };
-                        let rest: Result<zeromq::ZmqMessage, _> = frames.try_into();
-                        let Ok(rest) = rest else {
-                            let _ = tx
-                                .send(Err(ZmqError::Wire(
-                                    "a request needs name and payload frames".into(),
-                                )))
-                                .await;
-                            continue;
-                        };
-                        let item = wire::decode(rest).map(|(name, mut headers, payload)| {
-                            headers.insert(
-                                Str::from_static(REPLY_TO_HEADER),
-                                reply_address(&identity),
-                            );
-                            ZmqMessage {
-                                name,
-                                headers,
-                                payload,
-                            }
-                        });
                         if tx.send(item).await.is_err() {
                             break;
                         }
@@ -419,10 +453,28 @@ impl Subscribe for ConnectedZmqRpc {
             name: name.to_owned(),
             inner: WireSubscriber {
                 rx,
-                _driver: DriverHandle { task },
+                _driver: DriverHandle::Task(task),
             },
         })
     }
+}
+
+/// A request as the ROUTER's driver reads it: the identity frame the ROUTER put in front becomes
+/// the `reply-to` address the answer goes to, and the rest is the documented layout. A message
+/// with no identity frame is skipped.
+pub(crate) fn read_request(message: zeromq::ZmqMessage) -> Option<Result<ZmqMessage, ZmqError>> {
+    let mut frames = message.into_vecdeque();
+    let identity = frames.pop_front()?;
+    let rest: Result<zeromq::ZmqMessage, _> = frames.try_into();
+    let Ok(rest) = rest else {
+        return Some(Err(ZmqError::Wire(
+            "a request needs name and payload frames".into(),
+        )));
+    };
+    Some(wire::decode(rest).map(|(name, mut headers, payload)| {
+        headers.insert(Str::from_static(REPLY_TO_HEADER), reply_address(&identity));
+        ZmqMessage::new(name, headers, payload)
+    }))
 }
 
 /// Publishes replies back through the responder's ROUTER, and issues requests via
@@ -497,19 +549,25 @@ impl Publisher for ZmqRpcPublisher {
             &headers,
             payload.freeze(),
         )?;
-        let mut guard = router.lock().await;
-        let Some(half) = guard.as_mut() else {
-            return Err(ZmqError::Send {
-                name: name.to_owned(),
-                reason: "no responder subscription is attached".to_owned(),
-            });
-        };
-        let sent = half.send(message).await;
-        drop(guard);
-        sent.map_err(|e| ZmqError::Send {
-            name: name.to_owned(),
-            reason: e.to_string(),
-        })
+        match router {
+            ReplyRoute::Router(router) => {
+                let mut guard = router.lock().await;
+                let Some(half) = guard.as_mut() else {
+                    return Err(ZmqError::Send {
+                        name: name.to_owned(),
+                        reason: "no responder subscription is attached".to_owned(),
+                    });
+                };
+                let sent = half.send(message).await;
+                drop(guard);
+                sent.map_err(|e| ZmqError::Send {
+                    name: name.to_owned(),
+                    reason: e.to_string(),
+                })
+            }
+            #[cfg(feature = "testing")]
+            ReplyRoute::InProcess(bus) => bus.reply(name, message),
+        }
     }
 }
 
@@ -527,6 +585,10 @@ impl RequestReply for ZmqRpcPublisher {
         timeout: Duration,
     ) -> Result<Self::Reply, Self::Error> {
         let shared = self.shared()?;
+        #[cfg(feature = "testing")]
+        if let Some(bus) = shared.lifecycle.in_process_bus() {
+            return request_in_process(bus, &shared.lifecycle, msg, timeout).await;
+        }
         let address = shared.lifecycle.send_target().address().to_owned();
 
         // One DEALER per request: simple and correct; a shared correlated link is a later
@@ -561,11 +623,7 @@ impl RequestReply for ZmqRpcPublisher {
                     .map_err(|e| ZmqError::Receive(e.to_string()))?;
                 let (name, reply_headers, payload) = wire::decode(reply)?;
                 if reply_headers.correlation_id() == Some(correlation.as_str()) {
-                    return Ok(ZmqMessage {
-                        name,
-                        headers: reply_headers,
-                        payload,
-                    });
+                    return Ok(ZmqMessage::new(name, reply_headers, payload));
                 }
             }
         };
@@ -575,11 +633,32 @@ impl RequestReply for ZmqRpcPublisher {
     }
 }
 
-/// Mints a reply address for one in-process request, standing in for the peer identity the
-/// responder's ROUTER supplies over a socket.
+/// A request over the in-process transport, framed and correlated the way the DEALER does it: it
+/// reaches the responder this service binds, when the DEALER would dial one, and a peer outside
+/// this service otherwise.
 #[cfg(feature = "testing")]
-pub(crate) fn new_reply_address() -> String {
-    reply_address(&rand_suffix())
+async fn request_in_process(
+    bus: &Bus,
+    lifecycle: &Lifecycle,
+    msg: OutgoingMessage<'_, BytesMut>,
+    timeout: Duration,
+) -> Result<ZmqMessage, ZmqError> {
+    let correlation = msg
+        .headers()
+        .correlation_id()
+        .map_or_else(new_correlation_id, str::to_owned);
+    let (name, payload, mut headers) = msg.into_parts();
+    headers.insert(Str::from_static(CORRELATION_ID_HEADER), correlation.clone());
+    let request = wire::encode_to(name, name, &headers, payload.freeze())?;
+    let local = lifecycle.local_listener().is_some();
+    in_process::request(bus, local, name, request, &correlation, timeout).await
+}
+
+/// A peer identity no other peer of this process carries, standing in for the random identity a
+/// DEALER greets with.
+#[cfg(feature = "testing")]
+pub(crate) fn peer_identity() -> Bytes {
+    Bytes::copy_from_slice(&rand_suffix())
 }
 
 /// A per-request unique suffix without a randomness dependency: the address of a fresh

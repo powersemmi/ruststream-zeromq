@@ -28,7 +28,7 @@ serde = { version = "1", features = ["derive"] }
 [подписку](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#subscribing) с её пакетами и повторами,
 [публикацию](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#publishing), [контракт передачи](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#the-wire-contract), по которому
 собирает сообщения узел не на Rust, [порождаемый документ](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#the-generated-document),
-[тестирование](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#testing) и [эксплуатацию](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#operations).
+[тестирование](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#testing) рабочего приложения во внутрипроцессном режиме или через сокеты на петлевом интерфейсе и [эксплуатацию](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#operations).
 
 ## Куда идти дальше {#where-to-go-next}
 

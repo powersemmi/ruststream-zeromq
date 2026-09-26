@@ -21,6 +21,7 @@ use ruststream::HeaderMap;
 use zeromq::ZmqMessage as WireMessage;
 
 use crate::error::ZmqError;
+use crate::message::ZmqMessage;
 
 /// Encodes headers into the header frame ("name: value" lines).
 ///
@@ -124,6 +125,40 @@ pub(crate) fn encode_to(
         name: destination.to_owned(),
         reason,
     })
+}
+
+/// The frames a peer that is not this crate sends: the header lines written as the bytes they
+/// hold, with none of the checks this crate's own publishers make, so a value that is not UTF-8
+/// reaches the receiving side as the frame [`decode`] refuses.
+#[cfg(feature = "testing")]
+pub(crate) fn encode_foreign(name: &str, headers: &HeaderMap, payload: Bytes) -> WireMessage {
+    let mut text = Vec::new();
+    for (name, value) in headers.iter() {
+        if !text.is_empty() {
+            text.push(b'\n');
+        }
+        text.extend_from_slice(name.as_bytes());
+        text.extend_from_slice(b": ");
+        text.extend_from_slice(value);
+    }
+    let frames = vec![
+        Bytes::copy_from_slice(name.as_bytes()),
+        Bytes::from(text),
+        payload,
+    ];
+    WireMessage::try_from(frames).expect("a list built from named frames is never empty")
+}
+
+/// A delivery of a one-way pattern, read off the frames its socket received.
+///
+/// The PULL and SUB drivers read every message through here, and so does the in-process
+/// transport, so a delivery reads the same whichever carried it. `None` is a message the reader
+/// skips; a one-way socket skips none.
+// The `Option` is the shape every subscription's reader shares: the ROUTER's reader skips a
+// message with no identity frame, and the in-process transport holds either reader by one type.
+#[allow(clippy::unnecessary_wraps)]
+pub(crate) fn read_delivery(message: WireMessage) -> Option<Result<ZmqMessage, ZmqError>> {
+    Some(decode(message).map(|(name, headers, payload)| ZmqMessage::new(name, headers, payload)))
 }
 
 /// Splits a received message into (name, headers, payload), tolerating a missing header

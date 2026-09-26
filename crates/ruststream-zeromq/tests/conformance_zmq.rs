@@ -1,55 +1,92 @@
-//! Conformance: the routing suite against the in-process transport, plus the lifecycle and
-//! request/reply suites over real sockets on the loopback - no external broker exists to
-//! need, which is the point of this crate.
+//! Conformance: the routing suite against each production broker connected in process, and the
+//! lifecycle, redelivery-address, batch and request/reply suites twice, over real sockets on the
+//! loopback and in process - no external broker exists to need, which is the point of this crate.
 
 #![cfg(feature = "testing")]
 
 use ruststream::Name;
+use ruststream::conformance::harness::InProcessBroker;
 use ruststream::conformance::{capabilities, harness};
-use ruststream_zeromq::testing::ZmqTestBroker;
 use ruststream_zeromq::{ZmqEndpoint, ZmqFanout, ZmqQueue, ZmqRpc};
 
-/// Every stand answers the routing contract, so a pattern cannot drift from it while the crate
-/// only ever tested one of the three.
+/// Where a service binds its end of each pattern in these suites: an ephemeral loopback port,
+/// which the sockets resolve and the in-process transport never opens.
+const LOOPBACK: &str = "tcp://127.0.0.1:0";
+
+/// Where a service dials a peer. The in-process suites never reach it.
+const PEER: &str = "tcp://127.0.0.1:5555";
+
+/// Every production broker answers the routing contract in process, on both sides of its
+/// endpoint, so a pattern or a side cannot drift from it while the crate tested another.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn every_stand_passes_the_conformance_suite() {
-    harness::run_suite(ZmqTestBroker::queue).await;
-    harness::run_suite(ZmqTestBroker::fanout).await;
-    harness::run_suite(ZmqTestBroker::rpc).await;
+async fn every_broker_passes_the_conformance_suite_in_process() {
+    harness::run_suite(|| ZmqQueue::new(ZmqEndpoint::bind(LOOPBACK))).await;
+    harness::run_suite(|| ZmqQueue::new(ZmqEndpoint::connect(PEER))).await;
+    harness::run_suite(|| ZmqFanout::new(ZmqEndpoint::bind(LOOPBACK))).await;
+    harness::run_suite(|| ZmqFanout::new(ZmqEndpoint::connect(PEER))).await;
+    harness::run_suite(|| ZmqRpc::new(ZmqEndpoint::bind(LOOPBACK))).await;
+    harness::run_suite(|| ZmqRpc::new(ZmqEndpoint::connect(PEER))).await;
+}
+
+/// The ladder holds in process too, aliasing included: a publisher paired before the shutdown
+/// reports the dead transport rather than succeeding against it.
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zmq_queue_passes_lifecycle_in_process() {
+    harness::lifecycle(
+        || InProcessBroker::new(ZmqQueue::new(ZmqEndpoint::bind(LOOPBACK))),
+        |name| Name::new(name.to_owned()),
+        |connected| connected.publisher(),
+    )
+    .await;
 }
 
 /// A publish under the subscribe name has to come back on the subscription that reported it, on
-/// the two stands that declare they address their own copies.
+/// the two patterns that declare they address their own copies.
 ///
-/// The real PUB/SUB socket is left out of this suite - it drops what it sends before the
-/// subscriber's filter has propagated - but its stand has no filter table and no slow joiner, so
-/// the promise is checked here.
+/// The real PUB/SUB socket is left out of the socket pass - it drops what it sends before the
+/// subscriber's filter has propagated - and the in-process transport has no filter table to
+/// propagate, so the fan-out's promise is checked here.
 #[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_addressed_stands_pass_redelivery_address() {
+async fn the_addressed_patterns_pass_redelivery_address_in_process() {
     harness::redelivery_address(
-        ZmqTestBroker::queue,
+        || InProcessBroker::new(ZmqQueue::new(ZmqEndpoint::bind(LOOPBACK))),
         |name| Name::new(name.to_owned()),
         |connected| connected.publisher(),
     )
     .await;
     harness::redelivery_address(
-        ZmqTestBroker::fanout,
+        || InProcessBroker::new(ZmqFanout::new(ZmqEndpoint::bind(LOOPBACK))),
         |name| Name::new(name.to_owned()),
         |connected| connected.publisher(),
     )
     .await;
 }
 
-/// The responder stand answers the same request-reply contract the sockets do, the leg where
-/// nobody answers included, so a handler that binds the capability is testable in process.
+/// The responder answers the same request-reply contract in process that it answers over
+/// sockets, the leg where nobody answers included, so a handler that binds the capability is
+/// testable in process.
 #[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_responder_stand_passes_the_request_reply_suite() {
+async fn zmq_rpc_passes_request_reply_suite_in_process() {
     capabilities::request_reply(
-        ZmqTestBroker::rpc,
+        || InProcessBroker::new(ZmqRpc::new(ZmqEndpoint::bind(LOOPBACK))),
         |name| Name::new(name.to_owned()),
         |connected| connected.publisher(),
+        |connected| connected.publisher(),
+    )
+    .await;
+}
+
+/// The batches are assembled on the client over either transport, to the size the subscription
+/// was opened with.
+#[allow(clippy::redundant_closure, clippy::redundant_closure_for_method_calls)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zmq_queue_passes_batch_suite_in_process() {
+    capabilities::batches(
+        || InProcessBroker::new(ZmqQueue::new(ZmqEndpoint::bind(LOOPBACK))),
+        |name| Name::new(name.to_owned()),
         |connected| connected.publisher(),
     )
     .await;
@@ -64,7 +101,7 @@ async fn zmq_queue_passes_lifecycle() {
     // The subscription binds an ephemeral loopback port; the publisher dials the resolved
     // address (the loopback arrangement).
     harness::lifecycle(
-        || ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")),
+        || ZmqQueue::new(ZmqEndpoint::bind(LOOPBACK)),
         |name| Name::new(name.to_owned()),
         |connected| connected.publisher(),
     )
@@ -77,7 +114,7 @@ async fn zmq_queue_passes_lifecycle() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn zmq_queue_passes_redelivery_address() {
     harness::redelivery_address(
-        || ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")),
+        || ZmqQueue::new(ZmqEndpoint::bind(LOOPBACK)),
         |name| Name::new(name.to_owned()),
         |connected| connected.publisher(),
     )
@@ -113,7 +150,7 @@ fn zmq_describes_itself_without_credentials() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn zmq_queue_passes_batch_suite() {
     capabilities::batches(
-        || ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")),
+        || ZmqQueue::new(ZmqEndpoint::bind(LOOPBACK)),
         |name| Name::new(name.to_owned()),
         |connected| connected.publisher(),
     )
@@ -124,7 +161,7 @@ async fn zmq_queue_passes_batch_suite() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn zmq_rpc_passes_request_reply_suite() {
     capabilities::request_reply(
-        || ZmqRpc::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")),
+        || ZmqRpc::new(ZmqEndpoint::bind(LOOPBACK)),
         |name| Name::new(name.to_owned()),
         |connected| connected.publisher(),
         |connected| connected.publisher(),
