@@ -148,7 +148,7 @@ tb.broker::<ZmqQueue<Connect>>()
 
 The in-process transport carries the frames a socket carries and routes by the pattern's own rule: a subscription that binds a queue takes whatever is pushed to it, subscriptions that dial take a peer's pushes in turn, a fan-out reaches every subscription whose name prefixes the message, and a request reaches the responder. It refuses what the sockets refuse, in their words: a result mounted on the queue its own subscription binds, a publish on an endpoint a subscription dials, a second subscription on a bound endpoint.
 
-`just test` covers the whole crate with nothing to start first: the in-process suites, the conformance suite, and the socket suites on the loopback, including a wire-layout check driven by a raw foreign-style peer.
+`just test` covers the whole crate with nothing to start first: the in-process suites, the socket suites on the loopback, including a wire-layout check driven by a raw foreign-style peer, and the core's contract suites. Each contract suite runs over the loopback sockets and again in process, and the checks that compare the two transports (settlement answers, refusals) hold the in-process transport to what the sockets do.
 
 ## Layout
 
