@@ -55,6 +55,18 @@ async fn zmq_queue_passes_lifecycle() {
     .await;
 }
 
+/// The fan-out's publisher reads its own subscription's filter before its first send, so the
+/// loopback arrangement loses none of what the ladder publishes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zmq_fanout_passes_lifecycle() {
+    harness::lifecycle(
+        || ZmqFanout::new(ZmqEndpoint::bind(LOOPBACK)),
+        |name| Name::new(name.to_owned()),
+        |connected| connected.publisher(),
+    )
+    .await;
+}
+
 /// The ladder holds in process too, aliasing included: a publisher paired before the shutdown
 /// reports the dead transport rather than succeeding against it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -73,13 +85,20 @@ async fn the_one_way_patterns_pass_lifecycle_in_process() {
     .await;
 }
 
-/// A queue addresses its own subscription, and this is where that promise is held: a publish to
-/// the address the name reports has to come back on the subscription that reported it. The name
-/// is the descriptor of every pattern here, so one call covers both.
+/// A one-way subscription that binds addresses itself, and this is where that promise is held:
+/// a publish to the address the name reports has to come back on the subscription that reported
+/// it, from a publisher whose first use is that copy. The name is the descriptor of every
+/// pattern here, so one call per pattern covers both.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn zmq_queue_passes_redelivery_address() {
+async fn the_addressed_patterns_pass_redelivery_address() {
     retry::redelivery_address(
         || ZmqQueue::new(ZmqEndpoint::bind(LOOPBACK)),
+        |name| Name::new(name.to_owned()),
+        |connected| connected.publisher(),
+    )
+    .await;
+    retry::redelivery_address(
+        || ZmqFanout::new(ZmqEndpoint::bind(LOOPBACK)),
         |name| Name::new(name.to_owned()),
         |connected| connected.publisher(),
     )
@@ -118,9 +137,9 @@ async fn zmq_queue_settles_in_process_as_over_sockets() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn zmq_fanout_passes_settlement_in_process() {
-    settlement::suite(
-        || InProcessBroker::new(ZmqFanout::new(ZmqEndpoint::bind(LOOPBACK))),
+async fn zmq_fanout_settles_in_process_as_over_sockets() {
+    settlement::matches_in_process(
+        || ZmqFanout::new(ZmqEndpoint::bind(LOOPBACK)),
         |name| Name::new(name.to_owned()),
         |connected| connected.publisher(),
         Duration::ZERO,
@@ -209,9 +228,15 @@ fn zmq_describes_its_address_without_credentials() {
 /// The batches are assembled on the client, so this is where the size the subscription was opened
 /// with is proved to cap them - the suite opens at a size smaller than the run.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn zmq_queue_passes_batch_suite() {
+async fn the_one_way_patterns_pass_batch_suite() {
     capabilities::batches(
         || ZmqQueue::new(ZmqEndpoint::bind(LOOPBACK)),
+        |name| Name::new(name.to_owned()),
+        |connected| connected.publisher(),
+    )
+    .await;
+    capabilities::batches(
+        || ZmqFanout::new(ZmqEndpoint::bind(LOOPBACK)),
         |name| Name::new(name.to_owned()),
         |connected| connected.publisher(),
     )
