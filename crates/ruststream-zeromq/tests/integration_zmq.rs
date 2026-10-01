@@ -110,34 +110,29 @@ async fn fanout_filters_by_name_prefix() {
         .await
         .expect("subscription opens");
 
-    // The slow joiner is real and honest scope: the publisher-side filter table fills only
-    // after the handshake, so publish until the first delivery lands, then assert filtering.
+    // The publisher reads the subscription's filter before its first send, so one publish of
+    // each is enough: the unmatched one is filtered out, the matched one arrives.
     let publisher = connected.publisher();
     let mut stream = pin!(subscriber.stream());
-    let mut delivered = None;
-    for _ in 0..50 {
-        publisher
-            .publish(
-                OutgoingMessage::new("orders.us.1", b"skipped".as_slice()),
-                None,
-            )
-            .await
-            .expect("publish succeeds");
-        publisher
-            .publish(
-                OutgoingMessage::new("orders.eu.1", b"kept".as_slice()),
-                None,
-            )
-            .await
-            .expect("publish succeeds");
-        if let Ok(Some(next)) =
-            tokio::time::timeout(Duration::from_millis(200), stream.next()).await
-        {
-            delivered = Some(next.expect("delivery is ok"));
-            break;
-        }
-    }
-    let message = delivered.expect("a matching delivery arrives");
+    publisher
+        .publish(
+            OutgoingMessage::new("orders.us.1", b"skipped".as_slice()),
+            None,
+        )
+        .await
+        .expect("publish succeeds");
+    publisher
+        .publish(
+            OutgoingMessage::new("orders.eu.1", b"kept".as_slice()),
+            None,
+        )
+        .await
+        .expect("publish succeeds");
+    let message = tokio::time::timeout(Duration::from_secs(5), stream.next())
+        .await
+        .expect("a matching delivery arrives")
+        .expect("the stream is open")
+        .expect("delivery is ok");
     assert_eq!(message.payload(), b"kept");
     assert_eq!(message.name(), "orders.eu.1");
 
@@ -461,6 +456,108 @@ async fn binding_an_occupied_endpoint_is_refused() {
 
     clash.shutdown().await.expect("the second queue shuts down");
     held.shutdown().await.expect("the first queue shuts down");
+}
+
+/// A bound endpoint is one listening socket, and it belongs to the subscription that bound it. A
+/// second subscription on the same broker used to bind a port of its own on `tcp://..:0`, which
+/// nothing dials, so it never received; it is refused before it binds, naming both subscriptions.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_second_subscription_on_a_bound_endpoint_is_refused_naming_both() {
+    let queue = ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"))
+        .connect()
+        .await
+        .expect("the queue connects");
+    let fanout = ZmqFanout::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"))
+        .connect()
+        .await
+        .expect("the fan-out connects");
+    let rpc = ZmqRpc::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"))
+        .connect()
+        .await
+        .expect("the responder connects");
+
+    for refusal in [
+        second_subscription_error(&queue).await,
+        second_subscription_error(&fanout).await,
+        second_subscription_error(&rpc).await,
+    ] {
+        assert!(
+            refusal.contains("'jobs'") && refusal.contains("'reports'"),
+            "the refusal must name the subscription holding the endpoint and the one refused, \
+             got: {refusal}",
+        );
+    }
+}
+
+/// Opens `jobs`, then asks for `reports` on the same broker while `jobs` still holds it.
+async fn second_subscription_error<C>(connected: &C) -> String
+where
+    C: Subscribe,
+    C::Error: std::fmt::Display,
+{
+    let _holding = connected
+        .subscribe("jobs")
+        .await
+        .map_err(|err| err.to_string())
+        .expect("the first subscription binds the endpoint");
+    match connected.subscribe("reports").await {
+        Ok(_) => panic!("a second subscription on a bound endpoint must be refused"),
+        Err(err) => err.to_string(),
+    }
+}
+
+/// The endpoint belongs to the subscription while it is open: once it is dropped a subscription
+/// can bind it again on the same broker, and a same-process publisher reaches the new one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_dropped_bound_subscription_frees_its_endpoint() {
+    let queue = ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"))
+        .connect()
+        .await
+        .expect("the queue connects");
+    drop(queue.subscribe("jobs").await.expect("the first binds"));
+
+    let mut reopened = queue
+        .subscribe("jobs")
+        .await
+        .expect("the endpoint is free again");
+    queue
+        .publisher()
+        .publish(OutgoingMessage::new("jobs", b"again".as_slice()), None)
+        .await
+        .expect("the publisher reaches the new subscription");
+    let mut stream = pin!(reopened.stream());
+    let delivery = tokio::time::timeout(Duration::from_secs(5), stream.next())
+        .await
+        .expect("a delivery arrives")
+        .expect("stream is open")
+        .expect("delivery is ok");
+    assert_eq!(delivery.payload(), b"again");
+}
+
+/// Subscriptions that dial are separate sockets on the peer's endpoint, so two of them on one
+/// broker split the stream the peer pushes, as every worker behind a ventilator does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subscriptions_that_dial_share_one_broker() {
+    let mut ventilator = zeromq::PushSocket::new();
+    let address = ventilator
+        .bind("tcp://127.0.0.1:0")
+        .await
+        .expect("the ventilator binds")
+        .to_string();
+    let workers = ZmqQueue::new(ZmqEndpoint::connect(address))
+        .connect()
+        .await
+        .expect("the workers connect");
+    let _first = workers
+        .subscribe("jobs")
+        .await
+        .expect("the first worker dials");
+    let _second = workers
+        .subscribe("reports")
+        .await
+        .expect("a second worker dials the same peer");
+
+    workers.shutdown().await.expect("the workers shut down");
 }
 
 /// A PUSH socket with nothing attached hands every message back, so the crate retries for five

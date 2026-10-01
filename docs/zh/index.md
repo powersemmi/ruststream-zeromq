@@ -23,7 +23,7 @@ serde = { version = "1", features = ["derive"] }
 讲了[三种模式](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#the-three-patterns)、[端点](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#endpoints)、[订阅](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#subscribing)
 及其批量与重试、[发布](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#publishing)、非 Rust 对端据以拼装消息的
 [传输契约](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#the-wire-contract)、[生成的文档](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#the-generated-document)、
-[测试](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#testing) 和[运维](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#operations)。
+在进程内或回环套接字上[测试](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#testing)服务自己的应用，以及[运维](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#operations)。
 
 ## 接下来读什么 { #where-to-go-next }
 

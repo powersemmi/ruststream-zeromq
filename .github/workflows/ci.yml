@@ -242,8 +242,12 @@ jobs:
       # The full suite - conformance, lifecycle, request/reply, and the wire-layout contract -
       # runs on loopback sockets; ZeroMQ has no broker, which is the point of the crate.
       # --no-fail-fast: a failing target must not hide failures in the targets behind it; the log
-      # then lists every red test, not just the first binary's.
+      # then lists every red test, not just the first binary's. The compile-fail snapshots record
+      # one toolchain's wording, so this stable step is the one that runs them, and requires them.
       - name: cargo test
+        env:
+          RUN_UI_TESTS: '1'
+          REQUIRE_UI_TESTS: '1'
         run: cargo test --locked --workspace --all-features --no-fail-fast
 
       # The gate the later toolchains wait on: it succeeds only when every stable step did.

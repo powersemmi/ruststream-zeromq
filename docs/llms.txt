@@ -15,13 +15,13 @@ This site holds the entry pages. The crate's guide is its module overview on doc
 
 - [Overview](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html): the transport, what it does not do, and a service
 - [The three patterns](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#the-three-patterns): which pattern fits which messaging shape
-- [Endpoints](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#endpoints): `ZmqEndpoint::bind` and `ZmqEndpoint::connect` on `tcp://` and `ipc://`
+- [Endpoints](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#endpoints): `ZmqEndpoint::bind` and `ZmqEndpoint::connect` on `tcp://` and `ipc://`, and the side the broker carries as its type
 - [Subscribing](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#subscribing): subscriptions, client-side batches and retries republished by the framework
 - [Publishing](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#publishing): publish policies, replies, and request and reply on `ZmqRpc`
 - [The wire contract](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#the-wire-contract): the three-frame layout a non-Rust peer composes messages against
 - [The prelude](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#the-prelude): which glob a routes file imports
 - [The generated document](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#the-generated-document): what the `asyncapi` feature reports in the `x-ruststream-zeromq` extension
-- [Testing](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#testing): `ZmqTestBroker` behind the `testing` feature, driven by `TestApp`
+- [Testing](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#testing): the production app under `TestApp`, each broker in process behind the `testing` feature or over loopback sockets
 - [Operations](https://docs.rs/ruststream-zeromq/latest/ruststream_zeromq/index.html#operations): transports, security, back-pressure, cancel safety and durability
 
 ## Optional

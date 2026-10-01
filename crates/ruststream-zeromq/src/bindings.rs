@@ -17,7 +17,7 @@
 use ruststream::asyncapi::{Binding, Bindings};
 use serde::Serialize;
 
-use crate::endpoint::{Role, ZmqEndpoint};
+use crate::endpoint::{Endpoint, Side};
 
 /// The extension key both levels sit under.
 const EXTENSION: &str = "x-ruststream-zeromq";
@@ -60,8 +60,7 @@ impl SocketPair {
 struct ServerBody {
     transport: &'static str,
     endpoint: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    role: Option<&'static str>,
+    role: &'static str,
 }
 
 #[derive(Serialize)]
@@ -74,9 +73,9 @@ struct ChannelBody {
 
 /// The transport scheme, as this binding names it.
 ///
-/// [`ZmqEndpoint::validate`] admits `tcp://` and `ipc://` and nothing else, so an endpoint a
-/// service reaches here is one of the two.
-fn transport(endpoint: &ZmqEndpoint) -> &'static str {
+/// [`Endpoint::validate`] admits `tcp://` and `ipc://` and nothing else, so an endpoint a service
+/// reaches here is one of the two.
+fn transport(endpoint: &Endpoint) -> &'static str {
     if endpoint.address().starts_with("ipc://") {
         "ipc"
     } else {
@@ -85,31 +84,16 @@ fn transport(endpoint: &ZmqEndpoint) -> &'static str {
 }
 
 /// The server binding: the transport, the coordinate, and which side of it this service takes.
-pub(crate) fn server(endpoint: &ZmqEndpoint) -> Bindings {
+pub(crate) fn server(endpoint: &Endpoint) -> Bindings {
     let body = ServerBody {
         transport: transport(endpoint),
         endpoint: endpoint.host(),
-        role: Some(match endpoint.role {
-            Role::Bind => "bind",
-            Role::Connect => "connect",
-        }),
+        role: match endpoint.side() {
+            Side::Bind => "bind",
+            Side::Connect => "connect",
+        },
     };
     wrap(&body)
-}
-
-/// The server binding of an in-process stand, which names itself where a deployment names a
-/// coordinate.
-///
-/// No ZMTP transport carries a message here, so the transport is the crate's own word rather than
-/// `tcp` or `ipc`, and no side of an endpoint is taken, because both ends live in this process.
-/// Everything below the server is the pattern's own, so this is the whole of what a document built
-/// over a stand does not share with the one the service ships.
-pub(crate) fn in_process_server(stand: &'static str) -> Bindings {
-    wrap(&ServerBody {
-        transport: "in-process",
-        endpoint: stand.to_owned(),
-        role: None,
-    })
 }
 
 /// The channel binding: the socket pair the messages on this channel travel over, and the name
@@ -118,7 +102,7 @@ pub(crate) fn in_process_server(stand: &'static str) -> Bindings {
 /// `destination` is what the document reports as the channel's address, so a peer reads the value
 /// it must put in frame 0 to reach this channel, and on PUB/SUB the prefix it subscribes with.
 /// Which patterns say it is [`SocketPair::addresses_by_name`]'s decision, not the caller's, so the
-/// three publish policies and the three stands cannot drift apart.
+/// three publish policies cannot drift apart.
 pub(crate) fn channel(pair: SocketPair, destination: &str) -> Bindings {
     wrap(&ChannelBody {
         socket_pair: pair.as_str(),
@@ -138,11 +122,14 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
+    use crate::ZmqEndpoint;
 
     #[test]
     fn the_server_binding_reports_the_transport_and_the_role() {
-        let json = serde_json::to_value(server(&ZmqEndpoint::bind("tcp://0.0.0.0:5555")))
-            .expect("the binding serializes");
+        let json = serde_json::to_value(server(
+            &ZmqEndpoint::bind("tcp://0.0.0.0:5555").into_inner(),
+        ))
+        .expect("the binding serializes");
         let body = &json[EXTENSION];
         assert_eq!(body["transport"], "tcp");
         assert_eq!(body["endpoint"], "0.0.0.0:5555");
@@ -153,7 +140,7 @@ mod tests {
     /// here is the same credential-free one the server description carries.
     #[test]
     fn the_server_binding_drops_userinfo_with_the_scheme() {
-        let endpoint = ZmqEndpoint::connect("tcp://user:hunter2@broker:5555");
+        let endpoint = ZmqEndpoint::connect("tcp://user:hunter2@broker:5555").into_inner();
         let json = serde_json::to_string(&server(&endpoint)).expect("the binding serializes");
         assert!(
             !json.contains("hunter2"),
@@ -167,23 +154,13 @@ mod tests {
 
     #[test]
     fn an_ipc_endpoint_reports_its_socket_path() {
-        let json = serde_json::to_value(server(&ZmqEndpoint::connect("ipc:///tmp/orders")))
-            .expect("the binding serializes");
+        let json = serde_json::to_value(server(
+            &ZmqEndpoint::connect("ipc:///tmp/orders").into_inner(),
+        ))
+        .expect("the binding serializes");
         assert_eq!(json[EXTENSION]["transport"], "ipc");
         assert_eq!(json[EXTENSION]["endpoint"], "/tmp/orders");
         assert_eq!(json[EXTENSION]["role"], "connect");
-    }
-
-    /// A stand has no coordinate and takes no side, and the binding says so by leaving the role
-    /// out rather than picking one.
-    #[test]
-    fn an_in_process_stand_names_itself_and_claims_no_side() {
-        let json = serde_json::to_value(in_process_server("ZmqTestBroker::queue"))
-            .expect("the binding serializes");
-        let body = &json[EXTENSION];
-        assert_eq!(body["transport"], "in-process");
-        assert_eq!(body["endpoint"], "ZmqTestBroker::queue");
-        assert_eq!(body["role"], Value::Null);
     }
 
     #[test]
