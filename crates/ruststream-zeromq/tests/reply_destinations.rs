@@ -1,7 +1,8 @@
 //! Where a reply lands on this transport: at the name its own type declares, or at the name the
 //! mount site supplies to a type that declares none, over a queue of its own. Both resolutions run
-//! through the `TestApp` harness on the in-process transport, and the queue a reply cannot use -
-//! the one its own subscription holds - is refused on the stand and on the socket alike.
+//! through the `TestApp` harness on the production brokers connected in process, and the queue a
+//! reply cannot use - the one its own subscription holds - is refused in process and on the socket
+//! alike.
 
 #![cfg(feature = "testing")]
 
@@ -15,11 +16,10 @@ use ruststream::prelude::*;
 // The two `Outgoing` names live in different namespaces: the prelude's is the derive on a reply
 // type, and the value a publish transform rewrites is the type `ruststream::runtime::Outgoing`.
 use ruststream::runtime::{Bound, BrokerScope, Outgoing, PublishContext};
-use ruststream::testing::TestApp;
+use ruststream::testing::{InProcess, TestApp};
 use ruststream::{
     Broker, ConnectedBroker, IncomingMessage, OutgoingMessage, Subscribe, Subscriber,
 };
-use ruststream_zeromq::testing::{Queue, ZmqTestBroker};
 use ruststream_zeromq::{ZmqEndpoint, ZmqQueue, ZmqQueuePublish, ZmqRpc, ZmqRpcPublish};
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
@@ -60,26 +60,28 @@ async fn greet(request: &Greeting) -> Answer {
     }
 }
 
-/// The worker and the queue its results leave through: two stands, because on PUSH/PULL a
+/// A queue this service binds, on an ephemeral loopback port.
+fn bound_queue() -> ZmqQueue {
+    ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"))
+}
+
+/// The worker and the queue its results leave through: two endpoints, because on PUSH/PULL a
 /// second kind of message needs an endpoint of its own.
 fn worker_and_results<Def>(def: Def) -> RustStream
 where
-    Def: FnOnce(
-        &mut BrokerScope<ZmqTestBroker<Queue>>,
-        Bound<ZmqTestBroker<Queue>, ZmqQueuePublish>,
-    ),
+    Def: FnOnce(&mut BrokerScope<ZmqQueue>, Bound<ZmqQueue, ZmqQueuePublish>),
 {
-    let results = ZmqTestBroker::queue().bindable();
+    let results = bound_queue().bindable();
     let to_results = results.bind(ZmqQueuePublish);
     RustStream::new(AppInfo::new("zmq-reply", "0.0.0"))
-        .with_broker_labeled("worker", ZmqTestBroker::queue(), |b| def(b, to_results))
+        .with_broker_labeled("worker", bound_queue(), |b| def(b, to_results))
         .with_broker_labeled("results", results, |_b| {})
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reply_type_that_names_its_queue_publishes_there() {
     let app = worker_and_results(|b, to_results| {
-        b.include(work).out(Reply, to_results);
+        b.include(work).out_reply(to_results);
     });
 
     let tb = TestApp::start(app).await.expect("the harness starts");
@@ -99,12 +101,13 @@ async fn a_reply_type_that_names_its_queue_publishes_there() {
         .published::<Done>("results")
         .assert_called_once()
         .with(&Done { id: 7 });
+    tb.shutdown().await.expect("the app shuts down");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reply_type_without_a_name_publishes_where_the_mount_site_says() {
     let app = worker_and_results(|b, to_results| {
-        b.include(greet).out(Reply, to_results);
+        b.include(greet).out_reply(to_results);
     });
 
     let tb = TestApp::start(app).await.expect("the harness starts");
@@ -130,43 +133,45 @@ async fn a_reply_type_without_a_name_publishes_where_the_mount_site_says() {
         .with(&Answer {
             text: "hello world".to_owned(),
         });
+    tb.shutdown().await.expect("the app shuts down");
 }
 
 /// A reply bound to the queue its own subscription holds has nowhere to go but back to that
-/// subscription, so the stand refuses it the way the socket does: the job is worked once and the
-/// result is published nowhere. The live test below shows the socket; this is the harness catching
-/// the same mount before it ships.
+/// subscription, so the in-process mode refuses it the way the socket does: the job is worked once
+/// and the result is published nowhere. The live test below shows the socket; this is the harness
+/// catching the same mount before it ships.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reply_on_the_queue_its_subscription_holds_is_refused_under_the_harness() {
     let app = RustStream::new(AppInfo::new("zmq-looping-reply", "0.0.0")).with_broker(
-        ZmqTestBroker::queue(),
+        bound_queue(),
         |b| {
-            b.include(work).out(Reply, ZmqQueuePublish);
+            b.include(work).out_reply(ZmqQueuePublish);
         },
     );
 
     let tb = TestApp::start(app).await.expect("the harness starts");
-    tb.broker::<ZmqTestBroker<Queue>>()
+    tb.broker::<ZmqQueue>()
         .message(&Job { id: 8 })
         .to("jobs")
         .publish()
         .await
         .expect("the job is published");
 
-    tb.broker::<ZmqTestBroker<Queue>>()
+    tb.broker::<ZmqQueue>()
         .subscriber("jobs")
         .assert_called_once()
         .with(&Job { id: 8 });
-    tb.broker::<ZmqTestBroker<Queue>>()
+    tb.broker::<ZmqQueue>()
         .published::<Done>("results")
         .assert_not_called();
+    tb.shutdown().await.expect("the app shuts down");
 }
 
-/// The stand refuses in the words the socket uses, so a test read against it teaches the fix the
-/// deployment needs: a publisher on the queue a subscription of this service binds reaches that
-/// subscription, under its own name, and nothing else.
+/// The in-process mode refuses in the words the socket uses, so a test read against it teaches
+/// the fix the deployment needs: a publisher on the queue a subscription of this service binds
+/// reaches that subscription, under its own name, and nothing else.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_stand_refuses_a_publish_the_bound_queue_would_hand_back_in_the_sockets_words() {
+async fn a_publish_the_bound_queue_would_hand_back_is_refused_in_the_sockets_words_in_process() {
     let socket = ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"))
         .connect()
         .await
@@ -175,11 +180,11 @@ async fn the_stand_refuses_a_publish_the_bound_queue_would_hand_back_in_the_sock
         .subscribe("jobs")
         .await
         .expect("the subscription binds the queue");
-    let stand = ZmqTestBroker::queue()
-        .connect()
+    let in_process = bound_queue()
+        .connect_in_process()
         .await
-        .expect("the stand connects");
-    let _stand_jobs = stand
+        .expect("the queue connects in process");
+    let _in_process_jobs = in_process
         .subscribe("jobs")
         .await
         .expect("the subscription opens");
@@ -190,25 +195,25 @@ async fn the_stand_refuses_a_publish_the_bound_queue_would_hand_back_in_the_sock
         .await
         .expect_err("the subscription that bound the queue would receive it")
         .to_string();
-    let on_stand = stand
+    let refused = in_process
         .publisher()
         .publish(OutgoingMessage::new("results", b"{}".as_slice()), None)
         .await
-        .expect_err("the stand refuses what the socket refuses")
+        .expect_err("the in-process mode refuses what the socket refuses")
         .to_string();
 
     assert!(
         on_socket.contains("'results'") && on_socket.contains("'jobs'"),
         "the refusal must name the destination and the subscription, got: {on_socket}",
     );
-    assert_eq!(on_socket, on_stand);
+    assert_eq!(refused, on_socket);
 
-    stand.shutdown().await.expect("the stand shuts down");
+    in_process.shutdown().await.expect("the queue shuts down");
     socket.shutdown().await.expect("the queue shuts down");
 }
 
 /// A second subscription under another name cannot bind the queue endpoint the first one holds:
-/// the socket refuses it as it opens, and the stand refuses it there too, so a test finds the
+/// the socket refuses it as it opens, and the in-process mode refuses it there too, so a test finds the
 /// invalid mount at startup.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_second_name_on_a_bound_queue_is_refused_as_it_opens() {
@@ -227,26 +232,25 @@ async fn a_second_name_on_a_bound_queue_is_refused_as_it_opens() {
         "the socket refuses a second bind"
     );
 
-    let stand = ZmqTestBroker::queue()
-        .connect()
+    let in_process = ZmqQueue::new(ZmqEndpoint::bind(format!("tcp://127.0.0.1:{port}")))
+        .connect_in_process()
         .await
-        .expect("the stand connects");
-    let _stand_jobs = stand.subscribe("jobs").await.expect("the first opens");
+        .expect("the queue connects in process");
+    let _in_process_jobs = in_process.subscribe("jobs").await.expect("the first opens");
     assert!(
-        stand.subscribe("other").await.is_err(),
-        "the stand refuses what the socket refuses"
+        in_process.subscribe("other").await.is_err(),
+        "the in-process mode refuses what the socket refuses"
     );
 
-    stand.shutdown().await.expect("the stand shuts down");
+    in_process.shutdown().await.expect("the queue shuts down");
     socket.shutdown().await.expect("the queue shuts down");
 }
 
 // -- Where a reply lands on a real ROUTER ------------------------------------------------------
 //
-// The two resolutions above are the framework's, and the stand answers them the way the socket
-// does. What only a socket can answer is the third one: on DEALER/ROUTER a reply is addressed to
-// the peer identity the ROUTER derived from the request, and nothing in process derives that
-// identity.
+// The two resolutions above are the framework's, and the in-process mode answers them the way the
+// socket does. The third one is the ROUTER's: on DEALER/ROUTER a reply is addressed to the peer
+// identity the ROUTER derived from the request, and these tests watch a real ROUTER derive it.
 
 /// Long enough for a handshake and a round trip on a loaded machine.
 const LIVE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -325,7 +329,7 @@ async fn an_answer_reaches_the_peer_the_router_stamped_on_the_request() {
     running.shutdown().await.expect("the app shuts down");
 }
 
-/// What the reply publisher refuses, on the socket rather than on the stand.
+/// What the reply publisher refuses, on the socket.
 ///
 /// Each refusal is a mount that would otherwise publish into the void: a plain name has no peer
 /// behind it, an address that is not hex names no identity, and a pattern with no responder

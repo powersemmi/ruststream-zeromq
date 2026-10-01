@@ -53,9 +53,12 @@ pub mod prelude {
     pub use super::{Publish, ZmqQueue};
 }
 
+use std::fmt;
 use std::future::{Future, ready};
+use std::marker::PhantomData;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use futures::Stream;
 use futures::lock::Mutex;
@@ -63,8 +66,8 @@ use futures::lock::Mutex;
 use ruststream::asyncapi::Bindings;
 use ruststream::{
     AddressedCopies, BatchSubscriber, Broker, BufferedSubscriber, BytesMut, ConnectedBroker,
-    DefaultPublish, DescribeServer, OutgoingMessage, PairError, PublishPolicy, Publisher,
-    ServerSpec, Subscribe, Subscriber, Take,
+    DefaultPublish, DescribeServer, NamedCopies, OutgoingMessage, PairError, PublishPolicy,
+    Publisher, ServerSpec, Subscribe, Subscriber, Take,
 };
 use tokio::sync::OnceCell;
 use zeromq::prelude::*;
@@ -73,15 +76,27 @@ use zeromq::{PullSocket, PushSocket};
 #[cfg(feature = "asyncapi")]
 use crate::bindings::{self, SocketPair};
 use crate::common::{
-    BATCH_MAX_WAIT, DEFAULT_READ_AHEAD, DeliveryReceiver, DriverHandle, Lifecycle, SharedLifecycle,
-    WireSubscriber, delivery_channel, returns_to_subscription, send_with_retry,
+    BATCH_MAX_WAIT, DEFAULT_READ_AHEAD, DeliveryReceiver, DriverHandle, Lifecycle, Outbox, Sender,
+    SharedLifecycle, WireSubscriber, delivery_channel, dials_the_sender, returns_to_subscription,
 };
-use crate::endpoint::ZmqEndpoint;
+use crate::endpoint::{Bind, Connect, Endpoint, EndpointRole, ZmqEndpoint};
 use crate::error::ZmqError;
+#[cfg(feature = "testing")]
+use crate::in_process::Pick;
 use crate::message::ZmqMessage;
 use crate::wire;
 
+// A production publisher holds the outbox of the socket it attached and nothing beside it.
+#[cfg(not(feature = "testing"))]
+const _: () = assert!(size_of::<Sender<Outbox<PushSocket>>>() == size_of::<Outbox<PushSocket>>());
+
 /// The PUSH/PULL queue: each message reaches one of the competing consumers.
+///
+/// `Role` is the side of the endpoint this process takes, fixed by the endpoint's constructor:
+/// [`Bind`] for `ZmqEndpoint::bind`, [`Connect`] for `ZmqEndpoint::connect`. It decides where a
+/// retry copy goes. A subscription that binds takes a copy published to its own listener, so a
+/// mount site names no destination; one that dials reads from a PUSH peer that takes nothing, so
+/// a mount site names where its copies go.
 ///
 /// # Examples
 ///
@@ -92,24 +107,36 @@ use crate::wire;
 /// let producer = ZmqQueue::new(ZmqEndpoint::connect("tcp://worker:5555"));
 /// # let _ = (consumer, producer);
 /// ```
-#[derive(Debug, Clone)]
 #[must_use]
-pub struct ZmqQueue {
-    endpoint: ZmqEndpoint,
+pub struct ZmqQueue<Role = Bind> {
+    endpoint: Endpoint,
     read_ahead: NonZeroUsize,
     cell: Arc<OnceCell<SharedLifecycle>>,
+    role: PhantomData<fn() -> Role>,
 }
 
-impl ZmqQueue {
+impl<Role: EndpointRole> ZmqQueue<Role> {
     /// Records the endpoint. No I/O.
-    pub fn new(endpoint: ZmqEndpoint) -> Self {
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ruststream_zeromq::{ZmqEndpoint, ZmqQueue};
+    ///
+    /// let consumer = ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555"));
+    /// # let _ = consumer;
+    /// ```
+    pub fn new(endpoint: ZmqEndpoint<Role>) -> Self {
         Self {
-            endpoint,
+            endpoint: endpoint.into_inner(),
             read_ahead: DEFAULT_READ_AHEAD,
             cell: Arc::new(OnceCell::new()),
+            role: PhantomData,
         }
     }
+}
 
+impl<Role> ZmqQueue<Role> {
     /// How many deliveries a subscription reads off its socket ahead of the handler; 1000 unless
     /// set, the receive high-water mark `ZeroMQ` itself gives a socket.
     ///
@@ -142,16 +169,48 @@ impl ZmqQueue {
     }
 }
 
-impl Broker for ZmqQueue {
+// Written out rather than derived: `Role` is a type-level tag, and a derive would demand of it
+// what is only asked of the fields.
+impl<Role> Clone for ZmqQueue<Role> {
+    fn clone(&self) -> Self {
+        Self {
+            endpoint: self.endpoint.clone(),
+            read_ahead: self.read_ahead,
+            cell: Arc::clone(&self.cell),
+            role: PhantomData,
+        }
+    }
+}
+
+impl<Role> fmt::Debug for ZmqQueue<Role> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ZmqQueue")
+            .field("endpoint", &self.endpoint)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<Role: EndpointRole> Broker for ZmqQueue<Role> {
     type Error = ZmqError;
-    type Connected = ConnectedZmqQueue;
+    type Connected = ConnectedZmqQueue<Role>;
 
     async fn connect(self) -> Result<Self::Connected, Self::Error> {
+        self.connect_with(Lifecycle::new).await
+    }
+}
+
+impl<Role: EndpointRole> ZmqQueue<Role> {
+    /// The connect transition over the transport `lifecycle` builds: the sockets, or the
+    /// in-process transport the test harness connects instead.
+    pub(crate) async fn connect_with(
+        self,
+        lifecycle: fn(Endpoint) -> Lifecycle,
+    ) -> Result<ConnectedZmqQueue<Role>, ZmqError> {
         let lifecycle = self
             .cell
             .get_or_try_init(async || {
                 self.endpoint.validate()?;
-                Ok::<_, ZmqError>(Arc::new(Lifecycle::new(self.endpoint.clone())))
+                Ok::<_, ZmqError>(Arc::new(lifecycle(self.endpoint.clone())))
             })
             .await?
             .clone();
@@ -159,26 +218,40 @@ impl Broker for ZmqQueue {
             lifecycle,
             read_ahead: self.read_ahead,
             cell: self.cell,
+            role: PhantomData,
         })
     }
 }
 
-impl DescribeServer for ZmqQueue {
+impl<Role: EndpointRole> DescribeServer for ZmqQueue<Role> {
     fn describe_server(&self) -> ServerSpec {
         self.endpoint.server_spec()
     }
 }
 
 /// The connected form of [`ZmqQueue`]; sockets attach lazily per subscription and publisher.
-#[derive(Debug)]
-pub struct ConnectedZmqQueue {
+pub struct ConnectedZmqQueue<Role = Bind> {
     lifecycle: SharedLifecycle,
     /// How far this subscription reads ahead, from the descriptor this form was connected from.
     read_ahead: NonZeroUsize,
     cell: Arc<OnceCell<SharedLifecycle>>,
+    role: PhantomData<fn() -> Role>,
 }
 
-impl ConnectedZmqQueue {
+impl<Role> fmt::Debug for ConnectedZmqQueue<Role> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConnectedZmqQueue")
+            .field("lifecycle", &self.lifecycle)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<Role> ConnectedZmqQueue<Role> {
+    #[cfg(feature = "testing")]
+    pub(crate) fn lifecycle(&self) -> &Lifecycle {
+        &self.lifecycle
+    }
+
     /// The address a local subscription resolved by binding (useful with an ephemeral
     /// `tcp://...:0` endpoint); `None` until a subscription has bound.
     #[must_use]
@@ -194,49 +267,41 @@ impl ConnectedZmqQueue {
             push: Arc::new(Mutex::new(None)),
         }
     }
-}
 
-impl ConnectedBroker for ConnectedZmqQueue {
-    type Error = ZmqError;
-    type Closed = ();
-
-    fn shutdown(self) -> impl Future<Output = Result<(), Self::Error>> {
-        self.lifecycle
-            .closed
-            .store(true, std::sync::atomic::Ordering::Release);
-        ready(Ok(()))
-    }
-}
-
-impl Subscribe for ConnectedZmqQueue {
-    type Subscriber = ZmqSubscriber;
-
-    /// The subscribe name is the address: a PUSH socket publishing under it reaches the PULL
-    /// subscription opened under it, so the runtime publishes a retry copy to the subscription's
-    /// own name and nothing has to be written at the mount site.
-    ///
-    /// This is the whole retry path on `ZeroMQ`. Nothing settles a delivery, so a handler asking
-    /// for `retry_after` is served only by the deferred copy the runtime publishes here.
-    /// Competing consumers still compete for that copy, so the worker that retries is not
-    /// necessarily the one that asked.
-    type Copies = AddressedCopies;
-
-    async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
+    /// Opens a PULL subscription on the endpoint, bound or dialed per the side.
+    async fn open(&self, name: &str) -> Result<ZmqSubscriber, ZmqError> {
         self.lifecycle.ensure_open()?;
-        let mut socket = PullSocket::new();
-        self.lifecycle.attach_receiver(&mut socket, name).await?;
+        #[cfg(feature = "testing")]
+        if let Some(bus) = self.lifecycle.in_process_bus() {
+            let slot = self.lifecycle.attach_in_process(name).await?;
+            let (rx, registration) = bus.subscribe(name, wire::read_delivery);
+            return Ok(ZmqSubscriber::from_parts(
+                name.to_owned(),
+                DeliveryReceiver::InProcess(rx),
+                DriverHandle::InProcess(registration, slot),
+            ));
+        }
+        let lifecycle = Arc::clone(&self.lifecycle);
+        let subscription = name.to_owned();
+        let (mut socket, slot) = self
+            .lifecycle
+            .on_runtime(async move {
+                let mut socket = PullSocket::new();
+                let slot = lifecycle
+                    .attach_receiver(&mut socket, &subscription)
+                    .await?;
+                Ok((socket, slot))
+            })
+            .await?;
 
         let (tx, rx) = delivery_channel(self.read_ahead);
-        let task = tokio::spawn(async move {
+        let task = self.lifecycle.spawn(async move {
             loop {
                 match socket.recv().await {
                     Ok(message) => {
-                        let item =
-                            wire::decode(message).map(|(name, headers, payload)| ZmqMessage {
-                                name,
-                                headers,
-                                payload,
-                            });
+                        let Some(item) = wire::read_delivery(message) else {
+                            continue;
+                        };
                         if tx.send(item).await.is_err() {
                             break;
                         }
@@ -256,8 +321,52 @@ impl Subscribe for ConnectedZmqQueue {
         Ok(ZmqSubscriber::from_parts(
             name.to_owned(),
             rx,
-            DriverHandle { task },
+            DriverHandle::Task(task, slot),
         ))
+    }
+}
+
+impl<Role: EndpointRole> ConnectedBroker for ConnectedZmqQueue<Role> {
+    type Error = ZmqError;
+    type Closed = ();
+
+    fn shutdown(self) -> impl Future<Output = Result<(), Self::Error>> {
+        self.lifecycle.closed.store(true, Ordering::Release);
+        ready(Ok(()))
+    }
+}
+
+impl Subscribe for ConnectedZmqQueue<Bind> {
+    type Subscriber = ZmqSubscriber;
+
+    /// The subscribe name is the address: the subscription binds the endpoint, a PUSH socket of
+    /// this service dials that listener, and a publish under the subscription's name reaches it.
+    /// The runtime publishes a retry copy there, and nothing has to be written at the mount site.
+    ///
+    /// This is the whole retry path on `ZeroMQ`. Nothing settles a delivery, so a handler asking
+    /// for `retry_after` is served only by the deferred copy the runtime publishes here.
+    /// Competing consumers still compete for that copy, so the worker that retries is not
+    /// necessarily the one that asked.
+    type Copies = AddressedCopies;
+
+    async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
+        self.open(name).await
+    }
+}
+
+impl Subscribe for ConnectedZmqQueue<Connect> {
+    type Subscriber = ZmqSubscriber;
+
+    /// A subscription that dials reads from the PUSH peer at the endpoint, a ventilator that
+    /// sends and takes nothing, so a copy published back to it is refused by the handshake. The
+    /// subscription therefore addresses no copy, and every registration names where its copies
+    /// go: `.out_retry(policy).to("name")` over a broker that reaches a consumer, or a transform
+    /// that names one per delivery. A registration that names neither is refused before the
+    /// subscription opens, and a `.build()` chain that names neither does not compile.
+    type Copies = NamedCopies;
+
+    async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
+        self.open(name).await
     }
 }
 
@@ -268,8 +377,8 @@ pub struct ZmqSubscriber {
     inner: BufferedSubscriber<WireSubscriber>,
 }
 
-impl std::fmt::Debug for ZmqSubscriber {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for ZmqSubscriber {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ZmqSubscriber")
             .field("name", &self.name)
             .finish_non_exhaustive()
@@ -317,7 +426,9 @@ impl BatchSubscriber for ZmqSubscriber {
 /// On an endpoint a subscription of this service bound, the socket dials that subscription, so a
 /// publish reaches it and nothing else: one under the subscription's own name (a retry copy, a
 /// job the service feeds itself) is sent, and one under any other name returns
-/// [`ZmqError::Send`] rather than arriving at the subscription as its next delivery.
+/// [`ZmqError::Send`] rather than arriving at the subscription as its next delivery. On an
+/// endpoint a subscription of this service dials, the peer there only pushes, so every publish
+/// returns [`ZmqError::Send`] naming that subscription.
 #[derive(Clone)]
 pub struct ZmqQueuePublisher {
     cell: Arc<OnceCell<SharedLifecycle>>,
@@ -326,14 +437,61 @@ pub struct ZmqQueuePublisher {
 
 /// A PUSH socket, and the subscription of this service it reaches when it dialed one.
 struct Attached {
-    socket: PushSocket,
+    socket: Sender<Outbox<PushSocket>>,
     /// Set when a subscription of this service bound the endpoint and the socket dialed it: that
     /// subscription receives every message sent, so only its own name may be sent.
     local: Option<String>,
 }
 
-impl std::fmt::Debug for ZmqQueuePublisher {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Attached {
+    /// Attaches a PUSH socket per the endpoint's side, or its in-process counterpart.
+    async fn attach(lifecycle: &SharedLifecycle) -> Result<Self, ZmqError> {
+        #[cfg(feature = "testing")]
+        if let Some(bus) = lifecycle.in_process_bus() {
+            let local = lifecycle
+                .local_listener()
+                .map(|listener| listener.subscription.clone());
+            return Ok(Self {
+                socket: Sender::InProcess {
+                    bus: Arc::clone(bus),
+                    local: local.is_some(),
+                },
+                local,
+            });
+        }
+        let attaching = Arc::clone(lifecycle);
+        let (socket, local) = lifecycle
+            .on_runtime(async move {
+                let mut socket = PushSocket::new();
+                let local = attaching
+                    .attach_sender(&mut socket)
+                    .await?
+                    .map(|listener| listener.subscription.clone());
+                Ok((socket, local))
+            })
+            .await?;
+        Ok(Self {
+            socket: Sender::Socket(Outbox::new(socket)),
+            local,
+        })
+    }
+
+    async fn send(&mut self, name: &str, frames: zeromq::ZmqMessage) -> Result<(), ZmqError> {
+        match &mut self.socket {
+            Sender::Socket(outbox) => outbox.send(name, frames).await,
+            // The subscription that bound the endpoint takes whatever is pushed into it.
+            #[cfg(feature = "testing")]
+            Sender::InProcess { bus, local } => {
+                let pick = if *local { Pick::All } else { Pick::Nobody };
+                bus.send(name, frames, None, pick);
+                Ok(())
+            }
+        }
+    }
+}
+
+impl fmt::Debug for ZmqQueuePublisher {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ZmqQueuePublisher").finish_non_exhaustive()
     }
 }
@@ -351,9 +509,10 @@ impl Publisher for ZmqQueuePublisher {
 
     /// # Cancel safety
     ///
-    /// Not cancel-safe. Dropping the future can leave the message half-handed to the socket: the
-    /// attach and the send share one guard, and a send that has begun is not undone. Publish from
-    /// a task of its own rather than inside a `select!` arm.
+    /// Cancel-safe. A publish dropped before the socket takes its message sends nothing. One
+    /// dropped mid-send, while the peer applies back-pressure, leaves its message with the
+    /// publisher: the next publish through it or a clone completes that send before its own, and
+    /// a failure of it is logged against its name.
     // The socket guard intentionally spans the lazy attach and the send: the socket takes
     // &mut for every operation.
     #[allow(clippy::significant_drop_tightening)]
@@ -367,14 +526,17 @@ impl Publisher for ZmqQueuePublisher {
         // Framed before the socket is touched: a message that cannot be written costs no attach.
         let (name, payload, headers) = msg.into_parts();
         let frames = wire::encode_to(name, name, &headers, payload.freeze())?;
+        // Checked here rather than by the type: whether one broker both subscribes and publishes is
+        // decided by the scopes a service mounts, and the peer at the far end is the deployment's,
+        // so the refusal comes before the handshake would give it. Checked on every publish, not
+        // only on the attach: a subscription that dials after the socket attached turns the
+        // publisher's peer into its own. One load of a set-once cell.
+        if let Some(subscription) = lifecycle.dialer() {
+            return Err(dials_the_sender(name, subscription, "PUSH", "queue"));
+        }
         let mut push = self.push.lock().await;
         if push.is_none() {
-            let mut socket = PushSocket::new();
-            let local = lifecycle
-                .attach_sender(&mut socket)
-                .await?
-                .map(|listener| listener.subscription.clone());
-            *push = Some(Attached { socket, local });
+            *push = Some(Attached::attach(lifecycle).await?);
         }
         let attached = push.as_mut().expect("just attached");
         // Checked per message because the name is per message: a slot names it at the call site
@@ -387,7 +549,7 @@ impl Publisher for ZmqQueuePublisher {
         {
             return Err(returns_to_subscription(name, subscription));
         }
-        send_with_retry(&mut attached.socket, name, frames).await
+        attached.send(name, frames).await
     }
 }
 
@@ -405,12 +567,12 @@ impl Publisher for ZmqQueuePublisher {
 #[must_use]
 pub struct ZmqQueuePublish;
 
-impl PublishPolicy<ConnectedZmqQueue> for ZmqQueuePublish {
+impl<Role: EndpointRole> PublishPolicy<ConnectedZmqQueue<Role>> for ZmqQueuePublish {
     type Live = ZmqQueuePublisher;
 
     fn pair(
         self,
-        connected: &ConnectedZmqQueue,
+        connected: &ConnectedZmqQueue<Role>,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(connected.publisher()))
     }
@@ -423,7 +585,7 @@ impl PublishPolicy<ConnectedZmqQueue> for ZmqQueuePublish {
     }
 }
 
-impl DefaultPublish for ConnectedZmqQueue {
+impl<Role: EndpointRole> DefaultPublish for ConnectedZmqQueue<Role> {
     type Policy = ZmqQueuePublish;
 }
 
