@@ -2,7 +2,9 @@
 //!
 //! Honest scope, straight from the protocol: a subscriber that connects after a publisher has
 //! started misses what was sent before it arrived (the slow joiner), and a message published
-//! with no matching subscriber is dropped silently.
+//! with no matching subscriber is dropped silently. A publisher that reaches a subscription of
+//! its own service reads that subscription's filter before its first send, so it loses nothing
+//! to the slow joiner.
 
 /// The publish policy of this form, under the name a mount site writes.
 pub use self::ZmqFanoutPublish as Publish;
@@ -65,20 +67,28 @@ use ruststream::{
     NamedCopies, OutgoingMessage, PairError, PublishPolicy, Publisher, ServerSpec, Subscribe, Take,
 };
 use tokio::sync::OnceCell;
+use tokio::time::timeout;
 use zeromq::prelude::*;
-use zeromq::{PubSocket, SubSocket};
+use zeromq::{PubSocket, SubSocket, XPubSocket, ZmqError as WireError};
 
 #[cfg(feature = "asyncapi")]
 use crate::bindings::{self, SocketPair};
+#[cfg(feature = "testing")]
+use crate::common::DeliveryReceiver;
 use crate::common::{
-    DEFAULT_READ_AHEAD, DriverHandle, Lifecycle, SharedLifecycle, delivery_channel,
-    dials_the_sender, send_with_retry,
+    DEFAULT_READ_AHEAD, DriverHandle, Lifecycle, SEND_RETRY_WINDOW, SendTarget, Sender,
+    SharedLifecycle, attach_to, delivery_channel, dials_the_sender, send_with_retry,
 };
 use crate::endpoint::{Bind, Connect, Endpoint, EndpointRole, ZmqEndpoint};
-use crate::error::ZmqError;
-use crate::message::ZmqMessage;
+use crate::error::{ZmqError, box_err};
+#[cfg(feature = "testing")]
+use crate::in_process::Pick;
 use crate::queue::ZmqSubscriber;
 use crate::wire;
+
+// A production publisher holds the socket it attached and nothing beside it.
+#[cfg(not(feature = "testing"))]
+const _: () = assert!(size_of::<Sender<PubSide>>() == size_of::<PubSide>());
 
 /// The PUB/SUB fan-out: each message reaches every subscriber whose name prefix matches.
 ///
@@ -189,11 +199,22 @@ impl<Role: EndpointRole> Broker for ZmqFanout<Role> {
     type Connected = ConnectedZmqFanout<Role>;
 
     async fn connect(self) -> Result<Self::Connected, Self::Error> {
+        self.connect_with(Lifecycle::new).await
+    }
+}
+
+impl<Role: EndpointRole> ZmqFanout<Role> {
+    /// The connect transition over the transport `lifecycle` builds: the sockets, or the
+    /// in-process transport the test harness connects instead.
+    pub(crate) async fn connect_with(
+        self,
+        lifecycle: fn(Endpoint) -> Lifecycle,
+    ) -> Result<ConnectedZmqFanout<Role>, ZmqError> {
         let lifecycle = self
             .cell
             .get_or_try_init(async || {
                 self.endpoint.validate()?;
-                Ok::<_, ZmqError>(Arc::new(Lifecycle::new(self.endpoint.clone())))
+                Ok::<_, ZmqError>(Arc::new(lifecycle(self.endpoint.clone())))
             })
             .await?
             .clone();
@@ -230,6 +251,11 @@ impl<Role> fmt::Debug for ConnectedZmqFanout<Role> {
 }
 
 impl<Role> ConnectedZmqFanout<Role> {
+    #[cfg(feature = "testing")]
+    pub(crate) fn lifecycle(&self) -> &Lifecycle {
+        &self.lifecycle
+    }
+
     /// The address a local subscription resolved by binding (useful with an ephemeral
     /// `tcp://...:0` endpoint); `None` until a subscription has bound.
     #[must_use]
@@ -250,26 +276,45 @@ impl<Role> ConnectedZmqFanout<Role> {
     /// name as a prefix.
     async fn open(&self, name: &str) -> Result<ZmqSubscriber, ZmqError> {
         self.lifecycle.ensure_open()?;
-        let mut socket = SubSocket::new();
-        let slot = self.lifecycle.attach_receiver(&mut socket, name).await?;
-        // The name frame doubles as the subscription prefix; filtering happens on the
-        // publisher side, per the protocol.
-        socket
-            .subscribe(name)
-            .await
-            .map_err(|e| ZmqError::Receive(e.to_string()))?;
+        // The prefix filter is the transport's in process: it picks the subscriptions whose name
+        // prefixes a message's name frame, as a SUB socket's filter does.
+        #[cfg(feature = "testing")]
+        if let Some(bus) = self.lifecycle.in_process_bus() {
+            let slot = self.lifecycle.attach_in_process(name).await?;
+            let (rx, registration) = bus.subscribe(name, wire::read_delivery);
+            return Ok(ZmqSubscriber::from_parts(
+                name.to_owned(),
+                DeliveryReceiver::InProcess(rx),
+                DriverHandle::InProcess(registration, slot),
+            ));
+        }
+        let lifecycle = Arc::clone(&self.lifecycle);
+        let subscription = name.to_owned();
+        let (mut socket, slot) = self
+            .lifecycle
+            .on_runtime(async move {
+                let mut socket = SubSocket::new();
+                let slot = lifecycle
+                    .attach_receiver(&mut socket, &subscription)
+                    .await?;
+                // The name frame doubles as the subscription prefix; filtering happens on the
+                // publisher side, per the protocol.
+                socket
+                    .subscribe(&subscription)
+                    .await
+                    .map_err(|e| ZmqError::Receive(e.to_string()))?;
+                Ok((socket, slot))
+            })
+            .await?;
 
         let (tx, rx) = delivery_channel(self.read_ahead);
-        let task = tokio::spawn(async move {
+        let task = self.lifecycle.spawn(async move {
             loop {
                 match socket.recv().await {
                     Ok(message) => {
-                        let item =
-                            wire::decode(message).map(|(name, headers, payload)| ZmqMessage {
-                                name,
-                                headers,
-                                payload,
-                            });
+                        let Some(item) = wire::read_delivery(message) else {
+                            continue;
+                        };
                         if tx.send(item).await.is_err() {
                             break;
                         }
@@ -289,7 +334,7 @@ impl<Role> ConnectedZmqFanout<Role> {
         Ok(ZmqSubscriber::from_parts(
             name.to_owned(),
             rx,
-            DriverHandle { task, _slot: slot },
+            DriverHandle::Task(task, slot),
         ))
     }
 }
@@ -313,8 +358,8 @@ impl Subscribe for ConnectedZmqFanout<Bind> {
     /// process reaches its own subscriber. That is what a retry copy needs.
     ///
     /// The pattern's own scope applies to the copy as it does to any other message: every
-    /// subscription whose prefix matches receives it, and a publisher whose filter table has not
-    /// propagated yet drops it (the slow joiner).
+    /// subscription whose prefix matches receives it. The publisher reads the subscription's
+    /// filter before its first send, so the first copy it publishes is not dropped.
     type Copies = AddressedCopies;
 
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
@@ -350,7 +395,17 @@ pub struct ZmqFanoutPublisher {
     // so something must serialise, and this one's uncontended lock and unlock are a pair of atomics
     // where tokio's semaphore also takes its waiter list. It costs 1.8 of the 9 points a publish
     // spends over a raw socket loop (#28).
-    socket: Arc<Mutex<Option<PubSocket>>>,
+    socket: Arc<Mutex<Option<Sender<PubSide>>>>,
+}
+
+/// The sending socket of a fan-out publisher, by the place it attached to.
+enum PubSide {
+    /// A peer outside this service: the socket learns its filters as they arrive, and what it
+    /// sends before one arrives is dropped, as the pattern drops it.
+    Remote(PubSocket),
+    /// The listener a subscription of this service bound. The socket read that subscription's
+    /// filter before its first send, so nothing it sends is dropped for want of one.
+    Loopback(XPubSocket),
 }
 
 impl fmt::Debug for ZmqFanoutPublisher {
@@ -398,15 +453,79 @@ impl Publisher for ZmqFanoutPublisher {
         }
         let mut guard = self.socket.lock().await;
         if guard.is_none() {
-            let mut socket = PubSocket::new();
-            lifecycle.attach_sender(&mut socket).await?;
-            *guard = Some(socket);
+            *guard = Some(attach(lifecycle).await?);
         }
-        let socket = guard.as_mut().expect("just attached");
-        // PUB never reports "no peers": an unmatched message is dropped by design, so the
-        // retry helper only smooths transport-level failures.
-        send_with_retry(socket, name, frames).await
+        match guard.as_mut().expect("just attached") {
+            // PUB never reports "no peers": an unmatched message is dropped by design, so the
+            // retry helper only smooths transport-level failures.
+            Sender::Socket(PubSide::Remote(socket)) => send_with_retry(socket, name, frames).await,
+            Sender::Socket(PubSide::Loopback(socket)) => {
+                send_with_retry(socket, name, frames).await
+            }
+            #[cfg(feature = "testing")]
+            Sender::InProcess { bus, local } => {
+                let pick = if *local {
+                    Pick::Prefix(name)
+                } else {
+                    Pick::Nobody
+                };
+                bus.send(name, frames, None, pick);
+                Ok(())
+            }
+        }
     }
+}
+
+/// Attaches a PUB socket per the endpoint's side, or its in-process counterpart.
+///
+/// On the listener a subscription of this service bound, the socket is an XPUB that reads the
+/// subscription's filter before it returns: a PUB socket drops a message until the filter of the
+/// peer it dialed has arrived, and on the loopback that peer is the subscription a retry copy is
+/// published to. The wait is paid once per publisher, at the attach.
+async fn attach(lifecycle: &SharedLifecycle) -> Result<Sender<PubSide>, ZmqError> {
+    #[cfg(feature = "testing")]
+    if let Some(bus) = lifecycle.in_process_bus() {
+        return Ok(Sender::InProcess {
+            bus: Arc::clone(bus),
+            local: lifecycle.local_listener().is_some(),
+        });
+    }
+    let attaching = Arc::clone(lifecycle);
+    let socket = lifecycle
+        .on_runtime(async move {
+            match attaching.send_target() {
+                target @ SendTarget::Local(_) => {
+                    let address = target.address().to_owned();
+                    let mut socket = XPubSocket::new();
+                    attach_to(&mut socket, target).await?;
+                    await_filter(&mut socket, &address).await?;
+                    Ok(PubSide::Loopback(socket))
+                }
+                target => {
+                    let mut socket = PubSocket::new();
+                    attach_to(&mut socket, target).await?;
+                    Ok(PubSide::Remote(socket))
+                }
+            }
+        })
+        .await?;
+    Ok(Sender::Socket(socket))
+}
+
+/// Reads the subscribe message the SUB socket at `address` sends once the handshake is done,
+/// which is what enters its filter into the socket's table.
+///
+/// The subscription subscribes once, to its own name, and a SUB socket sends its filters to every
+/// peer that connects, so the first message from it is the whole table.
+async fn await_filter(socket: &mut XPubSocket, address: &str) -> Result<(), ZmqError> {
+    timeout(SEND_RETRY_WINDOW, socket.recv())
+        .await
+        .unwrap_or(Err(WireError::Other("the subscription sent no filter")))
+        .map(drop)
+        .map_err(|err| ZmqError::Endpoint {
+            endpoint: address.to_owned(),
+            source: box_err(err),
+        })
 }
 
 /// The publish policy for [`ZmqFanoutPublisher`].
