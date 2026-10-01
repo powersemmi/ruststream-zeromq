@@ -1,11 +1,12 @@
 //! Machinery shared by the three socket patterns.
 
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use futures::Stream;
-use ruststream::Subscriber;
+use ruststream::{Subscriber, nonzero};
 use tokio::sync::{OnceCell, mpsc};
 use zeromq::prelude::*;
 use zeromq::{Socket, ZmqError as WireError};
@@ -27,9 +28,23 @@ pub(crate) const SEND_RETRY_STEP: Duration = Duration::from_millis(50);
 /// subscription far less than the round trip it is waiting on anyway.
 pub(crate) const BATCH_MAX_WAIT: Duration = Duration::from_millis(20);
 
-/// Shared lifecycle state: the endpoint, the address a local subscription resolved by
-/// binding (which is what a same-process publisher dials for the loopback arrangement), and
-/// the closed flag aliased handles trip over.
+/// How many deliveries a subscription reads off its socket ahead of the handler, unless its
+/// descriptor names another bound: the receive high-water mark `ZeroMQ` itself gives a socket.
+pub(crate) const DEFAULT_READ_AHEAD: NonZeroUsize = nonzero!(1000_usize);
+
+/// The channel between a subscription's driver task and its handler, `read_ahead` deep.
+///
+/// Bounded, so a full channel stops the driver, the driver stops reading the socket, and the
+/// socket holds the sender back: a handler slower than the wire slows the wire down instead of
+/// accumulating the difference in memory. The bound is the connected form's own, taken from the
+/// descriptor it was connected from, so clones sharing one lifecycle keep their own bounds.
+pub(crate) fn delivery_channel(read_ahead: NonZeroUsize) -> (DeliverySender, DeliveryReceiver) {
+    mpsc::channel(read_ahead.get())
+}
+
+/// Shared lifecycle state: the endpoint, the
+/// address a local subscription resolved by binding (which is what a same-process publisher dials
+/// for the loopback arrangement), and the closed flag aliased handles trip over.
 #[derive(Debug)]
 pub(crate) struct Lifecycle {
     pub(crate) endpoint: ZmqEndpoint,
@@ -160,13 +175,19 @@ impl Drop for DriverHandle {
     }
 }
 
+/// The driver task's end of a subscription's delivery channel.
+pub(crate) type DeliverySender = mpsc::Sender<Result<ZmqMessage, ZmqError>>;
+
+/// The handler's end of a subscription's delivery channel.
+pub(crate) type DeliveryReceiver = mpsc::Receiver<Result<ZmqMessage, ZmqError>>;
+
 /// The socket side of any subscription: the driver task's channel, one delivery at a time, which
 /// is all a receive on a ZMTP socket yields.
 ///
 /// The public subscribers wrap it - the batching patterns through the framework's client-side
 /// buffer, the request-reply one directly.
 pub(crate) struct WireSubscriber {
-    pub(crate) rx: mpsc::UnboundedReceiver<Result<ZmqMessage, ZmqError>>,
+    pub(crate) rx: DeliveryReceiver,
     pub(crate) _driver: DriverHandle,
 }
 

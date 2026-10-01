@@ -11,8 +11,8 @@ once and nothing is stored, so [`ack`](ruststream::IncomingMessage::ack) and
 [`nack`](ruststream::IncomingMessage::nack) report
 [`AckError::Unsupported`](ruststream::AckError::Unsupported) and a delayed retry is a copy this
 service publishes. A fan-out subscriber that attaches after a publisher has started misses what was
-sent before it arrived. There is no encryption layer and no high-water-mark setting. Order is kept
-per socket pair and nowhere else.
+sent before it arrived. There is no encryption layer. Order is kept per socket pair and nowhere
+else.
 
 The framework itself - handlers, routers, codecs, middleware, the generated `main` - is documented
 in [`ruststream`](https://docs.rs/ruststream/latest/ruststream/); this page covers what is
@@ -553,8 +553,12 @@ words the socket uses.
   service on a trusted network or inside an existing tunnel.
 * Connection settings: the endpoint and its role, and nothing else. The handshake retry window
   (five seconds), the batch deadline (20 ms) and the ZMTP version are constants of this crate.
-* Back-pressure: no high-water mark is exposed. A slow reader exerts raw TCP back-pressure on
-  senders, except on PUB/SUB, where an unmatched message is dropped without an error.
+* Back-pressure: a subscription reads at most 1000 deliveries ahead of its handler, or the bound
+  its descriptor sets with `read_ahead` ([`ZmqQueue::read_ahead`], [`ZmqFanout::read_ahead`],
+  [`ZmqRpc::read_ahead`]). Past it the subscription stops reading, the socket buffers fill, and the
+  sender waits, so a slow handler slows the sender down instead of growing this process's memory.
+  On PUB/SUB the waiting sender is the PUB socket, held back by its slowest matching subscriber; a
+  message that matches no subscriber is still dropped without an error.
 * Cancel safety: no publish here is cancel-safe. Dropping a publish future can leave a message
   half-handed to the socket, and dropping a `request` future closes the DEALER the request went
   out on. Publish from a task of its own and give up through the request timeout, not by
