@@ -21,35 +21,27 @@
 
 ---
 
-`ruststream-zeromq` implements the RustStream broker contract over the pure-Rust [`zeromq`](https://crates.io/crates/zeromq) implementation (TCP and IPC transports). Unlike the other RustStream broker crates, there is no server in the middle: a Rust service can join a ZeroMQ topology an existing Python worker or C++ daemon already speaks, without dropping out of the framework.
+`ruststream-zeromq` connects a RustStream service to a ZeroMQ topology over the pure-Rust
+[`zeromq`](https://crates.io/crates/zeromq) implementation, on TCP and IPC. There is no server in
+the middle, so a Rust service joins sockets a Python worker or a C++ daemon already speaks.
+Handlers, routing, codecs and middleware come from the framework; this crate is the transport.
 
-## Patterns
+## Features
 
-Three socket patterns cover three messaging shapes:
+- **Three socket patterns:** `ZmqQueue` (PUSH/PULL, competing consumers), `ZmqFanout` (PUB/SUB,
+  prefix filtering) and `ZmqRpc` (DEALER/ROUTER, request and reply).
+- **An explicit role:** an endpoint either binds or connects, which is a deployment decision.
+- **A stable wire contract** that a foreign peer composes by hand.
+- **Batches** assembled on the client for the one-way patterns.
+- **Retry caps and dead letters** applied by the framework.
+- **AsyncAPI** with the transport, role and socket pair, behind the `asyncapi` feature.
+- **Tests without sockets:** the service's own app runs with this crate's brokers in process.
 
-- **`ZmqQueue`** - PUSH/PULL: competing consumers, round-robin.
-- **`ZmqFanout`** - PUB/SUB: broadcast, prefix filtering by name.
-- **`ZmqRpc`** - DEALER/ROUTER: request and reply. One publisher covers both directions: `RequestReply::request` issues a request over its own DEALER socket, and a plain publish routes a reply back through the responder's ROUTER, addressed by the `reply-to` header the ROUTER stamps on the request.
-
-A socket hands over one message per receive, so a `&[T]` batch handler on `ZmqQueue` or `ZmqFanout` is served by assembling its batches on the client, to the size the mount site names (`b.include(drain.batch(nonzero!(32)))`). `ZmqRpc` does not batch: a batch carries one publish context for all of its replies, and a responder answers each requester at its own `reply-to` address, so `.batch(..)` there is a compile error rather than a run of misrouted replies.
-
-Because there is no server, the role is explicit - which side listens is a deployment decision:
-
-```rust
-use ruststream_zeromq::ZmqEndpoint;
-
-let listener = ZmqEndpoint::bind("tcp://0.0.0.0:5555");   // this process listens
-let dialer = ZmqEndpoint::connect("tcp://ml:5555");       // this process dials out
-let local = ZmqEndpoint::bind("ipc:///tmp/orders");       // same host, no network stack
-```
-
-The side is a type: `bind` gives a `ZmqEndpoint<Bind>`, `connect` a `ZmqEndpoint<Connect>`, and the broker built on it carries the same `Role` parameter, so `ZmqQueue::new(ZmqEndpoint::connect(..))` is a `ZmqQueue<Connect>`. It decides where a retry copy can go, so a mount the side cannot serve is refused before it runs.
-
-An ephemeral bind (`tcp://127.0.0.1:0`) resolves at subscribe; `bound_address()` reports it, and a same-process publisher dials it automatically (the loopback arrangement). Such a publisher reaches that subscription and nothing else, so on `ZmqQueue` it sends under the subscription's own name (a retry copy, a job the service feeds itself) and refuses any other name with `ZmqError::Send` rather than handing the message back to the subscription as its next delivery. A reply, a result or a dead letter leaves through a queue on an endpoint of its own.
+Delivery is at most once, with no durability: acknowledgement reports `AckError::Unsupported`. A
+subscriber that connects late misses what was sent before it arrived, and there is no encryption
+layer.
 
 ## The wire contract
-
-The frame layout is part of the crate's public contract, because the peer on the other side composes messages by hand:
 
 ```text
 frame 0: name      UTF-8; also the subscription prefix for the fan-out pattern
@@ -57,19 +49,8 @@ frame 1: headers   UTF-8 "name: value" lines separated by \n; may be empty
 frame 2: payload   encoded by the framework's codec
 ```
 
-A Python peer sends `socket.send_multipart([b"orders", b"content-type: application/json", payload])`. A two-frame message from a minimal peer reads as headerless. The layout is stable across versions.
-
-The payload frame is whatever the framework's codec produced, so the peer only has to agree on the codec. Bytes a service already holds framed - the common case when the foreign peer chose the encoding - skip the codec entirely: a `#[derive(Outgoing, Serialized)]` newtype travels through the same `message(..).publish()` call and reaches the wire untouched.
-
-## Scope and limits
-
-- Delivery is **at most once** and there is no durability; acknowledgement is reported as `AckError::Unsupported`, never emulated.
-- A subscriber that connects after a publisher has started **misses what was sent before it arrived** (the slow joiner), and a fan-out message with no matching subscriber is dropped silently. A service publishing to its own fan-out subscription is the exception: its publisher reads the subscription's filter before the first send.
-- A subscription reads **at most 1000 deliveries ahead** of its handler, or the bound its descriptor sets with `.read_ahead(n)`. Past it the subscription stops reading and the socket holds the sender back, so a slow handler slows the sender down instead of growing the service's memory. A PUB socket waits for its slowest matching subscriber the same way.
-- There is **no encryption layer**: use it on trusted networks, or inside an existing tunnel.
-- No consumer groups, no transactions, and **no native retry mechanism**: a delivery limit and a dead-letter destination declared with `.max_attempts(..)` and `.dead_letter(..)` are counted and applied by the framework, not by the transport.
-- **Nothing settles a delivery**, so a `retry_after` is served only by the copy the runtime publishes through the publisher the registration binds with `.out_retry(policy)`. A one-way subscription that binds addresses itself, so a mount site there names no destination. One that dials reads from a peer that only sends, and a `ZmqRpc` responder addresses nothing; every registration on either names where its copies go (`.out_retry(policy).to("jobs")` over another broker) or is refused before the subscription opens.
-- **A send takes the frames and nothing else**: no priority, no expiry, no ordering key. Every publisher declares `Options = ()`, this crate adds no publish builder step, and a handler body imports `ruststream::prelude::*` alone.
+A Python peer sends `socket.send_multipart([b"orders", b"content-type: application/json", payload])`.
+A two-frame message reads as one without headers.
 
 ## Install
 
@@ -83,22 +64,18 @@ serde = { version = "1", features = ["derive"] }
 ruststream-zeromq = { version = "0.7", features = ["testing"] }
 ```
 
-The `asyncapi` feature adds what this crate reports in a generated AsyncAPI document: the transport, the endpoint role and the socket pair, in the `x-ruststream-zeromq` extension, because the specification has no ZeroMQ binding.
-
 ## Write a service
-
-Each pattern ships its own prelude: the framework's, plus `ZmqEndpoint`, the pattern's descriptor, and its publish policy under the bare name `Publish` (`rpc::prelude` adds `RequestReply`). Switching pattern is then an import line, not a rewrite of the mount site:
 
 ```rust
 use ruststream_zeromq::queue::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Outgoing, Serialize)]
 struct Job {
     id: u64,
 }
 
-#[derive(Debug, Outgoing, Serialize)]
+#[derive(Debug, Deserialize, Outgoing, PartialEq, Serialize)]
 struct Done {
     id: u64,
 }
@@ -121,11 +98,14 @@ fn app() -> impl App {
 }
 ```
 
-`.out_reply(policy)` names where the handler's return value is published, `.out_retry(policy)` the deferred copy of a `retry_after`, and `.out(marker, policy)` an injected `Out<..>` publisher. A handler file needs none of this - it imports `ruststream::prelude::*` alone and bounds an injected publisher with a capability trait - which is what leaves the bare `Publish` free for the routes file. A file that mounts two patterns imports `ruststream_zeromq::prelude::*` instead, where the policies keep their prefixed names (`ZmqQueuePublish`, `ZmqFanoutPublish`, `ZmqRpcPublish`), because three of them cannot share one bare name.
+`#[ruststream::app]` generates `main`, so the binary understands `run` and `asyncapi gen`. Each
+pattern has its own prelude (`queue`, `fanout`, `rpc`), so switching pattern changes the import.
 
 ## Test it
 
-A test runs the service's own app. `TestApp::start(app())` connects each broker of this crate in process, with the production broker, its connected form and its publish policies over a transport inside the test process; `TestApp::start_live(app())` runs the same body over loopback sockets. Enable the `testing` feature in `[dev-dependencies]` and address a broker by its production type. The harness encodes what it injects and decodes what it asserts on, so a test build adds `Outgoing` and `Serialize` to the input type and `Deserialize` plus `PartialEq` to the reply:
+`TestApp` runs the service's own app with this crate's brokers in process, with no sockets;
+`TestApp::start_live(app())` runs the same body over loopback sockets. Enable the `testing`
+feature in `[dev-dependencies]`.
 
 ```rust
 use ruststream::testing::TestApp;
@@ -146,27 +126,18 @@ tb.broker::<ZmqQueue<Connect>>()
     .with(&Done { id: 1 });
 ```
 
-The in-process transport carries the frames a socket carries and routes by the pattern's own rule: a subscription that binds a queue takes whatever is pushed to it, subscriptions that dial take a peer's pushes in turn, a fan-out reaches every subscription whose name prefixes the message, and a request reaches the responder. It refuses what the sockets refuse, in their words: a result mounted on the queue its own subscription binds, a publish on an endpoint a subscription dials, a second subscription on a bound endpoint.
+## Documentation
 
-`just test` covers the whole crate with nothing to start first: the in-process suites, the socket suites on the loopback, including a wire-layout check driven by a raw foreign-style peer, and the core's contract suites. Each contract suite runs over the loopback sockets and again in process, and the checks that compare the two transports (settlement answers, refusals) hold the in-process transport to what the sockets do.
+- This crate: <https://docs.rs/ruststream-zeromq>
+- The framework: <https://powersemmi.github.io/ruststream/latest>
 
-## Layout
+## Minimum supported Rust version
 
-```
-ruststream-zeromq/
-├── crates/
-│   └── ruststream-zeromq/      the published crate
-│       └── examples/           runnable zmq_* examples
-├── docs/                       the documentation site
-└── Cargo.toml                  workspace
-```
+The MSRV is **1.88**, edition 2024.
 
 ## Contributing
 
-```bash
-just check   # fmt, clippy, feature checks
-just test    # the full suite, loopback sockets included
-```
+See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## License
 
