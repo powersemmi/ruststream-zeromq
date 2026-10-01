@@ -110,34 +110,29 @@ async fn fanout_filters_by_name_prefix() {
         .await
         .expect("subscription opens");
 
-    // The slow joiner is real and honest scope: the publisher-side filter table fills only
-    // after the handshake, so publish until the first delivery lands, then assert filtering.
+    // The publisher reads the subscription's filter before its first send, so one publish of
+    // each is enough: the unmatched one is filtered out, the matched one arrives.
     let publisher = connected.publisher();
     let mut stream = pin!(subscriber.stream());
-    let mut delivered = None;
-    for _ in 0..50 {
-        publisher
-            .publish(
-                OutgoingMessage::new("orders.us.1", b"skipped".as_slice()),
-                None,
-            )
-            .await
-            .expect("publish succeeds");
-        publisher
-            .publish(
-                OutgoingMessage::new("orders.eu.1", b"kept".as_slice()),
-                None,
-            )
-            .await
-            .expect("publish succeeds");
-        if let Ok(Some(next)) =
-            tokio::time::timeout(Duration::from_millis(200), stream.next()).await
-        {
-            delivered = Some(next.expect("delivery is ok"));
-            break;
-        }
-    }
-    let message = delivered.expect("a matching delivery arrives");
+    publisher
+        .publish(
+            OutgoingMessage::new("orders.us.1", b"skipped".as_slice()),
+            None,
+        )
+        .await
+        .expect("publish succeeds");
+    publisher
+        .publish(
+            OutgoingMessage::new("orders.eu.1", b"kept".as_slice()),
+            None,
+        )
+        .await
+        .expect("publish succeeds");
+    let message = tokio::time::timeout(Duration::from_secs(5), stream.next())
+        .await
+        .expect("a matching delivery arrives")
+        .expect("the stream is open")
+        .expect("delivery is ok");
     assert_eq!(message.payload(), b"kept");
     assert_eq!(message.name(), "orders.eu.1");
 
