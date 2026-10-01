@@ -87,12 +87,13 @@ async fn handle(job: &Job) -> Done {
 
 #[ruststream::app]
 fn app() -> impl App {
-    RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
-        ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
-        |b| {
-            b.include(handle).out_reply(Publish);
-        },
-    )
+    let results = ZmqQueue::new(ZmqEndpoint::connect("tcp://sink:5556")).bindable();
+    let to_results = results.bind(Publish);
+    RustStream::new(AppInfo::new("worker", "0.1.0"))
+        .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
+            b.include(handle).out_reply(to_results);
+        })
+        .with_broker(results, |_b| {})
 }
 ```
 
@@ -101,24 +102,21 @@ pattern has its own prelude (`queue`, `fanout`, `rpc`), so switching pattern cha
 
 ## Test it
 
-`TestApp` runs the handlers against an in-process stand of the pattern, with no sockets.
+`TestApp` runs the service's own app with `ZmqQueue` in process, with no sockets.
 
 ```rust
 use ruststream::testing::TestApp;
-use ruststream_zeromq::ZmqQueuePublish;
-use ruststream_zeromq::testing::{Queue, ZmqTestBroker};
+use ruststream_zeromq::Connect;
 
-let app = RustStream::new(AppInfo::new("worker", "0.1.0"))
-    .with_broker(ZmqTestBroker::queue(), |b| {
-        b.include(handle).out_reply(ZmqQueuePublish);
-    });
-let tb = TestApp::start(app).await?;
+let tb = TestApp::start(app()).await?;
 
-tb.broker::<ZmqTestBroker<Queue>>()
-    .publish("jobs", &Job { id: 1 })
+tb.broker::<ZmqQueue>()
+    .message(&Job { id: 1 })
+    .to("jobs")
+    .publish()
     .await?;
 
-tb.broker::<ZmqTestBroker<Queue>>()
+tb.broker::<ZmqQueue<Connect>>()
     .published::<Done>("results")
     .assert_called_once()
     .with(&Done { id: 1 });
