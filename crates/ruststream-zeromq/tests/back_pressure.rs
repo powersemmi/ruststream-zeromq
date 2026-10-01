@@ -120,8 +120,6 @@ async fn an_unread_fanout_subscription_holds_its_publisher_back() {
         .expect("subscription opens");
     let publisher = connected.publisher();
 
-    // Sends before the subscription reached the publisher's filter table are dropped (the slow
-    // joiner); they complete at once and only raise the count.
     let accepted = stalls_then_resumes(&publisher, "events", subscriber).await;
     assert!(
         accepted < CEILING,

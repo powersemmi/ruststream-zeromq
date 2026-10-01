@@ -658,9 +658,9 @@ production.
 [`TestApp::start_live`](https://docs.rs/ruststream/latest/ruststream/testing/struct.TestApp.html#method.start_live)
 runs the same test body over real sockets. `ZeroMQ` needs no server, so a live test binds loopback
 ports and runs in every `cargo test`. Live, a test's input leaves through the broker's own
-publisher, so on a bound queue it carries the subscription's own name. Delivery guarantees,
-back-pressure and the fan-out's slow joiner belong to the sockets: a live fan-out test publishes
-until the filter has reached the publisher, and an in-process one needs no such loop.
+publisher, so on a bound queue it carries the subscription's own name. Delivery guarantees
+and back-pressure belong to the sockets. The fan-out's publisher reads its own subscription's
+filter before its first send, so a live fan-out test publishes once, as an in-process one does.
 
 # Operations
 
@@ -675,9 +675,11 @@ until the filter has reached the publisher, and an in-process one needs no such 
   sender waits, so a slow handler slows the sender down instead of growing this process's memory.
   On PUB/SUB the waiting sender is the PUB socket, held back by its slowest matching subscriber; a
   message that matches no subscriber is still dropped without an error.
-* Cancel safety: no publish here is cancel-safe. Dropping a publish future can leave a message
-  half-handed to the socket, and dropping a `request` future closes the DEALER the request went
-  out on. Publish from a task of its own and give up through the request timeout, not by
-  cancelling a `select!` arm.
+* Cancel safety: a queue publish is cancel-safe. One dropped mid-send, while the peer applies
+  back-pressure, leaves its message with the publisher, and the next publish completes that send
+  before its own. A fan-out publish and a reply are not: dropping one can leave a message
+  half-handed to the socket. Dropping a `request` future closes the DEALER the request went out on.
+  Publish those from a task of its own and give up through the request timeout, not by cancelling
+  a `select!` arm.
 * Durability: none. Nothing is stored, so a subscriber that attaches late has no backlog to read
   and a restart replays nothing.

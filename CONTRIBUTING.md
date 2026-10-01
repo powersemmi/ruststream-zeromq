@@ -37,6 +37,7 @@ git clone https://github.com/powersemmi/ruststream-zeromq.git
 | `just deny` | cargo-deny | `cargo install cargo-deny --locked` |
 | `just typo`, `just zizmor` | uv | the uv documentation |
 | `just bench` | Python 3 | the system package manager |
+| `just bench-code` | valgrind and the benchmark runner | the system package manager, then `cargo install --locked gungraun-runner --version =0.19.4` |
 | the documentation site | Python 3.12 | `pip install -r docs/requirements.txt`, then `properdocs serve` |
 
 ## Checking a change
@@ -47,13 +48,16 @@ just test    # the test suite
 just ci      # both, plus codespell, cargo deny and zizmor
 ```
 
-The whole suite, conformance and lifecycle included, runs inside `just test`, in process and on
+The whole suite, the core's contract suites included, runs inside `just test`, in process and on
 loopback sockets: the two peers of a ZeroMQ exchange talk to each other directly, so no server is
-started first.
+started first. The loopback sockets are the live side of every contract check that compares a
+live transport with the in-process one.
 
 `just bench` measures what this crate and the framework's runtime cost over the raw `zeromq`
 sockets and rewrites `docs/benchmarks/results.json`. It takes minutes and wants the machine to
-itself.
+itself. `just bench-code` counts what a message costs in this crate's code, in instructions and
+allocations, on the production broker over the loopback, and rewrites the code table of the same
+document.
 
 ## Testing against a local core
 
