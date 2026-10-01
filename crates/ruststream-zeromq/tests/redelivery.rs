@@ -107,50 +107,6 @@ async fn the_one_way_patterns_address_their_own_subscription() {
     );
 }
 
-/// A publish to the address a fan-out reports really does come back on the subscription that
-/// reported it.
-///
-/// The conformance scenario checks this for the queue, where a PUSH send waits for its peer. It
-/// cannot check the fan-out: a PUB socket drops what it sends before the subscriber's filter has
-/// propagated, which is the pattern's contract and not a fault, so a single-shot publish would be
-/// a flaky test rather than a contract check. Publishing until the first delivery lands proves the
-/// same promise for the warm connection a running service publishes a retry copy over.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_publish_to_the_fan_outs_address_reaches_its_subscription() {
-    let fanout = ZmqFanout::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"))
-        .connect()
-        .await
-        .expect("the fan-out connects");
-    let mut subscriber = fanout
-        .subscribe("events")
-        .await
-        .expect("the subscription opens");
-    let address = Name::new("events")
-        .redelivery_address(&fanout)
-        .await
-        .expect("a fan-out reports an address");
-
-    let publisher = fanout.publisher();
-    let mut stream = pin!(subscriber.stream());
-    let mut delivered = None;
-    for _ in 0..50 {
-        publisher
-            .publish(
-                OutgoingMessage::new(address.as_str(), b"redelivered".as_slice()),
-                None,
-            )
-            .await
-            .expect("the copy is published");
-        if let Ok(Some(next)) = timeout(Duration::from_millis(200), stream.next()).await {
-            delivered = Some(next.expect("the delivery is ok"));
-            break;
-        }
-    }
-
-    let message = delivered.expect("a copy published to the reported address arrives");
-    assert_eq!(message.payload(), b"redelivered");
-}
-
 /// A queue subscription addresses itself, so a registration binds the retry publisher and names
 /// nothing: the runtime already knows where a copy goes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

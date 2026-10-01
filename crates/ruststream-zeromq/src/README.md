@@ -658,9 +658,9 @@ production.
 [`TestApp::start_live`](https://docs.rs/ruststream/latest/ruststream/testing/struct.TestApp.html#method.start_live)
 runs the same test body over real sockets. `ZeroMQ` needs no server, so a live test binds loopback
 ports and runs in every `cargo test`. Live, a test's input leaves through the broker's own
-publisher, so on a bound queue it carries the subscription's own name. Delivery guarantees,
-back-pressure and the fan-out's slow joiner belong to the sockets: a live fan-out test publishes
-until the filter has reached the publisher, and an in-process one needs no such loop.
+publisher, so on a bound queue it carries the subscription's own name. Delivery guarantees
+and back-pressure belong to the sockets. The fan-out's publisher reads its own subscription's
+filter before its first send, so a live fan-out test publishes once, as an in-process one does.
 
 # Operations
 
