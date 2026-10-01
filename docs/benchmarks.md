@@ -40,10 +40,10 @@ crate's is only meaningful with that in mind.
 
 ## The numbers
 
-The best of three interleaved rounds, with the slowest round in parentheses. Higher is better in the
+The best of three interleaved rounds, with the median round in parentheses. Higher is better in the
 rate columns.
 
-<div id="benchmark-results" data-benchmark-labels='{"loading": "Loading the published results...", "scenario": "Scenario", "raw": "Raw client", "adapter": "ruststream-zeromq", "framework": "RustStream service", "adapterOverhead": "Crate overhead", "overhead": "Total overhead", "indistinguishable": "indistinguishable", "brokerBound": "transport-bound", "machine": "Machine", "os": "OS", "broker": "Transport", "roundTrip": "Round trip", "build": "Build", "versions": "Versions", "measured": "Measured", "unavailable": "No results could be read. They are published at {url}.", "unknownSchema": "The published results declare schema {schema}, which this page does not render."}'></div>
+<div id="benchmark-results" data-benchmark-labels='{"loading": "Loading the published results...", "scenario": "Scenario", "raw": "Raw client", "adapter": "ruststream-zeromq", "framework": "RustStream service", "adapterOverhead": "Crate overhead", "overhead": "Total overhead", "indistinguishable": "indistinguishable", "brokerBound": "transport-bound", "machine": "Machine", "os": "OS", "broker": "Transport", "roundTrip": "Round trip", "build": "Build", "versions": "Versions", "measured": "Measured", "codeMeasured": "Code costs measured", "instructions": "Instructions per message", "allocations": "Allocations per message", "cold": "Cold start (instructions / allocations)", "unavailable": "No results could be read. They are published at {url}.", "unknownSchema": "The published results declare schema {schema}, which this page does not render."}'></div>
 
 The table is read in your browser from the document the last run wrote, so nothing on this page is
 a copy that could have gone stale.
@@ -70,6 +70,38 @@ it.
 The machine-readable form of the same run, which the framework's site reads to build its
 cross-broker table, is at
 [`benchmarks/results.json`](https://powersemmi.github.io/ruststream-zeromq/latest/benchmarks/results.json).
+
+## The crate's own code
+
+<div id="benchmark-code"></div>
+
+The second table is this crate's own cost per message, counted rather than timed: instructions
+under callgrind and allocations under DHAT. Each scenario is the service a user writes, on the
+production broker, bound to a TCP port on the loopback. The other end is a peer on a thread of its
+own: a raw `zeromq` socket that writes the crate's three-frame layout.
+
+What is counted is everything the service's thread does: the framework's dispatch and codec, this
+crate's subscription, frame layout and publisher, and the `zeromq` client's framing and socket
+handling on that thread. The peer's thread is not counted, and neither is the kernel.
+
+The peer writes every message before the count starts, while the service is not reading, and the
+messages wait in the kernel's socket buffers. PUSH/PULL keeps them for a consumer that is not
+reading, so the two consume rows use it. A PUSH/PULL endpoint carries one stream of work, so the
+reply row is DEALER/ROUTER, where an answer goes back to the requesting peer over the connection its
+request came in on. The count on that row runs until the peer has read every answer.
+
+Instructions and allocations are per message in the steady state: the slope between a run of 1000
+deliveries and a run of 2000. The last column is what starting the service, accepting the peer's
+connection and taking the first delivery cost once. The numbers are absolute, the framework's own
+cost included; the core publishes that cost alone on its
+[benchmarks page](https://powersemmi.github.io/ruststream/latest/benchmarks/).
+
+Three runs of one binary gave the same instruction count on the consume row, and totals within a
+third of a percent on the other two, where the peer reading answers and the batch deadline depend
+on timing. The allocation counts agreed within one block. `just bench-code` fails on an allocation
+above the floor a scenario declares, the highest count of those runs plus 0.1 percent, and with
+`--baseline=main` on more than two percent more instructions. A pull request that changes the cost
+cites its numbers.
 
 ## The machine
 
@@ -116,3 +148,12 @@ There is no stand to start. The recipe runs both scenarios and rewrites
 `docs/benchmarks/results.json` with what it measured. It takes minutes and wants the machine to
 itself. The message count is not fixed: a probe run sets it so that every measured run lasts at
 least five seconds on whatever machine it is taken on.
+
+```bash
+just bench-code
+```
+
+The recipe counts the code table under valgrind and rewrites the `code` section of the same
+document. There is no stand to start here either: the service binds the loopback, and the peer is
+a socket in the same process. It takes seconds and needs valgrind and the benchmark runner:
+`cargo install --locked gungraun-runner --version =0.19.4`.

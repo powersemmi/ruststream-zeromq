@@ -28,6 +28,8 @@ ruststream = { workspace = true, default-features = false }
 zeromq.workspace = true
 bytes.workspace = true
 futures.workspace = true
+aliasable.workspace = true
+selfie.workspace = true
 serde = { version = "1.0.196", features = ["derive"], optional = true }
 thiserror.workspace = true
 tokio.workspace = true

@@ -1,18 +1,29 @@
 //! Machinery shared by the three socket patterns.
 
+use std::future::{Future, poll_fn};
 use std::num::NonZeroUsize;
-use std::sync::Arc;
+use std::panic;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex as StdMutex, PoisonError};
+use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
+use aliasable::boxed::AliasableBox;
 use futures::Stream;
 use ruststream::{Subscriber, nonzero};
+use selfie::SelfieMut;
+use selfie::refs::RefType;
+use tokio::runtime::Handle;
 use tokio::sync::{OnceCell, mpsc};
+use tokio::task::JoinHandle;
 use zeromq::prelude::*;
-use zeromq::{Socket, ZmqError as WireError};
+use zeromq::{Socket, ZmqError as WireError, ZmqResult};
 
 use crate::endpoint::{Endpoint, Side};
 use crate::error::{ZmqError, box_err};
+#[cfg(feature = "testing")]
+use crate::in_process::{Bus, Deliveries, Registration};
 use crate::message::ZmqMessage;
 
 /// How long a send retries while the ZMTP handshake settles: the implementation returns the
@@ -39,7 +50,20 @@ pub(crate) const DEFAULT_READ_AHEAD: NonZeroUsize = nonzero!(1000_usize);
 /// accumulating the difference in memory. The bound is the connected form's own, taken from the
 /// descriptor it was connected from, so clones sharing one lifecycle keep their own bounds.
 pub(crate) fn delivery_channel(read_ahead: NonZeroUsize) -> (DeliverySender, DeliveryReceiver) {
-    mpsc::channel(read_ahead.get())
+    let (tx, rx) = mpsc::channel(read_ahead.get());
+    (tx, DeliveryReceiver::Driver(rx))
+}
+
+/// What a broker connected in the test harness runs over: the ZMTP sockets `connect` attaches,
+/// or the in-process transport `connect_in_process` gives it instead.
+///
+/// It exists only under the `testing` feature: a production lifecycle has no field for it, so it
+/// carries no second transport and no branch to one.
+#[cfg(feature = "testing")]
+#[derive(Debug)]
+pub(crate) enum Transport {
+    Sockets,
+    InProcess(Arc<Bus>),
 }
 
 /// Shared lifecycle state: the endpoint, the listener a local subscription bound (which is what a
@@ -48,12 +72,23 @@ pub(crate) fn delivery_channel(read_ahead: NonZeroUsize) -> (DeliverySender, Del
 #[derive(Debug)]
 pub(crate) struct Lifecycle {
     pub(crate) endpoint: Endpoint,
-    listener: OnceCell<Listener>,
+    #[cfg(feature = "testing")]
+    transport: Transport,
+    /// The listener of the subscription bound here now; empty again once it has gone, so a later
+    /// subscription can bind the endpoint.
+    listener: Arc<StdMutex<Option<Arc<Listener>>>>,
+    /// Runs one bind at a time, so two subscriptions opening together cannot both bind.
+    binding: tokio::sync::Mutex<()>,
     /// The first subscription of this service that dialed the endpoint. The peer it reads from is
     /// the sending end of the pattern, which takes nothing, so a publisher of the same broker has
     /// nowhere to send.
     dialer: OnceCell<String>,
     pub(crate) closed: AtomicBool,
+    /// The runtime the broker connected on. A socket registers its connection with the runtime
+    /// that binds or dials it and starts its accept loop and peer tasks there, so every socket
+    /// attaches here and every driver task runs here, whichever runtime asked: a handler on a
+    /// thread of its own publishes from a runtime that stops before the broker does.
+    runtime: Handle,
 }
 
 /// The socket a subscription in this process bound on the endpoint.
@@ -67,7 +102,7 @@ pub(crate) struct Listener {
 }
 
 /// Where a sending socket attaches.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) enum SendTarget<'a> {
     /// Another process listens on the endpoint, so the socket dials it.
     Dial(&'a str),
@@ -75,12 +110,12 @@ pub(crate) enum SendTarget<'a> {
     Listen(&'a str),
     /// A subscription in this process bound the endpoint, so the socket dials the address that
     /// bind resolved to.
-    Local(&'a Listener),
+    Local(Arc<Listener>),
 }
 
-impl<'a> SendTarget<'a> {
+impl SendTarget<'_> {
     /// The address the socket attaches to.
-    pub(crate) fn address(self) -> &'a str {
+    pub(crate) fn address(&self) -> &str {
         match self {
             Self::Dial(address) | Self::Listen(address) => address,
             Self::Local(listener) => &listener.address,
@@ -92,9 +127,33 @@ impl Lifecycle {
     pub(crate) fn new(endpoint: Endpoint) -> Self {
         Self {
             endpoint,
-            listener: OnceCell::new(),
+            #[cfg(feature = "testing")]
+            transport: Transport::Sockets,
+            listener: Arc::new(StdMutex::new(None)),
+            binding: tokio::sync::Mutex::new(()),
             dialer: OnceCell::new(),
             closed: AtomicBool::new(false),
+            // Built inside `connect`, which the runtime the broker connects on polls.
+            runtime: Handle::current(),
+        }
+    }
+
+    /// The lifecycle of a broker the test harness connected in process: the same endpoint and
+    /// the same bookkeeping, over a transport of its own.
+    #[cfg(feature = "testing")]
+    pub(crate) fn in_process(endpoint: Endpoint) -> Self {
+        Self {
+            transport: Transport::InProcess(Arc::new(Bus::default())),
+            ..Self::new(endpoint)
+        }
+    }
+
+    /// The in-process transport, when the test harness connected this broker in process.
+    #[cfg(feature = "testing")]
+    pub(crate) fn in_process_bus(&self) -> Option<&Arc<Bus>> {
+        match &self.transport {
+            Transport::Sockets => None,
+            Transport::InProcess(bus) => Some(bus),
         }
     }
 
@@ -105,7 +164,40 @@ impl Lifecycle {
 
     /// The address a local subscription resolved by binding, or `None` until one has bound.
     pub(crate) fn bound_address(&self) -> Option<String> {
-        self.listener.get().map(|listener| listener.address.clone())
+        self.listener().map(|listener| listener.address.clone())
+    }
+
+    fn listener(&self) -> Option<Arc<Listener>> {
+        self.listener
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Runs `attach` on the runtime the broker connected on and returns its outcome: one spawn
+    /// per subscription or publisher attach, never per message.
+    pub(crate) async fn on_runtime<Attach, Output>(
+        &self,
+        attach: Attach,
+    ) -> Result<Output, ZmqError>
+    where
+        Attach: Future<Output = Result<Output, ZmqError>> + Send + 'static,
+        Output: Send + 'static,
+    {
+        match self.runtime.spawn(attach).await {
+            Ok(outcome) => outcome,
+            Err(err) if err.is_panic() => panic::resume_unwind(err.into_panic()),
+            // Cancelled only by that runtime shutting down, which takes the broker with it.
+            Err(_) => Err(ZmqError::NotConnected),
+        }
+    }
+
+    /// Starts a subscription's driver task on the runtime the broker connected on.
+    pub(crate) fn spawn<Task>(&self, task: Task) -> JoinHandle<()>
+    where
+        Task: Future<Output = ()> + Send + 'static,
+    {
+        self.runtime.spawn(task)
     }
 
     pub(crate) fn ensure_open(&self) -> Result<(), ZmqError> {
@@ -118,26 +210,28 @@ impl Lifecycle {
     /// Attaches a receiving socket for `subscription` per the endpoint's side, recording the
     /// listener on bind so a same-process publisher can dial it, and the dialing subscription on
     /// connect so a same-process publisher is refused before it dials a peer that only sends.
+    ///
+    /// On the bind side the answer is the slot the subscription holds: the subscription keeps it
+    /// for as long as it is open, and dropping it frees the endpoint for the next one.
     pub(crate) async fn attach_receiver<S: Socket>(
         &self,
         socket: &mut S,
         subscription: &str,
-    ) -> Result<(), ZmqError> {
+    ) -> Result<Option<BoundSlot>, ZmqError> {
         match self.endpoint.side() {
-            Side::Bind => {
-                let resolved =
+            Side::Bind => self
+                .hold_listener(subscription, async || {
                     socket
                         .bind(self.endpoint.address())
                         .await
+                        .map(|resolved| resolved.to_string())
                         .map_err(|e| ZmqError::Endpoint {
                             endpoint: self.endpoint.address().to_owned(),
                             source: box_err(e),
-                        })?;
-                let _ = self.listener.set(Listener {
-                    address: resolved.to_string(),
-                    subscription: subscription.to_owned(),
-                });
-            }
+                        })
+                })
+                .await
+                .map(Some),
             Side::Connect => {
                 socket
                     .connect(self.endpoint.address())
@@ -147,9 +241,64 @@ impl Lifecycle {
                         source: box_err(e),
                     })?;
                 let _ = self.dialer.set(subscription.to_owned());
+                Ok(None)
             }
         }
-        Ok(())
+    }
+
+    /// Takes the endpoint for `subscription` on the in-process transport, with the bookkeeping
+    /// [`attach_receiver`](Self::attach_receiver) keeps: the first subscription holds a bound
+    /// endpoint and a second is refused, and a subscription that dials is recorded so a publisher
+    /// of this service is refused in the socket's words. There is no socket, so the listener's
+    /// address is the endpoint as configured, and the bound subscription holds its slot as a
+    /// socket does, until it closes.
+    #[cfg(feature = "testing")]
+    pub(crate) async fn attach_in_process(
+        &self,
+        subscription: &str,
+    ) -> Result<Option<BoundSlot>, ZmqError> {
+        match self.endpoint.side() {
+            Side::Bind => self
+                .hold_listener(subscription, async || {
+                    Ok(self.endpoint.address().to_owned())
+                })
+                .await
+                .map(Some),
+            Side::Connect => {
+                let _ = self.dialer.set(subscription.to_owned());
+                Ok(None)
+            }
+        }
+    }
+
+    /// Binds the endpoint for `subscription` through `bind`: the subscription holds the endpoint
+    /// until the returned slot is dropped, and one that opens while another holds it is refused.
+    async fn hold_listener<Bind, Bound>(
+        &self,
+        subscription: &str,
+        bind: Bind,
+    ) -> Result<BoundSlot, ZmqError>
+    where
+        Bind: FnOnce() -> Bound,
+        Bound: Future<Output = Result<String, ZmqError>>,
+    {
+        // One bind at a time: a subscription opening while another holds the endpoint finds its
+        // listener and is refused. A bind that fails leaves the slot empty.
+        let _binding = self.binding.lock().await;
+        // Refused at startup rather than by the type: how many subscriptions a scope mounts on
+        // one broker is decided by statements the type does not count.
+        if let Some(held) = self.listener() {
+            return Err(endpoint_taken(subscription, &held.subscription));
+        }
+        let listener = Arc::new(Listener {
+            address: bind().await?,
+            subscription: subscription.to_owned(),
+        });
+        *self.listener.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::clone(&listener));
+        Ok(BoundSlot {
+            slot: Arc::clone(&self.listener),
+            listener,
+        })
     }
 
     /// Where a sending socket attaches: the endpoint itself when dialing out or when nothing in
@@ -158,10 +307,20 @@ impl Lifecycle {
     pub(crate) fn send_target(&self) -> SendTarget<'_> {
         match self.endpoint.side() {
             Side::Connect => SendTarget::Dial(self.endpoint.address()),
-            Side::Bind => self.listener.get().map_or_else(
+            Side::Bind => self.listener().map_or_else(
                 || SendTarget::Listen(self.endpoint.address()),
                 SendTarget::Local,
             ),
+        }
+    }
+
+    /// The listener a sending socket of this service would dial, on the in-process transport:
+    /// what [`attach_sender`](Self::attach_sender) reports, with no socket to attach.
+    #[cfg(feature = "testing")]
+    pub(crate) fn local_listener(&self) -> Option<Arc<Listener>> {
+        match self.send_target() {
+            SendTarget::Local(listener) => Some(listener),
+            SendTarget::Dial(_) | SendTarget::Listen(_) => None,
         }
     }
 
@@ -170,30 +329,55 @@ impl Lifecycle {
     pub(crate) async fn attach_sender<S: Socket>(
         &self,
         socket: &mut S,
-    ) -> Result<Option<&Listener>, ZmqError> {
-        let target = self.send_target();
-        let outcome = match target {
-            SendTarget::Listen(address) => socket.bind(address).await.map(|_| ()),
-            SendTarget::Dial(address) => socket.connect(address).await,
-            SendTarget::Local(listener) => socket.connect(&listener.address).await,
-        };
-        outcome.map_err(|e| ZmqError::Endpoint {
-            endpoint: target.address().to_owned(),
-            source: box_err(e),
-        })?;
-        Ok(match target {
-            SendTarget::Local(listener) => Some(listener),
-            SendTarget::Dial(_) | SendTarget::Listen(_) => None,
-        })
+    ) -> Result<Option<Arc<Listener>>, ZmqError> {
+        attach_to(socket, self.send_target()).await
+    }
+}
+
+/// Attaches a sending socket to `target`, a place [`Lifecycle::send_target`] named, and returns
+/// the local listener it dialed, if it dialed one.
+pub(crate) async fn attach_to<S: Socket>(
+    socket: &mut S,
+    target: SendTarget<'_>,
+) -> Result<Option<Arc<Listener>>, ZmqError> {
+    let outcome = match &target {
+        SendTarget::Listen(address) => socket.bind(address).await.map(|_| ()),
+        SendTarget::Dial(address) => socket.connect(address).await,
+        SendTarget::Local(listener) => socket.connect(&listener.address).await,
+    };
+    outcome.map_err(|e| ZmqError::Endpoint {
+        endpoint: target.address().to_owned(),
+        source: box_err(e),
+    })?;
+    Ok(match target {
+        SendTarget::Local(listener) => Some(listener),
+        SendTarget::Dial(_) | SendTarget::Listen(_) => None,
+    })
+}
+
+/// The endpoint a bound subscription holds: dropping it, when the subscription is dropped,
+/// frees the endpoint for the next subscription, unless another has taken it since.
+#[derive(Debug)]
+pub(crate) struct BoundSlot {
+    slot: Arc<StdMutex<Option<Arc<Listener>>>>,
+    listener: Arc<Listener>,
+}
+
+impl Drop for BoundSlot {
+    fn drop(&mut self) {
+        let mut slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
+        if slot
+            .as_ref()
+            .is_some_and(|held| Arc::ptr_eq(held, &self.listener))
+        {
+            *slot = None;
+        }
     }
 }
 
 /// The refusal of a queue publish that would come back to this service: the subscription that
 /// bound the queue receives every message pushed into it, whatever its name, so a message named
 /// anything else would arrive there as its next delivery.
-///
-/// The socket publisher and the in-process stand refuse in these words alike, so a test read
-/// against the stand teaches the fix the deployment needs.
 pub(crate) fn returns_to_subscription(name: &str, subscription: &str) -> ZmqError {
     ZmqError::Send {
         name: name.to_owned(),
@@ -204,12 +388,23 @@ pub(crate) fn returns_to_subscription(name: &str, subscription: &str) -> ZmqErro
     }
 }
 
+/// The refusal of a second subscription on an endpoint this service binds: the endpoint is one
+/// listening socket, read by the subscription that bound it, and another subscription would bind
+/// a socket of its own that nothing dials (on an ephemeral port) or fail to bind (on a fixed one).
+pub(crate) fn endpoint_taken(subscription: &str, holder: &str) -> ZmqError {
+    ZmqError::Invalid(format!(
+        "subscription '{subscription}' cannot open on the endpoint this broker binds: this \
+         service's subscription '{holder}' binds it, and a bound endpoint is one socket read by \
+         the subscription that bound it; mount '{subscription}' on a broker with an endpoint of \
+         its own"
+    ))
+}
+
 /// The refusal of a publish on an endpoint a subscription of this service dials: the peer that
 /// subscription reads from is the sending end of the pattern (`sender`, a PUSH or a PUB socket),
 /// and the handshake refuses a sending socket that dials it.
 ///
-/// The socket publishers refuse in these words before they dial, and the in-process stand refuses
-/// in them alike, so a test read against the stand teaches the fix the deployment needs.
+/// The publishers refuse in these words before they dial.
 pub(crate) fn dials_the_sender(
     name: &str,
     subscription: &str,
@@ -228,61 +423,307 @@ pub(crate) fn dials_the_sender(
 
 /// Sends with a bounded retry while the handshake settles; `ReturnToSender` hands the message
 /// back, so nothing is lost by retrying.
-///
-/// The window is the time the peer is given to appear, so it opens at the first refusal rather
-/// than at the call: a send that is taken keeps the clock out of the publish path entirely.
 pub(crate) async fn send_with_retry<S: SocketSend>(
     socket: &mut S,
     name: &str,
     message: zeromq::ZmqMessage,
 ) -> Result<(), ZmqError> {
+    retry(Plain(socket), message)
+        .await
+        .map_err(|failure| failure.into_error(name))
+}
+
+/// One attempt at handing a message to a socket, which [`retry`] repeats while the handshake
+/// settles.
+trait Offer {
+    fn offer(&mut self, message: zeromq::ZmqMessage) -> impl Future<Output = ZmqResult<()>> + Send;
+}
+
+/// A socket offered a message directly, in the caller's future.
+struct Plain<'a, S>(&'a mut S);
+
+impl<S: SocketSend> Offer for Plain<'_, S> {
+    fn offer(&mut self, message: zeromq::ZmqMessage) -> impl Future<Output = ZmqResult<()>> + Send {
+        self.0.send(message)
+    }
+}
+
+/// Why a send did not leave, before it is reported against the name it carried.
+#[derive(Debug)]
+pub(crate) enum SendFailure {
+    /// No peer attached within the retry window.
+    NoPeer,
+    /// The socket refused the message for another reason.
+    Wire(WireError),
+}
+
+impl SendFailure {
+    pub(crate) fn into_error(self, name: &str) -> ZmqError {
+        ZmqError::Send {
+            name: name.to_owned(),
+            reason: match self {
+                Self::NoPeer => "no connected peer".to_owned(),
+                Self::Wire(err) => err.to_string(),
+            },
+        }
+    }
+}
+
+/// Offers `message` to `send` until it is taken, while the handshake settles.
+///
+/// The window is the time the peer is given to appear, so it opens at the first refusal rather
+/// than at the call: a send that is taken keeps the clock out of the publish path entirely.
+async fn retry<Attempt: Offer>(
+    mut attempt: Attempt,
+    message: zeromq::ZmqMessage,
+) -> Result<(), SendFailure> {
     let mut pending = message;
     let mut deadline = None;
     loop {
-        match socket.send(pending).await {
+        match attempt.offer(pending).await {
             Ok(()) => return Ok(()),
             Err(WireError::ReturnToSender { message, .. }) => {
                 match deadline {
                     None => deadline = Some(tokio::time::Instant::now() + SEND_RETRY_WINDOW),
                     Some(at) if tokio::time::Instant::now() >= at => {
-                        return Err(ZmqError::Send {
-                            name: name.to_owned(),
-                            reason: "no connected peer".to_owned(),
-                        });
+                        return Err(SendFailure::NoPeer);
                     }
                     Some(_) => {}
                 }
                 pending = message;
                 tokio::time::sleep(SEND_RETRY_STEP).await;
             }
-            Err(err) => {
-                return Err(ZmqError::Send {
-                    name: name.to_owned(),
-                    reason: err.to_string(),
-                });
-            }
+            Err(err) => return Err(SendFailure::Wire(err)),
         }
     }
 }
 
-/// A subscriber handle over a driver task: the socket lives in the task (every operation
-/// takes `&mut self`), and dropping the handle aborts it, which is the only reliable teardown
-/// - a receive on a peerless socket pends forever by design of the implementation.
-pub(crate) struct DriverHandle {
-    pub(crate) task: tokio::task::JoinHandle<()>,
+/// The send the client returns for a socket, borrowing the socket for `'socket`.
+struct ClientSend;
+
+impl<'socket> RefType<'socket> for ClientSend {
+    type Ref = Pin<Box<dyn Future<Output = ZmqResult<()>> + Send + 'socket>>;
 }
+
+/// A socket at a fixed place on the heap, where the send in flight borrows it.
+type Held<S> = Pin<AliasableBox<S>>;
+
+/// A send in flight, stored beside the outbox it borrows its socket from.
+type InFlightSend<S> = SelfieMut<'static, AliasableBox<S>, ClientSend>;
+
+/// A sending socket whose send outlives the publish that started it.
+///
+/// The client's round-robin send takes the peer it picked out of rotation and puts it back only
+/// once the frames are queued, so a send dropped while the peer applies back-pressure loses that
+/// peer for good: with one peer, every later send reports no connected peer. Each send therefore
+/// lives here rather than in the caller's future, borrowing the socket the outbox keeps on the
+/// heap. A publish dropped mid-send leaves it parked, and the next publish completes it before
+/// starting its own. The retry wait runs outside it, with the socket back here, so a publish
+/// dropped while it waits sends nothing.
+///
+/// The socket is boxed once, when the outbox is made. A send is the client's own boxed future,
+/// stored and polled as the client returned it, so a publish adds no allocation and no indirect
+/// call to what the client already spends on it.
+pub(crate) struct Outbox<S: 'static> {
+    /// The socket while no send is in flight; the send holds it otherwise.
+    socket: Option<Held<S>>,
+    send: Option<InFlightSend<S>>,
+    /// The name of a message whose publish was dropped mid-send, kept to report a failure of that
+    /// send against it.
+    dropped: Option<String>,
+}
+
+impl<S> Outbox<S>
+where
+    S: SocketSend + Send + Unpin + 'static,
+{
+    pub(crate) fn new(socket: S) -> Self {
+        Self {
+            socket: Some(AliasableBox::from_unique_pin(Box::pin(socket))),
+            send: None,
+            dropped: None,
+        }
+    }
+
+    /// Sends `message` under `name` with the handshake retry, after completing a send whose
+    /// publish was dropped.
+    ///
+    /// # Cancel safety
+    ///
+    /// Cancel-safe. Dropped before the socket takes the message, it sends nothing; dropped
+    /// after, it leaves the send parked for the next call to complete.
+    pub(crate) async fn send(
+        &mut self,
+        name: &str,
+        message: zeromq::ZmqMessage,
+    ) -> Result<(), ZmqError> {
+        if self.send.is_some() {
+            self.complete_dropped().await;
+        }
+        retry(Parked { outbox: self, name }, message)
+            .await
+            .map_err(|failure| failure.into_error(name))
+    }
+
+    /// Completes the send a dropped publish left parked and puts the socket back. Its outcome
+    /// has no caller left, so a failure is logged against the message's name.
+    async fn complete_dropped(&mut self) {
+        let Some(send) = self.send.as_mut() else {
+            return;
+        };
+        let outcome = poll_fn(|cx| send.with_referential_mut(|send| send.as_mut().poll(cx))).await;
+        self.socket = self.send.take().map(SelfieMut::into_owned);
+        let name = self.dropped.take().unwrap_or_default();
+        if let Err(err) = outcome {
+            let error = SendFailure::Wire(err).into_error(&name);
+            tracing::warn!(
+                name = %name,
+                error = %error,
+                "a message whose publish was dropped mid-send did not leave"
+            );
+        }
+    }
+}
+
+/// A socket offered a message through its outbox, where a dropped offer stays parked.
+struct Parked<'a, S: 'static> {
+    outbox: &'a mut Outbox<S>,
+    name: &'a str,
+}
+
+impl<S> Offer for Parked<'_, S>
+where
+    S: SocketSend + Send + Unpin + 'static,
+{
+    #[inline]
+    fn offer(&mut self, message: zeromq::ZmqMessage) -> impl Future<Output = ZmqResult<()>> + Send {
+        let socket = self
+            .outbox
+            .socket
+            .take()
+            .expect("a parked send completes before the next offer");
+        self.outbox.send = Some(SelfieMut::new(socket, |socket| {
+            Pin::into_inner(socket).send(message)
+        }));
+        Sending {
+            outbox: &mut *self.outbox,
+            name: self.name,
+            done: false,
+        }
+    }
+}
+
+/// The send an offer started, polled in its outbox. Dropped before it completes, it leaves the
+/// send parked there under the message's name.
+struct Sending<'a, S: 'static> {
+    outbox: &'a mut Outbox<S>,
+    name: &'a str,
+    done: bool,
+}
+
+impl<S> Future for Sending<'_, S> {
+    type Output = ZmqResult<()>;
+
+    #[inline]
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<ZmqResult<()>> {
+        let this = &mut *self;
+        let send = this
+            .outbox
+            .send
+            .as_mut()
+            .expect("the send stays in the outbox until it completes");
+        let outcome = ready!(send.with_referential_mut(|send| send.as_mut().poll(cx)));
+        this.outbox.socket = this.outbox.send.take().map(SelfieMut::into_owned);
+        this.done = true;
+        Poll::Ready(outcome)
+    }
+}
+
+impl<S> Drop for Sending<'_, S> {
+    fn drop(&mut self) {
+        if !self.done {
+            self.outbox.dropped = Some(self.name.to_owned());
+        }
+    }
+}
+
+/// What keeps a subscription's deliveries coming, and stops them when the subscription goes.
+///
+/// Over sockets it is the driver task that owns the socket (every operation takes `&mut self`),
+/// and dropping the handle aborts it, which is the only reliable teardown: a receive on a
+/// peerless socket pends forever by design of the implementation. In process it is the
+/// subscription's place on the transport, which dropping gives up.
+///
+/// The handle, not the task, holds the endpoint a bound subscription took: an aborted task is
+/// dropped later, on whichever worker next runs it, so a slot held there would keep the endpoint
+/// taken for a moment after the subscription is gone. Held here, it is free once the subscription
+/// is dropped.
+pub(crate) enum DriverHandle {
+    Task(JoinHandle<()>, Option<BoundSlot>),
+    /// The subscription's place on the transport, and the endpoint it holds when it binds, as
+    /// its socket would hold the listener.
+    #[cfg(feature = "testing")]
+    InProcess(Registration, Option<BoundSlot>),
+}
+
+// A production subscription holds its driver task and the endpoint it bound, nothing beside them.
+#[cfg(not(feature = "testing"))]
+const _: () =
+    assert!(size_of::<DriverHandle>() == size_of::<(JoinHandle<()>, Option<BoundSlot>)>());
 
 impl Drop for DriverHandle {
     fn drop(&mut self) {
-        self.task.abort();
+        match self {
+            Self::Task(task, _slot) => task.abort(),
+            #[cfg(feature = "testing")]
+            Self::InProcess(registration, _slot) => registration.give_up(),
+        }
     }
 }
 
 /// The driver task's end of a subscription's delivery channel.
 pub(crate) type DeliverySender = mpsc::Sender<Result<ZmqMessage, ZmqError>>;
 
-/// The handler's end of a subscription's delivery channel.
-pub(crate) type DeliveryReceiver = mpsc::Receiver<Result<ZmqMessage, ZmqError>>;
+/// The handler's end of a subscription's delivery channel: the driver task's bounded channel, or,
+/// in process, the channel the transport hands deliveries to.
+///
+/// Without the `testing` feature it is the driver's receiver itself: one variant, no tag, no
+/// branch.
+pub(crate) enum DeliveryReceiver {
+    Driver(mpsc::Receiver<Result<ZmqMessage, ZmqError>>),
+    #[cfg(feature = "testing")]
+    InProcess(Deliveries),
+}
+
+// A production subscription reads its driver's channel and nothing beside it.
+#[cfg(not(feature = "testing"))]
+const _: () = assert!(
+    size_of::<DeliveryReceiver>() == size_of::<mpsc::Receiver<Result<ZmqMessage, ZmqError>>>()
+);
+
+impl DeliveryReceiver {
+    fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<ZmqMessage, ZmqError>>> {
+        match self {
+            Self::Driver(rx) => rx.poll_recv(cx),
+            #[cfg(feature = "testing")]
+            Self::InProcess(rx) => rx.poll_recv(cx),
+        }
+    }
+}
+
+/// A sending socket a publisher attached, or, in process, the transport it sends over and
+/// whether its sends reach a subscription of this service (the loopback arrangement) or a peer
+/// outside it.
+///
+/// Without the `testing` feature it is the socket itself: one variant, no tag, no branch.
+pub(crate) enum Sender<S> {
+    Socket(S),
+    #[cfg(feature = "testing")]
+    InProcess {
+        bus: Arc<Bus>,
+        local: bool,
+    },
+}
 
 /// The socket side of any subscription: the driver task's channel, one delivery at a time, which
 /// is all a receive on a ZMTP socket yields.
@@ -310,10 +751,14 @@ pub(crate) type SharedLifecycle = Arc<Lifecycle>;
 
 #[cfg(test)]
 mod tests {
+    use std::pin::pin;
+    use std::sync::Mutex;
+
     use async_trait::async_trait;
     use bytes::Bytes;
+    use futures::poll;
+    use tokio::sync::Notify;
     use tokio::time::advance;
-    use zeromq::ZmqResult;
 
     use super::*;
 
@@ -361,5 +806,63 @@ mod tests {
         )
         .await
         .expect("the peer refused once and then took the message");
+    }
+
+    /// A socket whose first send waits for the peer to open a gate, as one under back-pressure
+    /// does, and which records the payload of every send it completes.
+    struct Gated {
+        gate: Arc<Notify>,
+        held: bool,
+        sent: Arc<Mutex<Vec<Bytes>>>,
+    }
+
+    #[async_trait]
+    impl SocketSend for Gated {
+        async fn send(&mut self, message: zeromq::ZmqMessage) -> ZmqResult<()> {
+            if self.held {
+                self.gate.notified().await;
+                self.held = false;
+            }
+            let payload = message.get(0).cloned().unwrap_or_default();
+            self.sent.lock().expect("not poisoned").push(payload);
+            Ok(())
+        }
+    }
+
+    /// A send dropped while the socket holds it stays with the outbox, and the next send
+    /// completes it before its own: nothing the dropped publish handed over is lost or reordered.
+    #[tokio::test]
+    async fn a_send_dropped_mid_flight_completes_before_the_next() {
+        let gate = Arc::new(Notify::new());
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let mut outbox = Outbox::new(Gated {
+            gate: Arc::clone(&gate),
+            held: true,
+            sent: Arc::clone(&sent),
+        });
+
+        {
+            let dropped = pin!(outbox.send(
+                "first",
+                zeromq::ZmqMessage::from(Bytes::from_static(b"first"))
+            ));
+            assert!(
+                poll!(dropped).is_pending(),
+                "the socket holds the first send"
+            );
+        }
+        gate.notify_one();
+        outbox
+            .send(
+                "second",
+                zeromq::ZmqMessage::from(Bytes::from_static(b"second")),
+            )
+            .await
+            .expect("the second send leaves");
+
+        assert_eq!(
+            *sent.lock().expect("not poisoned"),
+            [Bytes::from_static(b"first"), Bytes::from_static(b"second")],
+        );
     }
 }

@@ -64,7 +64,7 @@ The payload frame is whatever the framework's codec produced, so the peer only h
 ## Scope and limits
 
 - Delivery is **at most once** and there is no durability; acknowledgement is reported as `AckError::Unsupported`, never emulated.
-- A subscriber that connects after a publisher has started **misses what was sent before it arrived** (the slow joiner), and a fan-out message with no matching subscriber is dropped silently.
+- A subscriber that connects after a publisher has started **misses what was sent before it arrived** (the slow joiner), and a fan-out message with no matching subscriber is dropped silently. A service publishing to its own fan-out subscription is the exception: its publisher reads the subscription's filter before the first send.
 - A subscription reads **at most 1000 deliveries ahead** of its handler, or the bound its descriptor sets with `.read_ahead(n)`. Past it the subscription stops reading and the socket holds the sender back, so a slow handler slows the sender down instead of growing the service's memory. A PUB socket waits for its slowest matching subscriber the same way.
 - There is **no encryption layer**: use it on trusted networks, or inside an existing tunnel.
 - No consumer groups, no transactions, and **no native retry mechanism**: a delivery limit and a dead-letter destination declared with `.max_attempts(..)` and `.dead_letter(..)` are counted and applied by the framework, not by the transport.
@@ -125,36 +125,30 @@ fn app() -> impl App {
 
 ## Test it
 
-The `testing` feature ships `ZmqTestBroker`: an in-process stand with the same routing and the same lifecycle ladder, no sockets. There is one stand per pattern - `ZmqTestBroker::queue()`, `::fanout()`, `::rpc()` - and each answers what its own broker answers, so a routes file that starts under the harness starts against the socket. Build the app around it and drive it with the framework's `TestApp` harness: the handlers, the mount verb and the publish policy are the production ones, and only the broker changes. The harness encodes what it injects and decodes what it asserts on, so a test build adds `Outgoing` and `Serialize` to the input type and `Deserialize` plus `PartialEq` to the reply:
+A test runs the service's own app. `TestApp::start(app())` connects each broker of this crate in process, with the production broker, its connected form and its publish policies over a transport inside the test process; `TestApp::start_live(app())` runs the same body over loopback sockets. Enable the `testing` feature in `[dev-dependencies]` and address a broker by its production type. The harness encodes what it injects and decodes what it asserts on, so a test build adds `Outgoing` and `Serialize` to the input type and `Deserialize` plus `PartialEq` to the reply:
 
 ```rust
 use ruststream::testing::TestApp;
-use ruststream_zeromq::ZmqQueuePublish;
-use ruststream_zeromq::testing::ZmqTestBroker;
+use ruststream_zeromq::Connect;
 
-let results = ZmqTestBroker::queue().bindable();
-let to_results = results.bind(ZmqQueuePublish);
-let app = RustStream::new(AppInfo::new("worker", "0.1.0"))
-    .with_broker_labeled("jobs", ZmqTestBroker::queue(), |b| {
-        b.include(handle).out_reply(to_results);
-    })
-    .with_broker_labeled("results", results, |_b| {});
-let tb = TestApp::start(app).await?;
+let tb = TestApp::start(app()).await?;
 
 // A foreign peer's push; the injection returns once the handler has settled.
-tb.broker_named("jobs")
-    .publish("jobs", &Job { id: 1 })
+tb.broker::<ZmqQueue>()
+    .message(&Job { id: 1 })
+    .to("jobs")
+    .publish()
     .await?;
 
-tb.broker_named("results")
+tb.broker::<ZmqQueue<Connect>>()
     .published::<Done>("results")
     .assert_called_once()
     .with(&Done { id: 1 });
 ```
 
-A result mounted on the queue its own subscription holds is refused under the harness in the words the socket uses, so the mount that would loop in production fails its test instead.
+The in-process transport carries the frames a socket carries and routes by the pattern's own rule: a subscription that binds a queue takes whatever is pushed to it, subscriptions that dial take a peer's pushes in turn, a fan-out reaches every subscription whose name prefixes the message, and a request reaches the responder. It refuses what the sockets refuse, in their words: a result mounted on the queue its own subscription binds, a publish on an endpoint a subscription dials, a second subscription on a bound endpoint.
 
-Socket-level behaviour needs no stand-in and no server: the conformance routing suite, the lifecycle ladder, the batch and request-reply capabilities, and a wire-layout check driven by a raw foreign-style peer all run on loopback sockets, so `just test` covers the whole crate with nothing to start first.
+`just test` covers the whole crate with nothing to start first: the in-process suites, the socket suites on the loopback, including a wire-layout check driven by a raw foreign-style peer, and the core's contract suites. Each contract suite runs over the loopback sockets and again in process, and the checks that compare the two transports (settlement answers, refusals) hold the in-process transport to what the sockets do.
 
 ## Layout
 

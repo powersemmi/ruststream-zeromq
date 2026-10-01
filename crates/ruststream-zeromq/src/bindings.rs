@@ -60,8 +60,7 @@ impl SocketPair {
 struct ServerBody {
     transport: &'static str,
     endpoint: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    role: Option<&'static str>,
+    role: &'static str,
 }
 
 #[derive(Serialize)]
@@ -89,27 +88,12 @@ pub(crate) fn server(endpoint: &Endpoint) -> Bindings {
     let body = ServerBody {
         transport: transport(endpoint),
         endpoint: endpoint.host(),
-        role: Some(match endpoint.side() {
+        role: match endpoint.side() {
             Side::Bind => "bind",
             Side::Connect => "connect",
-        }),
+        },
     };
     wrap(&body)
-}
-
-/// The server binding of an in-process stand, which names itself where a deployment names a
-/// coordinate.
-///
-/// No ZMTP transport carries a message here, so the transport is the crate's own word rather than
-/// `tcp` or `ipc`, and no side of an endpoint is taken, because both ends live in this process.
-/// Everything below the server is the pattern's own, so this is the whole of what a document built
-/// over a stand does not share with the one the service ships.
-pub(crate) fn in_process_server(stand: &'static str) -> Bindings {
-    wrap(&ServerBody {
-        transport: "in-process",
-        endpoint: stand.to_owned(),
-        role: None,
-    })
 }
 
 /// The channel binding: the socket pair the messages on this channel travel over, and the name
@@ -118,7 +102,7 @@ pub(crate) fn in_process_server(stand: &'static str) -> Bindings {
 /// `destination` is what the document reports as the channel's address, so a peer reads the value
 /// it must put in frame 0 to reach this channel, and on PUB/SUB the prefix it subscribes with.
 /// Which patterns say it is [`SocketPair::addresses_by_name`]'s decision, not the caller's, so the
-/// three publish policies and the three stands cannot drift apart.
+/// three publish policies cannot drift apart.
 pub(crate) fn channel(pair: SocketPair, destination: &str) -> Bindings {
     wrap(&ChannelBody {
         socket_pair: pair.as_str(),
@@ -177,18 +161,6 @@ mod tests {
         assert_eq!(json[EXTENSION]["transport"], "ipc");
         assert_eq!(json[EXTENSION]["endpoint"], "/tmp/orders");
         assert_eq!(json[EXTENSION]["role"], "connect");
-    }
-
-    /// A stand has no coordinate and takes no side, and the binding says so by leaving the role
-    /// out rather than picking one.
-    #[test]
-    fn an_in_process_stand_names_itself_and_claims_no_side() {
-        let json = serde_json::to_value(in_process_server("ZmqTestBroker::queue"))
-            .expect("the binding serializes");
-        let body = &json[EXTENSION];
-        assert_eq!(body["transport"], "in-process");
-        assert_eq!(body["endpoint"], "ZmqTestBroker::queue");
-        assert_eq!(body["role"], Value::Null);
     }
 
     #[test]
