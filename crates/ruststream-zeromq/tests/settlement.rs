@@ -173,21 +173,11 @@ async fn a_fan_out_delivery_refuses_every_settlement() {
         .expect("the subscription opens");
     let publisher = connected.publisher();
 
-    // The publisher-side filter table fills only after the handshake, so publish until the first
-    // delivery lands - the slow joiner is the pattern's contract, not a fault.
-    let mut delivered = None;
-    for _ in 0..50 {
-        publisher
-            .publish(OutgoingMessage::new("events", b"one".as_slice()), None)
-            .await
-            .expect("the event is published");
-        let mut stream = pin!(subscriber.stream());
-        if let Ok(Some(next)) = timeout(Duration::from_millis(200), stream.next()).await {
-            delivered = Some(next.expect("the delivery is well formed"));
-            break;
-        }
-    }
-    let message = delivered.expect("a matching delivery arrives");
+    publisher
+        .publish(OutgoingMessage::new("events", b"one".as_slice()), None)
+        .await
+        .expect("the event is published");
+    let message = next_delivery(&mut subscriber, "a matching delivery arrives").await;
     assert!(matches!(
         message.nack(true).await,
         Err(AckError::Unsupported)

@@ -330,21 +330,29 @@ impl Lifecycle {
         &self,
         socket: &mut S,
     ) -> Result<Option<Arc<Listener>>, ZmqError> {
-        let target = self.send_target();
-        let outcome = match &target {
-            SendTarget::Listen(address) => socket.bind(address).await.map(|_| ()),
-            SendTarget::Dial(address) => socket.connect(address).await,
-            SendTarget::Local(listener) => socket.connect(&listener.address).await,
-        };
-        outcome.map_err(|e| ZmqError::Endpoint {
-            endpoint: target.address().to_owned(),
-            source: box_err(e),
-        })?;
-        Ok(match target {
-            SendTarget::Local(listener) => Some(listener),
-            SendTarget::Dial(_) | SendTarget::Listen(_) => None,
-        })
+        attach_to(socket, self.send_target()).await
     }
+}
+
+/// Attaches a sending socket to `target`, a place [`Lifecycle::send_target`] named, and returns
+/// the local listener it dialed, if it dialed one.
+pub(crate) async fn attach_to<S: Socket>(
+    socket: &mut S,
+    target: SendTarget<'_>,
+) -> Result<Option<Arc<Listener>>, ZmqError> {
+    let outcome = match &target {
+        SendTarget::Listen(address) => socket.bind(address).await.map(|_| ()),
+        SendTarget::Dial(address) => socket.connect(address).await,
+        SendTarget::Local(listener) => socket.connect(&listener.address).await,
+    };
+    outcome.map_err(|e| ZmqError::Endpoint {
+        endpoint: target.address().to_owned(),
+        source: box_err(e),
+    })?;
+    Ok(match target {
+        SendTarget::Local(listener) => Some(listener),
+        SendTarget::Dial(_) | SendTarget::Listen(_) => None,
+    })
 }
 
 /// The endpoint a bound subscription holds: dropping it, when the subscription is dropped,
