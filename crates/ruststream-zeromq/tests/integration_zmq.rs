@@ -521,18 +521,10 @@ async fn a_dropped_bound_subscription_frees_its_endpoint() {
         .expect("the queue connects");
     drop(queue.subscribe("jobs").await.expect("the first binds"));
 
-    // The dropped subscription's task ends on the runtime; the endpoint is free once it has.
-    let mut reopened = None;
-    for _ in 0..1_000 {
-        match queue.subscribe("jobs").await {
-            Ok(subscriber) => {
-                reopened = Some(subscriber);
-                break;
-            }
-            Err(_) => tokio::task::yield_now().await,
-        }
-    }
-    let mut reopened = reopened.expect("the endpoint is free again");
+    let mut reopened = queue
+        .subscribe("jobs")
+        .await
+        .expect("the endpoint is free again");
     queue
         .publisher()
         .publish(OutgoingMessage::new("jobs", b"again".as_slice()), None)

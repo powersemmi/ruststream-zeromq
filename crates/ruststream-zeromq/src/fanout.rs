@@ -261,8 +261,6 @@ impl<Role> ConnectedZmqFanout<Role> {
 
         let (tx, rx) = delivery_channel(self.read_ahead);
         let task = tokio::spawn(async move {
-            // Held for as long as the socket is open: the endpoint is free again once it closes.
-            let _slot = slot;
             loop {
                 match socket.recv().await {
                     Ok(message) => {
@@ -291,7 +289,7 @@ impl<Role> ConnectedZmqFanout<Role> {
         Ok(ZmqSubscriber::from_parts(
             name.to_owned(),
             rx,
-            DriverHandle { task },
+            DriverHandle { task, _slot: slot },
         ))
     }
 }

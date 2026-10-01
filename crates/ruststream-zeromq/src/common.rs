@@ -132,7 +132,7 @@ impl Lifecycle {
     /// connect so a same-process publisher is refused before it dials a peer that only sends.
     ///
     /// On the bind side the answer is the slot the subscription holds: the subscription keeps it
-    /// for as long as its socket is open, and dropping it frees the endpoint for the next one.
+    /// for as long as it is open, and dropping it frees the endpoint for the next one.
     pub(crate) async fn attach_receiver<S: Socket>(
         &self,
         socket: &mut S,
@@ -217,7 +217,7 @@ impl Lifecycle {
     }
 }
 
-/// The endpoint a bound subscription holds: dropping it, when the subscription's socket closes,
+/// The endpoint a bound subscription holds: dropping it, when the subscription is dropped,
 /// frees the endpoint for the next subscription, unless another has taken it since.
 #[derive(Debug)]
 pub(crate) struct BoundSlot {
@@ -331,8 +331,14 @@ pub(crate) async fn send_with_retry<S: SocketSend>(
 /// A subscriber handle over a driver task: the socket lives in the task (every operation
 /// takes `&mut self`), and dropping the handle aborts it, which is the only reliable teardown
 /// - a receive on a peerless socket pends forever by design of the implementation.
+///
+/// The handle, not the task, holds the endpoint a bound subscription took: an aborted task is
+/// dropped later, on whichever worker next runs it, so a slot held there would keep the endpoint
+/// taken for a moment after the subscription is gone. Held here, it is free once the subscription
+/// is dropped.
 pub(crate) struct DriverHandle {
     pub(crate) task: tokio::task::JoinHandle<()>,
+    pub(crate) _slot: Option<BoundSlot>,
 }
 
 impl Drop for DriverHandle {

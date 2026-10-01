@@ -370,8 +370,6 @@ impl Subscribe for ConnectedZmqRpc {
 
         let (tx, rx) = delivery_channel(self.read_ahead);
         let task = tokio::spawn(async move {
-            // Held for as long as the socket is open: the endpoint is free again once it closes.
-            let _slot = slot;
             loop {
                 match recv_half.recv().await {
                     Ok(message) => {
@@ -419,7 +417,7 @@ impl Subscribe for ConnectedZmqRpc {
             name: name.to_owned(),
             inner: WireSubscriber {
                 rx,
-                _driver: DriverHandle { task },
+                _driver: DriverHandle { task, _slot: slot },
             },
         })
     }
