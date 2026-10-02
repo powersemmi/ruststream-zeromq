@@ -3,7 +3,7 @@
   "crate": "ruststream-zeromq",
   "crate_version": "0.7.0",
   "core_version": "0.7.0-rc.9",
-  "measured_at": "2026-09-21",
+  "measured_at": "2026-09-23",
   "environment": {
     "cpu": "AMD Ryzen 9 7900X 12-Core Processor",
     "architecture": "x86_64",
@@ -13,58 +13,106 @@
     "memory_speed": "unknown",
     "os": "Linux 7.2.6-x64v3-xanmod1-1",
     "broker": "none: ZeroMQ has no broker, so the peer is a PUSH socket in the same process, over tcp:// on the loopback and over ipc://, with default socket options (the zeromq crate exposes no high-water mark)",
-    "round_trip": "tcp:// 15.2 us, ipc:// 10.1 us (20000 REQ/REP exchanges on the same transport, outside every loop)",
+    "round_trip": "tcp:// 15.6 us, ipc:// 10.9 us (20000 REQ/REP exchanges on the same transport, outside every loop)",
     "rustc": "1.98.1",
     "profile": "bench, inheriting release (opt-level = 3, lto = false, codegen-units = 16)",
     "features": "ruststream-zeromq default (none), ruststream macros,json",
-    "rustflags": "none (the recipe clears RUSTFLAGS, so the numbers are not tied to this CPU)"
+    "rustflags": "none (the recipe clears RUSTFLAGS, so the numbers are not tied to this CPU)",
+    "valgrind": "3.25.1"
   },
   "scenarios": [
     {
       "name": "PUSH/PULL over tcp:// on the loopback, 512 B JSON",
       "unit": "msg/s",
-      "messages": 1584857,
+      "messages": 1581862,
       "pairs": 3,
       "raw": {
-        "best": 257373,
-        "worst": 256066
+        "best": 261826,
+        "median": 253319,
+        "worst": 253202
       },
       "adapter": {
-        "best": 265691,
-        "worst": 260752
+        "best": 258888,
+        "median": 256180,
+        "worst": 253665
       },
       "framework": {
-        "best": 260518,
-        "worst": 257074
+        "best": 258655,
+        "median": 257016,
+        "worst": 255683
       },
-      "adapter_overhead_percent": -3.2,
-      "adapter_verdict": "measured",
-      "overhead_percent": -1.2,
+      "adapter_overhead_percent": 1.1,
+      "adapter_verdict": "indistinguishable",
+      "overhead_percent": 1.2,
       "verdict": "indistinguishable",
       "broker_bound": false
     },
     {
       "name": "PUSH/PULL over ipc://, 512 B JSON",
       "unit": "msg/s",
-      "messages": 5845862,
+      "messages": 5724786,
       "pairs": 3,
       "raw": {
-        "best": 939393,
-        "worst": 918102
+        "best": 913687,
+        "median": 905306,
+        "worst": 905262
       },
       "adapter": {
-        "best": 927754,
-        "worst": 917977
+        "best": 914532,
+        "median": 905044,
+        "worst": 898626
       },
       "framework": {
-        "best": 928153,
-        "worst": 917596
+        "best": 914336,
+        "median": 906054,
+        "worst": 845452
       },
-      "adapter_overhead_percent": 1.2,
+      "adapter_overhead_percent": -0.1,
       "adapter_verdict": "indistinguishable",
-      "overhead_percent": 1.2,
+      "overhead_percent": -0.1,
       "verdict": "indistinguishable",
       "broker_bound": false
+    }
+  ],
+  "code": [
+    {
+      "name": "PUSH/PULL on the loopback, JSON decode into a small struct, ack each",
+      "messages": 1000,
+      "framework": {
+        "instructions": 5560.1,
+        "allocations": 5.0
+      },
+      "cold": {
+        "instructions": 588972,
+        "allocations": 609
+      },
+      "gated": true
+    },
+    {
+      "name": "DEALER/ROUTER on the loopback, answered to the requesting peer",
+      "messages": 1000,
+      "framework": {
+        "instructions": 15585.8,
+        "allocations": 18.0
+      },
+      "cold": {
+        "instructions": 604225,
+        "allocations": 627
+      },
+      "gated": true
+    },
+    {
+      "name": "PUSH/PULL on the loopback, in batches of 64 assembled on the client",
+      "messages": 1000,
+      "framework": {
+        "instructions": 5486.8,
+        "allocations": 5.1
+      },
+      "cold": {
+        "instructions": 595990,
+        "allocations": 613
+      },
+      "gated": true
     }
   ]
 }

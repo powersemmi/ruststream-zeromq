@@ -11,8 +11,8 @@ once and nothing is stored, so [`ack`](ruststream::IncomingMessage::ack) and
 [`nack`](ruststream::IncomingMessage::nack) report
 [`AckError::Unsupported`](ruststream::AckError::Unsupported) and a delayed retry is a copy this
 service publishes. A fan-out subscriber that attaches after a publisher has started misses what was
-sent before it arrived. There is no encryption layer and no high-water-mark setting. Order is kept
-per socket pair and nowhere else.
+sent before it arrived. There is no encryption layer. Order is kept per socket pair and nowhere
+else.
 
 The framework itself - handlers, routers, codecs, middleware, the generated `main` - is documented
 in [`ruststream`](https://docs.rs/ruststream/latest/ruststream/); this page covers what is
@@ -59,8 +59,8 @@ that builds its live publisher, and a subscriber.
 
 | Broker | Sockets | Shape | Publish policy | Where a retry copy goes |
 | --- | --- | --- | --- | --- |
-| [`ZmqQueue`] | PUSH/PULL | Competing consumers, round-robin: one message reaches one consumer. | [`ZmqQueuePublish`] | The subscription addresses it. |
-| [`ZmqFanout`] | PUB/SUB | Broadcast: one message reaches every subscription whose name is a prefix of it. | [`ZmqFanoutPublish`] | The subscription addresses it. |
+| [`ZmqQueue`] | PUSH/PULL | Competing consumers, round-robin: one message reaches one consumer. | [`ZmqQueuePublish`] | Bound: the subscription addresses it. Dialed: the mount site names it. |
+| [`ZmqFanout`] | PUB/SUB | Broadcast: one message reaches every subscription whose name is a prefix of it. | [`ZmqFanoutPublish`] | Bound: the subscription addresses it. Dialed: the mount site names it. |
 | [`ZmqRpc`] | DEALER/ROUTER | Request and reply, answered per requesting peer. | [`ZmqRpcPublish`] | The mount site names it. |
 
 Each pattern's policy is also the default of its connected form, so a handler mounted with no
@@ -71,7 +71,7 @@ bare name `Publish`, so the mount site does not change. See [the prelude](#the-p
 
 # Endpoints
 
-[`ZmqEndpoint`] is an address plus the role this process takes on it, because the pattern decides
+[`ZmqEndpoint`] is an address plus the side this process takes on it, because the pattern decides
 who receives and the endpoint decides who listens:
 
 * `ZmqEndpoint::bind("tcp://0.0.0.0:5555")` - this process listens.
@@ -81,10 +81,32 @@ who receives and the endpoint decides who listens:
 Any other scheme is refused when the broker connects, before a socket is opened, and the error
 names the address.
 
+The side is a type. `ZmqEndpoint::bind` returns a `ZmqEndpoint<Bind>` and `ZmqEndpoint::connect` a
+`ZmqEndpoint<Connect>`, and the broker built on it carries the same [`Bind`] or [`Connect`] as its
+`Role` parameter: `ZmqQueue::new(ZmqEndpoint::connect(..))` is a `ZmqQueue<Connect>`. A mount site
+writes the side only where it names the type, as in `Router::<ZmqQueue<Connect>>::new()`; the
+parameter defaults to [`Bind`]. The side decides where a retry copy of a one-way subscription can
+go, and [Retries](#retries) shows the two mounts.
+
 An address with port zero (`tcp://127.0.0.1:0`) leaves the port to the operating system. The port
 settles when a subscription binds, and `bound_address()` on the connected form reports it, or
 `None` until then. A publisher in the same process dials that resolved address by itself, so a
 binary holding both ends runs without a fixed port.
+
+A publisher that dials a subscription of its own service reaches that subscription and nothing
+else, because the socket the subscription bound takes whatever is sent to it. On [`ZmqQueue`] that
+decides what the publisher may send. A message under the subscription's own name goes through: a
+retry copy, or a job the service feeds itself. A message under any other name returns
+[`ZmqError::Send`](ZmqError::Send), naming it and the subscription, because the subscription would
+receive it as its next delivery. A reply, a result or a dead letter therefore leaves through a
+queue on an endpoint of its own; [Replies](#replies) shows the mount.
+
+A subscription that dials reads from the sending end of its pattern - a ventilator's PUSH socket,
+a publisher's PUB socket - and that peer takes nothing. Once a subscription of this service has
+dialed the endpoint, a publish through the same [`ZmqQueue`] or [`ZmqFanout`] returns
+[`ZmqError::Send`](ZmqError::Send), naming the subscription, instead of dialing a peer the
+handshake would refuse. A broker that dials either consumes or produces; one that only publishes,
+such as a producer dialing a sink, sends as usual.
 
 The lifecycle is the framework's ladder of consuming transitions: `ZmqQueue::new(endpoint)` records
 configuration and performs no I/O, `connect` hands back [`ConnectedZmqQueue`], and `shutdown`
@@ -105,9 +127,15 @@ subscription descriptor in this crate: a name is all any of the three patterns n
 
 Only [`ZmqFanout`] filters on the name, and it filters by prefix, which is the protocol's own rule:
 a subscription on `events` also receives `events.created`. [`ZmqQueue`] and [`ZmqRpc`] hand a
-subscription every message their socket receives, whatever frame 0 says. Two [`ZmqQueue`]
-subscriptions on one endpoint therefore split one stream of work, and a second kind of work needs
-an endpoint of its own.
+subscription every message their socket receives, whatever frame 0 says, so a second kind of work
+needs an endpoint of its own.
+
+How many subscriptions a broker takes follows from the side. Subscriptions that dial are sockets
+of their own on the peer's endpoint: two [`ZmqQueue`] workers dialing one ventilator split its
+stream, and two [`ZmqFanout`] watchers dialing one publisher each receive their own prefix. An
+endpoint this service binds is one socket, read by the subscription that bound it. A second
+subscription on the same broker is refused when it opens, with an error naming both subscriptions,
+and mounts on a broker with an endpoint of its own.
 
 Nothing is stored, so there is no position to return to: neither `Seekable` nor `Positioned` is
 implemented and `.start_at(..)` does not compile here. This crate adds no per-delivery context key
@@ -157,8 +185,8 @@ implements no [`BatchSubscriber`](ruststream::BatchSubscriber), and the compile 
 ## Retries
 
 Nothing settles a delivery here, so every retry is a copy this service publishes once the delay a
-handler asked for is over. The registration declares how many deliveries a message gets, where it
-goes when they run out, and which publisher the copies leave through:
+handler asked for is over. The registration declares how many deliveries a message gets and which
+publisher the copies leave through:
 
 ```
 use std::time::Duration;
@@ -186,7 +214,6 @@ fn app() -> impl App {
         |b| {
             b.include(handle)
                 .max_attempts(nonzero!(5u32))
-                .dead_letter("jobs.dead")
                 .out_retry(Publish);
         },
     )
@@ -199,16 +226,70 @@ and no dead-letter topology, so the framework counts the copies through its own
 [`ZmqMessage`] reports no `redelivery_count` for the same reason. Declaring the dead-letter
 destination alone sends every failed delivery straight there.
 
-A destination is a name, and on the one-way patterns a name is frame 0 rather than an address. A
-copy published to `jobs.dead` through the publisher the subscription itself reads from therefore
-arrives on that same subscription, and a handler that keeps failing keeps making copies. Bind the
-copies to a publisher on another endpoint - `.out_retry(token)` over a second broker - when the
-dead-lettered delivery has to leave the consumers that gave up on it.
+A destination is a name, and on the one-way patterns a name is frame 0 rather than an address, so a
+dead-letter destination on the subscription's own endpoint does not leave the subscription. On
+[`ZmqQueue`] the publisher refuses `jobs.dead` with [`ZmqError::Send`](ZmqError::Send), and the
+spent delivery is dropped with a warning. On [`ZmqFanout`] `jobs.dead` matches the prefix `jobs`
+and arrives on the subscription that gave up on it, so a handler that keeps failing keeps making
+copies. A dead-letter destination belongs to a publisher on another endpoint - `.out_retry(token)`
+over a second broker - and the retry copies leave through it as well: they reach that endpoint's
+subscription, not the worker's queue, so such a registration trades its retries for dead-lettering.
+A handler that should see its retries again uses `.out_retry(policy)` on its own endpoint and no
+dead-letter destination.
 
-Where a copy goes is a property of the pattern, and each pattern states it on its type.
-[`ZmqQueue`] and [`ZmqFanout`] address their own subscription, so `.out_retry(policy)` binds the
-publisher and names nothing: a retry on the queue goes back into the queue and whichever worker is
-free takes it, and a retry on the fan-out reaches the audience the original had.
+Where a copy goes is a property of the pattern and, on the one-way patterns, of the side, and the
+type states it. A [`ZmqQueue`] or [`ZmqFanout`] subscription that binds addresses itself, so
+`.out_retry(policy)` binds the publisher and names nothing: a retry on the queue goes back into the
+queue and whichever worker is free takes it, and a retry on the fan-out reaches the audience the
+original had.
+
+A subscription that dials addresses nothing, because the peer it reads from only sends. Its mount
+site names where the copies go. A worker behind a ventilator sends them to a queue it binds itself,
+where the same handler takes them:
+
+```
+use std::time::Duration;
+
+use ruststream_zeromq::queue::prelude::*;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct Job {
+    id: u64,
+}
+
+#[subscriber("jobs")]
+async fn handle(job: &Job) -> HandlerOutcome {
+    if job.id == 0 {
+        return HandlerOutcome::retry_after(Duration::from_secs(30));
+    }
+    HandlerOutcome::ack()
+}
+
+#[ruststream::app]
+fn app() -> impl App {
+    let retries = ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5560")).bindable();
+    let copies = retries.bind(Publish);
+    RustStream::new(AppInfo::new("worker", "0.1.0"))
+        .with_broker(ZmqQueue::new(ZmqEndpoint::connect("tcp://ventilator:5555")), |b| {
+            b.include(handle)
+                .max_attempts(nonzero!(5u32))
+                .out_retry(copies)
+                .to("jobs");
+        })
+        .with_broker(retries, |b| {
+            b.include(handle).max_attempts(nonzero!(5u32));
+        })
+}
+```
+
+The copies carry the framework's counter, so the cap holds across both subscriptions. A
+registration on a subscription that dials and names no destination is refused before the
+subscription opens, with an error naming the subscription and the fix, and a
+[`Router`](ruststream::runtime::Router) chain that names none does not compile. That includes a
+registration that never asks for a retry, because the runtime pairs the publisher either way. The
+worker's own queue is no destination: its publisher refuses every publish once the subscription has
+dialed, as [Endpoints](#endpoints) describes.
 
 [`ZmqRpc`] addresses nothing, because a copy of a request has no address of its own: replies route
 to the peer identity the request carried, and the reply publisher refuses a plain name. Every
@@ -257,7 +338,8 @@ for the ZMTP handshake is a constant of this crate, the same for every message.
 
 ## Replies
 
-A reply type that owns its destination names it, and the subscriber clause stays bare:
+A reply type that owns its destination names it, and the subscriber clause stays bare. On
+[`ZmqQueue`] the reply leaves through a queue on an endpoint of its own, here one a sink binds:
 
 ```
 use ruststream_zeromq::queue::prelude::*;
@@ -281,14 +363,19 @@ async fn work(job: &Job) -> Done {
 
 #[ruststream::app]
 fn app() -> impl App {
-    RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
-        ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
-        |b| {
-            b.include(work).out_reply(Publish);
-        },
-    )
+    let results = ZmqQueue::new(ZmqEndpoint::connect("tcp://sink:5556")).bindable();
+    let to_results = results.bind(Publish);
+    RustStream::new(AppInfo::new("worker", "0.1.0"))
+        .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
+            b.include(work).out_reply(to_results);
+        })
+        .with_broker(results, |_b| {})
 }
 ```
+
+The jobs arrive on the socket the `jobs` subscription binds, and that socket takes every message
+pushed into it. A result published there would come back as the next job, so the worker's own
+publisher refuses it, and the mount binds the reply to the second broker instead.
 
 A type that names no destination takes the mount site's, `#[subscriber("jobs", publish("results"))]`.
 Both forms reach the generated document as the resolved destination, so a declaration cannot
@@ -477,32 +564,28 @@ crate rather than of a channel.
 
 # Testing
 
-The `testing` feature ships [`testing::ZmqTestBroker`], an in-process stand that reproduces this
-crate's routing with no sockets and no network. There is one stand per pattern, and the constructor
-picks it: `ZmqTestBroker::queue()`, `ZmqTestBroker::fanout()`, `ZmqTestBroker::rpc()`. Each answers
-what its own broker answers, so a routes file that compiles and starts under the harness compiles
-and starts against the socket, and each production policy pairs against the stand of its own
-pattern and no other. A stand describes itself as an in-process server over the protocol and ZMTP
-version its pattern reports, so a document generated under the harness is the one the service ships
-apart from where it says to attach.
-
-Drive it through the framework's
-[`TestApp`](https://docs.rs/ruststream/latest/ruststream/testing/index.html) harness:
+A test hands the harness the app `main` runs, and
+[`TestApp::start`](https://docs.rs/ruststream/latest/ruststream/testing/index.html) connects each
+broker of this crate in process: the production broker, its connected form and its publish
+policies, over a transport inside the test process instead of ZMTP sockets. A test addresses a
+broker by its production type, `tb.broker::<ZmqQueue>()`, or by the label it was mounted under.
+The in-process mode comes with the `testing` feature, which a service enables in its
+`[dev-dependencies]`.
 
 ```
 # #[cfg(feature = "testing")]
 # mod demo {
 use ruststream::testing::TestApp;
+use ruststream_zeromq::Connect;
 use ruststream_zeromq::queue::prelude::*;
-use ruststream_zeromq::testing::{Queue, ZmqTestBroker};
 use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Outgoing)]
 struct Job {
     id: u64,
 }
 
-#[derive(Deserialize, Serialize, Outgoing)]
+#[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing)]
 #[outgoing(name = "results")]
 struct Done {
     id: u64,
@@ -513,19 +596,32 @@ async fn work(job: &Job) -> Done {
     Done { id: job.id }
 }
 
+/// The app `main` runs, and the one the tests hand the harness.
+pub fn app() -> RustStream {
+    let results = ZmqQueue::new(ZmqEndpoint::connect("tcp://sink:5556")).bindable();
+    let to_results = results.bind(Publish);
+    RustStream::new(AppInfo::new("worker", "0.1.0"))
+        .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
+            b.include(work).out_reply(to_results);
+        })
+        .with_broker(results, |_b| {})
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_job_is_worked_and_its_result_published() {
-    let app = RustStream::new(AppInfo::new("worker", "0.1.0"))
-        .with_broker(ZmqTestBroker::queue(), |b| {
-            b.include(work).out_reply(Publish);
-        });
-    let tb = TestApp::start(app).await.expect("the app starts");
+    let tb = TestApp::start(app()).await.expect("the app starts");
 
-    tb.publish("jobs", &Job { id: 7 }).await.expect("the job is delivered");
+    tb.broker::<ZmqQueue>()
+        .message(&Job { id: 7 })
+        .to("jobs")
+        .publish()
+        .await
+        .expect("the job is worked");
 
-    tb.broker::<ZmqTestBroker<Queue>>()
+    tb.broker::<ZmqQueue<Connect>>()
         .published::<Done>("results")
-        .assert_called_once();
+        .assert_called_once()
+        .with(&Done { id: 7 });
 
     tb.shutdown().await.expect("the app shuts down");
 }
@@ -533,18 +629,38 @@ async fn a_job_is_worked_and_its_result_published() {
 # fn main() {}
 ```
 
-What has no counterpart in a channel is not imitated. There is no peer to connect, so a publish a
-real PUSH socket would fail after its retry window is recorded and dropped here, and a request
-timeout covers the wait for an answer alone. Delivery guarantees, high-water marks and the slow
-joiner stay transport behaviour: the loopback suites cover them, and they need no external service.
+The in-process transport carries the frames a socket carries. A publish is framed the way the
+socket publisher frames it, and a subscription reads the frames the way its socket does, so a
+header value the text frame cannot hold is refused and a request arrives stamped with the peer
+that sent it. It has no settings of its own: the side of each endpoint comes from the broker's
+type, and every refusal is the socket's, in the socket's words.
 
-Settlement is reproduced rather than softened. A delivery from a stand returns
-[`AckError::Unsupported`](ruststream::AckError::Unsupported) from `ack` and from `nack` and never
-comes back, exactly as a delivery over a socket does, so a handler that settles by retrying fails
-its test here instead of losing its message after deployment. What the stand withholds, it
-withholds because the pattern does: `.batch(..)` on a responder does not compile against the stand
-either, and a responder mount that names no retry destination is refused under the harness in the
-words the socket uses.
+Which subscriptions a message reaches is the pattern's own rule:
+
+* Queue. A subscription that binds takes whatever a peer pushes to its endpoint, whatever the name
+  frame says. Subscriptions that dial take a peer's pushes one at a time, in turn.
+* Fan-out. Every subscription whose name is a prefix of the message's name, on either side.
+* Request and reply. A request reaches the responder that binds, or one of the responders that
+  dial, in turn. The answer reaches the peer that asked and no subscription.
+* A publish of this service reaches its own subscription only through the listener that
+  subscription binds. On an endpoint the service dials, or binds with no subscription on it, the
+  message leaves for a peer in another process: in process it is recorded in `published` and
+  reaches no subscription.
+
+A test's input reaches a broker the way a foreign peer sends it. The service's own publishers and
+subscriptions meet the socket's refusals in process: a publish a bound queue would hand back to its
+own subscription, any publish on an endpoint a subscription dials, a second subscription on an
+endpoint the broker binds, an answer to a peer that is gone. Settlement is the socket's as well:
+`ack` and `nack` report [`AckError::Unsupported`](ruststream::AckError::Unsupported) and nothing
+comes back, so a handler that settles by retrying fails its test instead of losing its message in
+production.
+
+[`TestApp::start_live`](https://docs.rs/ruststream/latest/ruststream/testing/struct.TestApp.html#method.start_live)
+runs the same test body over real sockets. `ZeroMQ` needs no server, so a live test binds loopback
+ports and runs in every `cargo test`. Live, a test's input leaves through the broker's own
+publisher, so on a bound queue it carries the subscription's own name. Delivery guarantees
+and back-pressure belong to the sockets. The fan-out's publisher reads its own subscription's
+filter before its first send, so a live fan-out test publishes once, as an in-process one does.
 
 # Operations
 
@@ -553,11 +669,17 @@ words the socket uses.
   service on a trusted network or inside an existing tunnel.
 * Connection settings: the endpoint and its role, and nothing else. The handshake retry window
   (five seconds), the batch deadline (20 ms) and the ZMTP version are constants of this crate.
-* Back-pressure: no high-water mark is exposed. A slow reader exerts raw TCP back-pressure on
-  senders, except on PUB/SUB, where an unmatched message is dropped without an error.
-* Cancel safety: no publish here is cancel-safe. Dropping a publish future can leave a message
-  half-handed to the socket, and dropping a `request` future closes the DEALER the request went
-  out on. Publish from a task of its own and give up through the request timeout, not by
-  cancelling a `select!` arm.
+* Back-pressure: a subscription reads at most 1000 deliveries ahead of its handler, or the bound
+  its descriptor sets with `read_ahead` ([`ZmqQueue::read_ahead`], [`ZmqFanout::read_ahead`],
+  [`ZmqRpc::read_ahead`]). Past it the subscription stops reading, the socket buffers fill, and the
+  sender waits, so a slow handler slows the sender down instead of growing this process's memory.
+  On PUB/SUB the waiting sender is the PUB socket, held back by its slowest matching subscriber; a
+  message that matches no subscriber is still dropped without an error.
+* Cancel safety: a queue publish is cancel-safe. One dropped mid-send, while the peer applies
+  back-pressure, leaves its message with the publisher, and the next publish completes that send
+  before its own. A fan-out publish and a reply are not: dropping one can leave a message
+  half-handed to the socket. Dropping a `request` future closes the DEALER the request went out on.
+  Publish those from a task of its own and give up through the request timeout, not by cancelling
+  a `select!` arm.
 * Durability: none. Nothing is stored, so a subscriber that attaches late has no backlog to read
   and a restart replays nothing.

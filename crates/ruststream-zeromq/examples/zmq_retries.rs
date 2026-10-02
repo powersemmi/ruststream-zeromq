@@ -2,7 +2,7 @@
 //!
 //! `ZeroMQ` has no delivery counter and no dead-letter topology, so the copies are published by
 //! this service and counted by the framework. The mount site declares how many attempts a job
-//! gets and where it goes when they run out.
+//! gets, and the copies come back through the queue the worker binds.
 //!
 //! ```text
 //! cargo run --example zmq_retries -- run
@@ -49,7 +49,6 @@ fn app() -> impl App {
             // --8<-- [start:declaration]
             b.include(handle)
                 .max_attempts(nonzero!(5u32))
-                .dead_letter("jobs.dead")
                 .out_retry(Publish);
             // --8<-- [end:declaration]
         },
