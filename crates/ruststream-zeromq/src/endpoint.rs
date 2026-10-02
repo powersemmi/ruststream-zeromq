@@ -54,16 +54,44 @@ mod sealed {
 ///
 /// # Examples
 ///
-/// ```
-/// use ruststream_zeromq::{Connect, EndpointRole, ZmqEndpoint, ZmqQueue};
+/// A service that builds every queue with the same settings, on whichever side the endpoint
+/// takes:
 ///
-/// // Code that serves either side names the parameter; the constructor picks it for a value.
-/// fn describe<Role: EndpointRole>(queue: &ZmqQueue<Role>) -> String {
-///     format!("{queue:?}")
+/// ```
+/// use ruststream_zeromq::EndpointRole;
+/// use ruststream_zeromq::queue::prelude::*;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Deserialize)]
+/// struct Job {
+///     id: u64,
 /// }
 ///
-/// let worker: ZmqQueue<Connect> = ZmqQueue::new(ZmqEndpoint::connect("tcp://ventilator:5555"));
-/// assert!(describe(&worker).contains("ventilator"));
+/// #[derive(Serialize, Outgoing)]
+/// #[outgoing(name = "results")]
+/// struct Done {
+///     id: u64,
+/// }
+///
+/// #[subscriber("jobs", publish)]
+/// async fn work(job: &Job) -> Done {
+///     Done { id: job.id }
+/// }
+///
+/// fn queue<Role: EndpointRole>(endpoint: ZmqEndpoint<Role>) -> ZmqQueue<Role> {
+///     ZmqQueue::new(endpoint).read_ahead(nonzero!(64_usize))
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     let results = queue(ZmqEndpoint::connect("tcp://sink:5556")).bindable();
+///     let to_results = results.bind(Publish);
+///     RustStream::new(AppInfo::new("worker", "0.1.0"))
+///         .with_broker(queue(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
+///             b.include(work).out_reply(to_results);
+///         })
+///         .register_broker(results)
+/// }
 /// ```
 pub trait EndpointRole: sealed::Sealed + Send + Sync + 'static {}
 
@@ -71,11 +99,46 @@ pub trait EndpointRole: sealed::Sealed + Send + Sync + 'static {}
 ///
 /// # Examples
 ///
-/// ```
-/// use ruststream_zeromq::{Bind, ZmqEndpoint, ZmqQueue};
+/// Routes for a queue this process binds retry on that queue and name no destination, because
+/// the listener takes the copies:
 ///
-/// let worker: ZmqQueue<Bind> = ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555"));
-/// # let _ = worker;
+/// ```
+/// use std::time::Duration;
+///
+/// use ruststream_zeromq::Bind;
+/// use ruststream_zeromq::queue::prelude::*;
+/// use serde::Deserialize;
+///
+/// #[derive(Deserialize)]
+/// struct Job {
+///     id: u64,
+/// }
+///
+/// #[subscriber("jobs")]
+/// async fn work(job: &Job) -> HandlerOutcome {
+///     if job.id == 0 {
+///         return HandlerOutcome::retry_after(Duration::from_secs(30));
+///     }
+///     HandlerOutcome::ack()
+/// }
+///
+/// fn routes() -> impl RouterDef<ZmqQueue<Bind>> {
+///     Router::<ZmqQueue<Bind>>::new()
+///         .include(work)
+///         .max_attempts(nonzero!(5u32))
+///         .out_retry(Publish)
+///         .build()
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
+///         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
+///         |b| {
+///             b.include_router(routes());
+///         },
+///     )
+/// }
 /// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct Bind;
@@ -84,11 +147,71 @@ pub struct Bind;
 ///
 /// # Examples
 ///
-/// ```
-/// use ruststream_zeromq::{Connect, ZmqEndpoint, ZmqQueue};
+/// A test of a worker that pushes its results to a collector it dials addresses that queue by its
+/// side:
 ///
-/// let worker: ZmqQueue<Connect> = ZmqQueue::new(ZmqEndpoint::connect("tcp://ventilator:5555"));
-/// # let _ = worker;
+/// ```
+/// # #[cfg(feature = "testing")]
+/// # mod demo {
+/// use std::error::Error;
+///
+/// use ruststream::testing::TestApp;
+/// use ruststream_zeromq::Connect;
+/// use ruststream_zeromq::queue::prelude::*;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Deserialize, Serialize, Outgoing)]
+/// struct Job {
+///     id: u64,
+/// }
+///
+/// #[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing)]
+/// #[outgoing(name = "results")]
+/// struct Done {
+///     id: u64,
+/// }
+///
+/// #[subscriber("jobs", publish)]
+/// async fn work(job: &Job) -> Done {
+///     Done { id: job.id }
+/// }
+///
+/// pub fn app() -> RustStream {
+///     let collector = ZmqQueue::new(ZmqEndpoint::connect("tcp://collector:5560")).bindable();
+///     let results = collector.bind(Publish);
+///     RustStream::new(AppInfo::new("worker", "0.1.0"))
+///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
+///             b.include(work).out_reply(results);
+///         })
+///         .register_broker(collector)
+/// }
+///
+/// pub async fn the_result_reaches_the_collector() -> Result<(), Box<dyn Error>> {
+///     let tb = TestApp::start(app()).await?;
+///
+///     tb.broker::<ZmqQueue>()
+///         .message(&Job { id: 7 })
+///         .to("jobs")
+///         .publish()
+///         .await?;
+///
+///     tb.broker::<ZmqQueue<Connect>>()
+///         .published::<Done>("results")
+///         .assert_called_once()
+///         .with(&Done { id: 7 });
+///     tb.shutdown().await?;
+///     Ok(())
+/// }
+/// # }
+/// # #[cfg(feature = "testing")]
+/// # use std::error::Error;
+/// # #[cfg(feature = "testing")]
+/// # #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
+/// # async fn main() -> Result<(), Box<dyn Error>> {
+/// #     demo::the_result_reaches_the_collector().await
+/// # }
+/// # #[cfg(not(feature = "testing"))]
+/// # fn main() {}
 /// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct Connect;
@@ -117,13 +240,39 @@ impl EndpointRole for Connect {}
 ///
 /// # Examples
 ///
-/// ```
-/// use ruststream_zeromq::ZmqEndpoint;
+/// A worker that listens for jobs from a producer on the same host and pushes its results to a
+/// collector it dials over the network:
 ///
-/// let listener = ZmqEndpoint::bind("tcp://0.0.0.0:5555");
-/// let dialer = ZmqEndpoint::connect("tcp://ml:5555");
-/// let local = ZmqEndpoint::bind("ipc:///tmp/orders");
-/// # let _ = (listener, dialer, local);
+/// ```
+/// use ruststream_zeromq::queue::prelude::*;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Deserialize)]
+/// struct Job {
+///     id: u64,
+/// }
+///
+/// #[derive(Serialize, Outgoing)]
+/// #[outgoing(name = "results")]
+/// struct Done {
+///     id: u64,
+/// }
+///
+/// #[subscriber("jobs", publish)]
+/// async fn work(job: &Job) -> Done {
+///     Done { id: job.id }
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     let collector = ZmqQueue::new(ZmqEndpoint::connect("tcp://collector:5560")).bindable();
+///     let results = collector.bind(Publish);
+///     RustStream::new(AppInfo::new("worker", "0.1.0"))
+///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("ipc:///tmp/jobs")), |b| {
+///             b.include(work).out_reply(results);
+///         })
+///         .register_broker(collector)
+/// }
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[must_use]
@@ -137,11 +286,32 @@ impl ZmqEndpoint<Bind> {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use ruststream_zeromq::ZmqEndpoint;
+    /// A worker that listens on a local socket for the producers on its host:
     ///
-    /// let listener = ZmqEndpoint::bind("tcp://0.0.0.0:5555");
-    /// assert_eq!(listener.address(), "tcp://0.0.0.0:5555");
+    /// ```
+    /// use ruststream_zeromq::queue::prelude::*;
+    /// use serde::Deserialize;
+    ///
+    /// #[derive(Deserialize)]
+    /// struct Job {
+    ///     id: u64,
+    /// }
+    ///
+    /// #[subscriber("jobs")]
+    /// async fn work(job: &Job) -> HandlerOutcome {
+    ///     println!("working on job {}", job.id);
+    ///     HandlerOutcome::ack()
+    /// }
+    ///
+    /// #[ruststream::app]
+    /// fn app() -> impl App {
+    ///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
+    ///         ZmqQueue::new(ZmqEndpoint::bind("ipc:///tmp/jobs")),
+    ///         |b| {
+    ///             b.include(work);
+    ///         },
+    ///     )
+    /// }
     /// ```
     pub fn bind(address: impl Into<String>) -> Self {
         Self::on(address.into())
@@ -153,11 +323,38 @@ impl ZmqEndpoint<Connect> {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use ruststream_zeromq::ZmqEndpoint;
+    /// A worker that pushes its results to the collector it dials:
     ///
-    /// let dialer = ZmqEndpoint::connect("tcp://ml:5555");
-    /// assert_eq!(dialer.address(), "tcp://ml:5555");
+    /// ```
+    /// use ruststream_zeromq::queue::prelude::*;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Deserialize)]
+    /// struct Job {
+    ///     id: u64,
+    /// }
+    ///
+    /// #[derive(Serialize, Outgoing)]
+    /// #[outgoing(name = "results")]
+    /// struct Done {
+    ///     id: u64,
+    /// }
+    ///
+    /// #[subscriber("jobs", publish)]
+    /// async fn work(job: &Job) -> Done {
+    ///     Done { id: job.id }
+    /// }
+    ///
+    /// #[ruststream::app]
+    /// fn app() -> impl App {
+    ///     let collector = ZmqQueue::new(ZmqEndpoint::connect("tcp://collector:5560")).bindable();
+    ///     let results = collector.bind(Publish);
+    ///     RustStream::new(AppInfo::new("worker", "0.1.0"))
+    ///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
+    ///             b.include(work).out_reply(results);
+    ///         })
+    ///         .register_broker(collector)
+    /// }
     /// ```
     pub fn connect(address: impl Into<String>) -> Self {
         Self::on(address.into())
@@ -181,10 +378,32 @@ impl<Role> ZmqEndpoint<Role> {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use ruststream_zeromq::ZmqEndpoint;
+    /// A worker that logs where it listens before it starts:
     ///
-    /// assert_eq!(ZmqEndpoint::bind("ipc:///tmp/orders").address(), "ipc:///tmp/orders");
+    /// ```
+    /// use ruststream_zeromq::queue::prelude::*;
+    /// use serde::Deserialize;
+    ///
+    /// #[derive(Deserialize)]
+    /// struct Job {
+    ///     id: u64,
+    /// }
+    ///
+    /// #[subscriber("jobs")]
+    /// async fn work(job: &Job) -> HandlerOutcome {
+    ///     println!("working on job {}", job.id);
+    ///     HandlerOutcome::ack()
+    /// }
+    ///
+    /// #[ruststream::app]
+    /// fn app() -> impl App {
+    ///     let endpoint = ZmqEndpoint::bind("tcp://0.0.0.0:5555");
+    ///     println!("worker listening on {}", endpoint.address());
+    ///     RustStream::new(AppInfo::new("worker", "0.1.0"))
+    ///         .with_broker(ZmqQueue::new(endpoint), |b| {
+    ///             b.include(work);
+    ///         })
+    /// }
     /// ```
     #[must_use]
     pub fn address(&self) -> &str {

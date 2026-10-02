@@ -575,6 +575,8 @@ The in-process mode comes with the `testing` feature, which a service enables in
 ```
 # #[cfg(feature = "testing")]
 # mod demo {
+use std::error::Error;
+
 use ruststream::testing::TestApp;
 use ruststream_zeromq::Connect;
 use ruststream_zeromq::queue::prelude::*;
@@ -607,25 +609,31 @@ pub fn app() -> RustStream {
         .with_broker(results, |_b| {})
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_job_is_worked_and_its_result_published() {
-    let tb = TestApp::start(app()).await.expect("the app starts");
+pub async fn a_job_is_worked_and_its_result_published() -> Result<(), Box<dyn Error>> {
+    let tb = TestApp::start(app()).await?;
 
     tb.broker::<ZmqQueue>()
         .message(&Job { id: 7 })
         .to("jobs")
         .publish()
-        .await
-        .expect("the job is worked");
+        .await?;
 
     tb.broker::<ZmqQueue<Connect>>()
         .published::<Done>("results")
         .assert_called_once()
         .with(&Done { id: 7 });
-
-    tb.shutdown().await.expect("the app shuts down");
+    tb.shutdown().await?;
+    Ok(())
 }
 # }
+# #[cfg(feature = "testing")]
+# use std::error::Error;
+# #[cfg(feature = "testing")]
+# #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
+# async fn main() -> Result<(), Box<dyn Error>> {
+#     demo::a_job_is_worked_and_its_result_published().await
+# }
+# #[cfg(not(feature = "testing"))]
 # fn main() {}
 ```
 
