@@ -5,8 +5,8 @@ members = ["crates/ruststream-zeromq", "crates/ruststream-zeromq-bench"]
 [workspace.package]
 version = "0.7.0"
 edition = "2024"
-# Follows the core's floor: ruststream 0.7 raised it from 1.85.
-rust-version = "1.88"
+# Follows the core's floor, which ruststream 0.7.0-rc.12 raised to 1.95.
+rust-version = "1.95"
 license = "Apache-2.0"
 repository = "https://github.com/powersemmi/ruststream-zeromq"
 authors = ["RustStream contributors"]
