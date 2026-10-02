@@ -100,12 +100,40 @@ const _: () = assert!(size_of::<Sender<Outbox<PushSocket>>>() == size_of::<Outbo
 ///
 /// # Examples
 ///
-/// ```
-/// use ruststream_zeromq::{ZmqEndpoint, ZmqQueue};
+/// One of several workers that dial the same dispatcher and compete for its jobs. The dispatcher
+/// takes nothing back, so the retry copies go to a queue the worker binds itself:
 ///
-/// let consumer = ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555"));
-/// let producer = ZmqQueue::new(ZmqEndpoint::connect("tcp://worker:5555"));
-/// # let _ = (consumer, producer);
+/// ```
+/// use std::time::Duration;
+///
+/// use ruststream_zeromq::queue::prelude::*;
+/// use serde::Deserialize;
+///
+/// #[derive(Deserialize)]
+/// struct Job {
+///     id: u64,
+/// }
+///
+/// #[subscriber("jobs")]
+/// async fn work(job: &Job) -> HandlerOutcome {
+///     if job.id == 0 {
+///         return HandlerOutcome::retry_after(Duration::from_secs(30));
+///     }
+///     HandlerOutcome::ack()
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     let retries = ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5560")).bindable();
+///     let copies = retries.bind(Publish);
+///     RustStream::new(AppInfo::new("worker", "0.1.0"))
+///         .with_broker(ZmqQueue::new(ZmqEndpoint::connect("tcp://dispatcher:5555")), |b| {
+///             b.include(work).out_retry(copies).to("jobs");
+///         })
+///         .with_broker(retries, |b| {
+///             b.include(work);
+///         })
+/// }
 /// ```
 #[must_use]
 pub struct ZmqQueue<Role = Bind> {
@@ -120,11 +148,32 @@ impl<Role: EndpointRole> ZmqQueue<Role> {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use ruststream_zeromq::{ZmqEndpoint, ZmqQueue};
+    /// A worker that listens for the jobs its producers push:
     ///
-    /// let consumer = ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555"));
-    /// # let _ = consumer;
+    /// ```
+    /// use ruststream_zeromq::queue::prelude::*;
+    /// use serde::Deserialize;
+    ///
+    /// #[derive(Deserialize)]
+    /// struct Job {
+    ///     id: u64,
+    /// }
+    ///
+    /// #[subscriber("jobs")]
+    /// async fn work(job: &Job) -> HandlerOutcome {
+    ///     println!("working on job {}", job.id);
+    ///     HandlerOutcome::ack()
+    /// }
+    ///
+    /// #[ruststream::app]
+    /// fn app() -> impl App {
+    ///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
+    ///         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
+    ///         |b| {
+    ///             b.include(work);
+    ///         },
+    ///     )
+    /// }
     /// ```
     pub fn new(endpoint: ZmqEndpoint<Role>) -> Self {
         Self {
@@ -146,13 +195,32 @@ impl<Role> ZmqQueue<Role> {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use ruststream::nonzero;
-    /// use ruststream_zeromq::{ZmqQueue, ZmqEndpoint};
+    /// A worker whose renders take seconds holds 64 jobs ahead, and the producers wait beyond
+    /// that:
     ///
-    /// let subscriber_side = ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555"))
-    ///     .read_ahead(nonzero!(64_usize));
-    /// # let _ = subscriber_side;
+    /// ```
+    /// use ruststream_zeromq::queue::prelude::*;
+    /// use serde::Deserialize;
+    ///
+    /// #[derive(Deserialize)]
+    /// struct Render {
+    ///     scene: String,
+    /// }
+    ///
+    /// #[subscriber("renders")]
+    /// async fn render(job: &Render) -> HandlerOutcome {
+    ///     println!("rendering {}", job.scene);
+    ///     HandlerOutcome::ack()
+    /// }
+    ///
+    /// #[ruststream::app]
+    /// fn app() -> impl App {
+    ///     let renders = ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555"))
+    ///         .read_ahead(nonzero!(64_usize));
+    ///     RustStream::new(AppInfo::new("renderer", "0.1.0")).with_broker(renders, |b| {
+    ///         b.include(render);
+    ///     })
+    /// }
     /// ```
     pub const fn read_ahead(mut self, read_ahead: NonZeroUsize) -> Self {
         self.read_ahead = read_ahead;
@@ -557,11 +625,49 @@ impl Publisher for ZmqQueuePublisher {
 ///
 /// # Examples
 ///
-/// ```
-/// use ruststream_zeromq::ZmqQueuePublish;
+/// A handler that splits each order into picks and pushes them to the pickers' queue, bound at the
+/// mount site:
 ///
-/// let policy = ZmqQueuePublish::default();
-/// # let _ = policy;
+/// ```
+/// use std::error::Error;
+///
+/// use ruststream_zeromq::prelude::*;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Deserialize)]
+/// struct Order {
+///     id: u64,
+///     lines: Vec<u64>,
+/// }
+///
+/// #[derive(Serialize, Outgoing)]
+/// #[outgoing(name = "picks")]
+/// struct Pick {
+///     order: u64,
+///     item: u64,
+/// }
+///
+/// #[subscriber("orders")]
+/// async fn split(
+///     order: &Order,
+///     Out(picks): Out<impl Publisher>,
+/// ) -> Result<(), Box<dyn Error + Send + Sync>> {
+///     for &item in &order.lines {
+///         picks.message(&Pick { order: order.id, item }).publish().await?;
+///     }
+///     Ok(())
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     let pickers = ZmqQueue::new(ZmqEndpoint::connect("tcp://pickers:5556")).bindable();
+///     let to_pickers = pickers.bind(ZmqQueuePublish);
+///     RustStream::new(AppInfo::new("splitter", "0.1.0"))
+///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
+///             b.include(split).out(DefaultSlot, to_pickers).build();
+///         })
+///         .register_broker(pickers)
+/// }
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
 #[must_use]

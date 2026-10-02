@@ -254,7 +254,7 @@ mod tests {
         message.push_back(Bytes::from_static(b"raw"));
         let (name, headers, payload) = decode(message).expect("decodes");
         assert_eq!(name, "orders");
-        assert!(headers.is_empty());
+        assert_eq!(headers, HeaderMap::new());
         assert_eq!(payload.as_ref(), b"raw");
     }
 

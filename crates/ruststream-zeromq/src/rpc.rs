@@ -43,12 +43,39 @@ pub use self::ZmqRpcPublish as Publish;
 ///     }
 /// }
 ///
+/// // Answers at the `reply-to` address each request carries, under its `correlation-id`; the
+/// // crate overview shows it in full.
+/// # use ruststream::runtime::{Outgoing, PublishContext};
+/// # struct ReplyToRequester;
+/// # impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
+/// #     type Destination = Names;
+/// #     fn apply(
+/// #         &self,
+/// #         out: &mut Outgoing<'_>,
+/// #         _options: &mut Option<Options>,
+/// #         cx: &PublishContext<'_, C>,
+/// #     ) {
+/// #         if let Some(reply_to) = cx.headers().get_shared("reply-to")
+/// #             && let Ok(reply_to) = Str::try_from(reply_to)
+/// #         {
+/// #             out.set_name(reply_to);
+/// #         }
+/// #         if let Some(correlation) = cx.headers().get_shared("correlation-id") {
+/// #             out.headers_mut().insert(Str::from_static("correlation-id"), correlation);
+/// #         }
+/// #     }
+/// # }
+///
 /// #[ruststream::app]
 /// fn app() -> impl App {
 ///     RustStream::new(AppInfo::new("greeter", "0.1.0")).with_broker(
 ///         ZmqRpc::new(ZmqEndpoint::bind("tcp://0.0.0.0:5557")),
 ///         |b| {
-///             b.include(greet).out_reply(Publish).out_retry(Publish).to("greeter.retry");
+///             b.include(greet)
+///                 .out_reply(Publish)
+///                 .transform(ReplyToRequester)
+///                 .out_retry(Publish)
+///                 .to("greeter.retry");
 ///         },
 ///     )
 /// }
@@ -160,12 +187,51 @@ fn hex_decode(text: &str) -> Option<Vec<u8>> {
 ///
 /// # Examples
 ///
-/// ```
-/// use ruststream_zeromq::{ZmqEndpoint, ZmqRpc};
+/// A queue worker that asks a model service for a score before it finishes each job:
 ///
-/// let responder = ZmqRpc::new(ZmqEndpoint::bind("tcp://0.0.0.0:5557"));
-/// let requester = ZmqRpc::new(ZmqEndpoint::connect("tcp://ml:5557"));
-/// # let _ = (responder, requester);
+/// ```
+/// use std::error::Error;
+/// use std::time::Duration;
+///
+/// use ruststream::OutgoingMessage;
+/// use ruststream::codec::{Codec, JsonCodec};
+/// use ruststream_zeromq::prelude::*;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Deserialize, Serialize)]
+/// struct Job {
+///     id: u64,
+/// }
+///
+/// #[derive(Deserialize)]
+/// struct Score {
+///     value: f64,
+/// }
+///
+/// #[subscriber("jobs")]
+/// async fn rate(
+///     job: &Job,
+///     Out(model): Out<impl RequestReply>,
+/// ) -> Result<(), Box<dyn Error + Send + Sync>> {
+///     let request = JsonCodec.encode(job)?;
+///     let reply = model
+///         .request(OutgoingMessage::new("score", request.as_ref()), Duration::from_secs(5))
+///         .await?;
+///     let score: Score = JsonCodec.decode(reply.payload())?;
+///     println!("job {} scored {}", job.id, score.value);
+///     Ok(())
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     let model = ZmqRpc::new(ZmqEndpoint::connect("tcp://model:5557")).bindable();
+///     let ask = model.bind(ZmqRpcPublish);
+///     RustStream::new(AppInfo::new("scorer", "0.1.0"))
+///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
+///             b.include(rate).out(DefaultSlot, ask).build();
+///         })
+///         .register_broker(model)
+/// }
 /// ```
 #[derive(Debug, Clone)]
 #[must_use]
@@ -209,12 +275,64 @@ impl ZmqRpc {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use ruststream_zeromq::{ZmqEndpoint, ZmqRpc};
+    /// A model service that answers each score request at the peer that sent it:
     ///
-    /// let responder = ZmqRpc::new(ZmqEndpoint::bind("tcp://0.0.0.0:5557"));
-    /// let requester = ZmqRpc::new(ZmqEndpoint::connect("tcp://ml:5557"));
-    /// # let _ = (responder, requester);
+    /// ```
+    /// use ruststream_zeromq::rpc::prelude::*;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Deserialize)]
+    /// struct Features {
+    ///     values: Vec<f64>,
+    /// }
+    ///
+    /// #[derive(Serialize, Outgoing)]
+    /// struct Score {
+    ///     value: f64,
+    /// }
+    ///
+    /// #[subscriber("score", publish("reply"))]
+    /// async fn score(request: &Features) -> Score {
+    ///     Score {
+    ///         value: request.values.iter().sum(),
+    ///     }
+    /// }
+    ///
+    /// // Answers at the request's `reply-to` address; the crate overview shows it in full.
+    /// # use ruststream::runtime::{Outgoing, PublishContext};
+    /// # struct ReplyToRequester;
+    /// # impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
+    /// #     type Destination = Names;
+    /// #     fn apply(
+    /// #         &self,
+    /// #         out: &mut Outgoing<'_>,
+    /// #         _options: &mut Option<Options>,
+    /// #         cx: &PublishContext<'_, C>,
+    /// #     ) {
+    /// #         if let Some(reply_to) = cx.headers().get_shared("reply-to")
+    /// #             && let Ok(reply_to) = Str::try_from(reply_to)
+    /// #         {
+    /// #             out.set_name(reply_to);
+    /// #         }
+    /// #         if let Some(correlation) = cx.headers().get_shared("correlation-id") {
+    /// #             out.headers_mut().insert(Str::from_static("correlation-id"), correlation);
+    /// #         }
+    /// #     }
+    /// # }
+    ///
+    /// #[ruststream::app]
+    /// fn app() -> impl App {
+    ///     RustStream::new(AppInfo::new("model", "0.1.0")).with_broker(
+    ///         ZmqRpc::new(ZmqEndpoint::bind("tcp://0.0.0.0:5557")),
+    ///         |b| {
+    ///             b.include(score)
+    ///                 .out_reply(Publish)
+    ///                 .transform(ReplyToRequester)
+    ///                 .out_retry(Publish)
+    ///                 .to("score.retry");
+    ///         },
+    ///     )
+    /// }
     /// ```
     pub fn new<Role: EndpointRole>(endpoint: ZmqEndpoint<Role>) -> Self {
         Self {
@@ -233,13 +351,64 @@ impl ZmqRpc {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use ruststream::nonzero;
-    /// use ruststream_zeromq::{ZmqRpc, ZmqEndpoint};
+    /// A responder whose answers take a database round trip holds 64 requests ahead, and the
+    /// requesters wait beyond that:
     ///
-    /// let responder = ZmqRpc::new(ZmqEndpoint::bind("tcp://0.0.0.0:5557"))
-    ///     .read_ahead(nonzero!(64_usize));
-    /// # let _ = responder;
+    /// ```
+    /// use ruststream_zeromq::rpc::prelude::*;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Deserialize)]
+    /// struct Lookup {
+    ///     customer: u64,
+    /// }
+    ///
+    /// #[derive(Serialize, Outgoing)]
+    /// struct Customer {
+    ///     name: String,
+    /// }
+    ///
+    /// #[subscriber("customers", publish("reply"))]
+    /// async fn lookup(request: &Lookup) -> Customer {
+    ///     Customer {
+    ///         name: format!("customer {}", request.customer),
+    ///     }
+    /// }
+    ///
+    /// // Answers at the request's `reply-to` address; the crate overview shows it in full.
+    /// # use ruststream::runtime::{Outgoing, PublishContext};
+    /// # struct ReplyToRequester;
+    /// # impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
+    /// #     type Destination = Names;
+    /// #     fn apply(
+    /// #         &self,
+    /// #         out: &mut Outgoing<'_>,
+    /// #         _options: &mut Option<Options>,
+    /// #         cx: &PublishContext<'_, C>,
+    /// #     ) {
+    /// #         if let Some(reply_to) = cx.headers().get_shared("reply-to")
+    /// #             && let Ok(reply_to) = Str::try_from(reply_to)
+    /// #         {
+    /// #             out.set_name(reply_to);
+    /// #         }
+    /// #         if let Some(correlation) = cx.headers().get_shared("correlation-id") {
+    /// #             out.headers_mut().insert(Str::from_static("correlation-id"), correlation);
+    /// #         }
+    /// #     }
+    /// # }
+    ///
+    /// #[ruststream::app]
+    /// fn app() -> impl App {
+    ///     let requests = ZmqRpc::new(ZmqEndpoint::bind("tcp://0.0.0.0:5557"))
+    ///         .read_ahead(nonzero!(64_usize));
+    ///     RustStream::new(AppInfo::new("customers", "0.1.0")).with_broker(requests, |b| {
+    ///         b.include(lookup)
+    ///             .out_reply(Publish)
+    ///             .transform(ReplyToRequester)
+    ///             .out_retry(Publish)
+    ///             .to("customers.retry");
+    ///     })
+    /// }
     /// ```
     pub const fn read_ahead(mut self, read_ahead: NonZeroUsize) -> Self {
         self.read_ahead = read_ahead;
@@ -679,11 +848,33 @@ fn rand_suffix() -> [u8; 8] {
 ///
 /// # Examples
 ///
-/// ```
-/// use ruststream_zeromq::ZmqRpcPublish;
+/// A service that does not start until the model it depends on answers a request:
 ///
-/// let policy = ZmqRpcPublish::default();
-/// # let _ = policy;
+/// ```
+/// use std::io;
+/// use std::time::Duration;
+///
+/// use ruststream::OutgoingMessage;
+/// use ruststream_zeromq::prelude::*;
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     RustStream::new(AppInfo::new("scorer", "0.1.0")).with_broker(
+///         ZmqRpc::new(ZmqEndpoint::connect("tcp://model:5557")),
+///         |b| {
+///             b.after_startup(ZmqRpcPublish, async move |model| -> io::Result<()> {
+///                 model
+///                     .request(
+///                         OutgoingMessage::new("health", b"ping".as_slice()),
+///                         Duration::from_secs(5),
+///                     )
+///                     .await
+///                     .map_err(io::Error::other)?;
+///                 Ok(())
+///             });
+///         },
+///     )
+/// }
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
 #[must_use]

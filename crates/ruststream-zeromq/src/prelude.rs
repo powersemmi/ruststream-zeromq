@@ -10,6 +10,8 @@
 //!
 //! # Examples
 //!
+//! A worker that takes jobs from a queue and announces each result to every listener on a fan-out:
+//!
 //! ```
 //! use ruststream_zeromq::prelude::*;
 //! use serde::{Deserialize, Serialize};
@@ -19,9 +21,8 @@
 //!     id: u64,
 //! }
 //!
-//! // The result queue belongs to the message, so the type names it and the clause stays bare.
 //! #[derive(Serialize, Outgoing)]
-//! #[outgoing(name = "results")]
+//! #[outgoing(name = "jobs.done")]
 //! struct Done {
 //!     id: u64,
 //! }
@@ -33,12 +34,13 @@
 //!
 //! #[ruststream::app]
 //! fn app() -> impl App {
-//!     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
-//!         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
-//!         |b| {
-//!             b.include(work).out_reply(ZmqQueuePublish);
-//!         },
-//!     )
+//!     let events = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")).bindable();
+//!     let announce = events.bind(ZmqFanoutPublish);
+//!     RustStream::new(AppInfo::new("worker", "0.1.0"))
+//!         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
+//!             b.include(work).out_reply(announce);
+//!         })
+//!         .register_broker(events)
 //! }
 //! ```
 

@@ -26,7 +26,7 @@ pub use self::ZmqFanoutPublish as Publish;
 ///
 /// #[subscriber("events")]
 /// async fn handle(event: &Event) -> HandlerOutcome {
-///     let _ = event.id;
+///     println!("event {}", event.id);
 ///     HandlerOutcome::ack()
 /// }
 ///
@@ -100,12 +100,33 @@ const _: () = assert!(size_of::<Sender<PubSide>>() == size_of::<PubSide>());
 ///
 /// # Examples
 ///
-/// ```
-/// use ruststream_zeromq::{ZmqEndpoint, ZmqFanout};
+/// A watcher that the order services dial, taking every message under `orders`, `orders.created`
+/// and `orders.cancelled` included:
 ///
-/// let publisher_side = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556"));
-/// let subscriber_side = ZmqFanout::new(ZmqEndpoint::connect("tcp://events:5556"));
-/// # let _ = (publisher_side, subscriber_side);
+/// ```
+/// use ruststream_zeromq::fanout::prelude::*;
+/// use serde::Deserialize;
+///
+/// #[derive(Deserialize)]
+/// struct OrderEvent {
+///     id: u64,
+/// }
+///
+/// #[subscriber("orders")]
+/// async fn watch(event: &OrderEvent, ctx: &mut Context<'_>) -> HandlerOutcome {
+///     println!("{} for order {}", ctx.name(), event.id);
+///     HandlerOutcome::ack()
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     RustStream::new(AppInfo::new("watcher", "0.1.0")).with_broker(
+///         ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")),
+///         |b| {
+///             b.include(watch);
+///         },
+///     )
+/// }
 /// ```
 #[must_use]
 pub struct ZmqFanout<Role = Bind> {
@@ -120,11 +141,38 @@ impl<Role: EndpointRole> ZmqFanout<Role> {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use ruststream_zeromq::{ZmqEndpoint, ZmqFanout};
+    /// A price feed that broadcasts a tick for each trade to every watcher that dials it:
     ///
-    /// let watcher = ZmqFanout::new(ZmqEndpoint::connect("tcp://events:5556"));
-    /// # let _ = watcher;
+    /// ```
+    /// use ruststream_zeromq::prelude::*;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Deserialize)]
+    /// struct Trade {
+    ///     price: f64,
+    /// }
+    ///
+    /// #[derive(Serialize, Outgoing)]
+    /// #[outgoing(name = "prices")]
+    /// struct Tick {
+    ///     price: f64,
+    /// }
+    ///
+    /// #[subscriber("trades", publish)]
+    /// async fn tick(trade: &Trade) -> Tick {
+    ///     Tick { price: trade.price }
+    /// }
+    ///
+    /// #[ruststream::app]
+    /// fn app() -> impl App {
+    ///     let prices = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")).bindable();
+    ///     let to_prices = prices.bind(ZmqFanoutPublish);
+    ///     RustStream::new(AppInfo::new("prices", "0.1.0"))
+    ///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
+    ///             b.include(tick).out_reply(to_prices);
+    ///         })
+    ///         .register_broker(prices)
+    /// }
     /// ```
     pub fn new(endpoint: ZmqEndpoint<Role>) -> Self {
         Self {
@@ -150,13 +198,32 @@ impl<Role> ZmqFanout<Role> {
     ///
     /// # Examples
     ///
-    /// ```
-    /// use ruststream::nonzero;
-    /// use ruststream_zeromq::{ZmqFanout, ZmqEndpoint};
+    /// An archiver that the event publishers dial, and that writes every event to slow storage,
+    /// holds 64 events ahead, and the publishers wait beyond that:
     ///
-    /// let subscriber_side = ZmqFanout::new(ZmqEndpoint::connect("tcp://events:5556"))
-    ///     .read_ahead(nonzero!(64_usize));
-    /// # let _ = subscriber_side;
+    /// ```
+    /// use ruststream_zeromq::fanout::prelude::*;
+    /// use serde::Deserialize;
+    ///
+    /// #[derive(Deserialize)]
+    /// struct Event {
+    ///     id: u64,
+    /// }
+    ///
+    /// #[subscriber("events")]
+    /// async fn archive(event: &Event) -> HandlerOutcome {
+    ///     println!("archiving event {}", event.id);
+    ///     HandlerOutcome::ack()
+    /// }
+    ///
+    /// #[ruststream::app]
+    /// fn app() -> impl App {
+    ///     let events = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556"))
+    ///         .read_ahead(nonzero!(64_usize));
+    ///     RustStream::new(AppInfo::new("archiver", "0.1.0")).with_broker(events, |b| {
+    ///         b.include(archive);
+    ///     })
+    /// }
     /// ```
     pub const fn read_ahead(mut self, read_ahead: NonZeroUsize) -> Self {
         self.read_ahead = read_ahead;
@@ -532,11 +599,39 @@ async fn await_filter(socket: &mut XPubSocket, address: &str) -> Result<(), ZmqE
 ///
 /// # Examples
 ///
-/// ```
-/// use ruststream_zeromq::ZmqFanoutPublish;
+/// An auditor that the order services dial, broadcasting an audit record for each order event on
+/// a fan-out of its own:
 ///
-/// let policy = ZmqFanoutPublish::default();
-/// # let _ = policy;
+/// ```
+/// use ruststream_zeromq::prelude::*;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Deserialize)]
+/// struct OrderEvent {
+///     id: u64,
+/// }
+///
+/// #[derive(Serialize, Outgoing)]
+/// #[outgoing(name = "audit.orders")]
+/// struct AuditRecord {
+///     order: u64,
+/// }
+///
+/// #[subscriber("orders", publish)]
+/// async fn audit(event: &OrderEvent) -> AuditRecord {
+///     AuditRecord { order: event.id }
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     let records = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5557")).bindable();
+///     let to_records = records.bind(ZmqFanoutPublish);
+///     RustStream::new(AppInfo::new("auditor", "0.1.0"))
+///         .with_broker(ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")), |b| {
+///             b.include(audit).out_reply(to_records);
+///         })
+///         .register_broker(records)
+/// }
 /// ```
 #[derive(Debug, Clone, Copy, Default)]
 #[must_use]
