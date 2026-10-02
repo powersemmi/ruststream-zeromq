@@ -42,7 +42,7 @@ struct Note {
     id: u64,
 }
 
-#[subscriber("jobs", publish("results"))]
+#[subscriber("jobs", reply("results"))]
 async fn work(job: &Job) -> Done {
     Done { id: job.id }
 }
@@ -137,7 +137,7 @@ async fn two_workers_dialing_one_peer_work_a_result_once() {
     tb.shutdown().await.expect("the app shuts down");
 }
 
-#[subscriber("events", publish("audit.high"))]
+#[subscriber("events", reply("audit.high"))]
 async fn watch(event: &Event) -> Note {
     Note { id: event.id }
 }
@@ -292,7 +292,7 @@ impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
     }
 }
 
-#[subscriber("greeter", publish("reply"))]
+#[subscriber("greeter", reply("reply"))]
 async fn greet(request: &Greeting) -> Answer {
     Answer {
         text: format!("hello {}", request.who),
@@ -301,7 +301,7 @@ async fn greet(request: &Greeting) -> Answer {
 
 /// Asks the greeter and reports what it heard; it binds the capability, so it mounts only on a
 /// policy whose live publisher answers requests.
-#[subscriber("asks", publish)]
+#[subscriber("asks", reply)]
 async fn ask(request: &AskFor, Out(rpc): Out<impl RequestReply>) -> Heard {
     let text = match JsonCodec.encode(&Greeting {
         who: request.who.clone(),

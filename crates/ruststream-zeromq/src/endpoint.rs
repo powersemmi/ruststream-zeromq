@@ -73,7 +73,7 @@ mod sealed {
 ///     id: u64,
 /// }
 ///
-/// #[subscriber("jobs", publish)]
+/// #[subscriber("jobs", reply)]
 /// async fn work(job: &Job) -> Done {
 ///     Done { id: job.id }
 /// }
@@ -171,7 +171,7 @@ pub struct Bind;
 ///     id: u64,
 /// }
 ///
-/// #[subscriber("jobs", publish)]
+/// #[subscriber("jobs", reply)]
 /// async fn work(job: &Job) -> Done {
 ///     Done { id: job.id }
 /// }
@@ -258,7 +258,7 @@ impl EndpointRole for Connect {}
 ///     id: u64,
 /// }
 ///
-/// #[subscriber("jobs", publish)]
+/// #[subscriber("jobs", reply)]
 /// async fn work(job: &Job) -> Done {
 ///     Done { id: job.id }
 /// }
@@ -340,7 +340,7 @@ impl ZmqEndpoint<Connect> {
     ///     id: u64,
     /// }
     ///
-    /// #[subscriber("jobs", publish)]
+    /// #[subscriber("jobs", reply)]
     /// async fn work(job: &Job) -> Done {
     ///     Done { id: job.id }
     /// }

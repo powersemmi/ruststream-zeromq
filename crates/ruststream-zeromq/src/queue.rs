@@ -24,7 +24,7 @@ pub use self::ZmqQueuePublish as Publish;
 ///     id: u64,
 /// }
 ///
-/// #[subscriber("jobs", publish)]
+/// #[subscriber("jobs", reply)]
 /// async fn handle(job: &Job) -> Done {
 ///     Done { id: job.id }
 /// }

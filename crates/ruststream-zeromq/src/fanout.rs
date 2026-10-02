@@ -158,7 +158,7 @@ impl<Role: EndpointRole> ZmqFanout<Role> {
     ///     price: f64,
     /// }
     ///
-    /// #[subscriber("trades", publish)]
+    /// #[subscriber("trades", reply)]
     /// async fn tick(trade: &Trade) -> Tick {
     ///     Tick { price: trade.price }
     /// }
@@ -617,7 +617,7 @@ async fn await_filter(socket: &mut XPubSocket, address: &str) -> Result<(), ZmqE
 ///     order: u64,
 /// }
 ///
-/// #[subscriber("orders", publish)]
+/// #[subscriber("orders", reply)]
 /// async fn audit(event: &OrderEvent) -> AuditRecord {
 ///     AuditRecord { order: event.id }
 /// }

@@ -71,7 +71,7 @@ impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
 }
 
 // The literal destination is a placeholder: `ReplyToRequester` replaces it per delivery.
-#[subscriber("greeter", publish("reply"))]
+#[subscriber("greeter", reply("reply"))]
 async fn greet(request: &Greeting) -> Answer {
     Answer {
         text: format!("hello {}", request.who),

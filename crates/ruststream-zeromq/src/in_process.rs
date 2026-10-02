@@ -539,15 +539,8 @@ mod tests {
             Bytes::from_static(b"x"),
         )
         .expect("frames");
-        let pending = request(
-            &bus,
-            false,
-            "orders",
-            frames,
-            "c-1",
-            Duration::from_secs(60),
-        )
-        .now_or_never();
+        let pending =
+            request(&bus, false, "orders", frames, "c-1", Duration::from_mins(1)).now_or_never();
         assert!(pending.is_none(), "the request was still waiting");
         assert_eq!(bus.peers(), 0);
     }

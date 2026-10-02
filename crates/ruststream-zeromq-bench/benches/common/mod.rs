@@ -98,7 +98,7 @@ pub const MESSAGES: usize = 1_000;
 
 /// How long the benchmark waits on the peer before it calls the run stuck. Valgrind slows both
 /// threads about fifty times, so this is generous rather than tight.
-const PEER_WAIT: Duration = Duration::from_secs(120);
+const PEER_WAIT: Duration = Duration::from_mins(2);
 
 /// The measurement configuration every gated scenario shares.
 ///
