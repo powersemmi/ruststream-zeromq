@@ -80,7 +80,7 @@ struct Done {
     id: u64,
 }
 
-#[subscriber("jobs", publish("results"))]
+#[subscriber("jobs", reply("results"))]
 async fn handle(job: &Job) -> Done {
     Done { id: job.id }
 }

@@ -36,7 +36,7 @@ struct Done {
     id: u64,
 }
 
-#[subscriber("jobs", publish)]
+#[subscriber("jobs", reply)]
 async fn work(job: &Job) -> Done {
     Done { id: job.id }
 }
@@ -53,7 +53,7 @@ struct Answer {
     text: String,
 }
 
-#[subscriber("greeter", publish("answers"))]
+#[subscriber("greeter", reply("answers"))]
 async fn greet(request: &Greeting) -> Answer {
     Answer {
         text: format!("hello {}", request.who),
@@ -126,7 +126,7 @@ async fn a_reply_type_without_a_name_publishes_where_the_mount_site_says() {
         .with(&Greeting {
             who: "world".to_owned(),
         });
-    // `Answer` declares nothing, so this name is the one the `publish("answers")` clause supplied.
+    // `Answer` declares nothing, so this name is the one the `reply("answers")` clause supplied.
     tb.broker_named("results")
         .published::<Answer>("answers")
         .assert_called_once()
@@ -439,7 +439,7 @@ struct Seen {
 struct Sightings;
 
 /// Reports every job it is handed, then answers it with a result named `results`.
-#[subscriber("jobs", publish)]
+#[subscriber("jobs", reply)]
 async fn work_and_report(job: &Job, Out(seen): Out<impl Publisher, Sightings>) -> Done {
     seen.message(&Seen { id: job.id })
         .publish()

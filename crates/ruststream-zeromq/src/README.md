@@ -311,7 +311,7 @@ nothing.
 Publishing runs the framework's
 [publish pipeline](https://docs.rs/ruststream/latest/ruststream/runtime/index.html#the-publish-pipeline)
 unchanged, and this crate adds no step of its own. Each pattern ships one policy, offered as
-`Publish` by its form prelude: `.out_reply(Publish)` takes what a `#[subscriber(.., publish)]`
+`Publish` by its form prelude: `.out_reply(Publish)` takes what a `#[subscriber(.., reply)]`
 handler returns, and `.out(marker, Publish).build()` does the same for an injected `Out<..>`
 publisher.
 
@@ -356,7 +356,7 @@ struct Done {
     id: u64,
 }
 
-#[subscriber("jobs", publish)]
+#[subscriber("jobs", reply)]
 async fn work(job: &Job) -> Done {
     Done { id: job.id }
 }
@@ -377,7 +377,7 @@ The jobs arrive on the socket the `jobs` subscription binds, and that socket tak
 pushed into it. A result published there would come back as the next job, so the worker's own
 publisher refuses it, and the mount binds the reply to the second broker instead.
 
-A type that names no destination takes the mount site's, `#[subscriber("jobs", publish("results"))]`.
+A type that names no destination takes the mount site's, `#[subscriber("jobs", reply("results"))]`.
 Both forms reach the generated document as the resolved destination, so a declaration cannot
 document one channel and publish to another.
 
@@ -388,7 +388,7 @@ document one channel and publish to another.
 The responder is an ordinary reply handler. Its ROUTER socket stamps a `reply-to` header on each
 request, addressing the peer that sent it, and a publish transform rewrites the reply destination to
 that address. The answer is addressed per request, so its type declares no destination of its own
-and the name in the `publish("..")` clause is the fallback: what the document reports, and where a
+and the name in the `reply("..")` clause is the fallback: what the document reports, and where a
 delivery the transform left alone is answered. A transform that picks a destination declares
 `Destination = Names`, and a position offers that right only where nothing has declared one already,
 so a named reply type and a naming transform do not compile together. The address travels from the
@@ -451,7 +451,7 @@ impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
 }
 
 // The literal destination is the fallback the transform replaces per delivery.
-#[subscriber("greeter", publish("reply"))]
+#[subscriber("greeter", reply("reply"))]
 async fn greet(request: &Greeting) -> Answer {
     Answer {
         text: format!("hello {}", request.who),
@@ -593,7 +593,7 @@ struct Done {
     id: u64,
 }
 
-#[subscriber("jobs", publish)]
+#[subscriber("jobs", reply)]
 async fn work(job: &Job) -> Done {
     Done { id: job.id }
 }

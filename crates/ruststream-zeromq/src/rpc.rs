@@ -36,7 +36,7 @@ pub use self::ZmqRpcPublish as Publish;
 ///     text: String,
 /// }
 ///
-/// #[subscriber("greeter", publish("reply"))]
+/// #[subscriber("greeter", reply("reply"))]
 /// async fn greet(request: &Greeting) -> Answer {
 ///     Answer {
 ///         text: format!("hello {}", request.who),
@@ -291,7 +291,7 @@ impl ZmqRpc {
     ///     value: f64,
     /// }
     ///
-    /// #[subscriber("score", publish("reply"))]
+    /// #[subscriber("score", reply("reply"))]
     /// async fn score(request: &Features) -> Score {
     ///     Score {
     ///         value: request.values.iter().sum(),
@@ -368,7 +368,7 @@ impl ZmqRpc {
     ///     name: String,
     /// }
     ///
-    /// #[subscriber("customers", publish("reply"))]
+    /// #[subscriber("customers", reply("reply"))]
     /// async fn lookup(request: &Lookup) -> Customer {
     ///     Customer {
     ///         name: format!("customer {}", request.customer),

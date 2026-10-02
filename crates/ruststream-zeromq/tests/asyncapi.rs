@@ -25,17 +25,17 @@ struct Done {
     id: u64,
 }
 
-#[subscriber("jobs", publish("results"))]
+#[subscriber("jobs", reply("results"))]
 async fn work(job: &Job) -> Done {
     Done { id: job.id }
 }
 
-#[subscriber("events", publish("audit"))]
+#[subscriber("events", reply("audit"))]
 async fn watch(job: &Job) -> Done {
     Done { id: job.id }
 }
 
-#[subscriber("greeter", publish("reply"))]
+#[subscriber("greeter", reply("reply"))]
 async fn greet(job: &Job) -> Done {
     Done { id: job.id }
 }

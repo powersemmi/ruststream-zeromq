@@ -54,7 +54,7 @@ impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
 }
 
 // The literal destination is a placeholder: `ReplyToRequester` replaces it per delivery.
-#[subscriber("orders", publish("reply"))]
+#[subscriber("orders", reply("reply"))]
 async fn confirm(order: &Order, ctx: &mut Context<'_, (), Latch>) -> Confirmation {
     ctx.state().arrived();
     Confirmation {
