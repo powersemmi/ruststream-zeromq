@@ -32,7 +32,7 @@ ruststream = { workspace = true, features = ["macros", "json"] }
 bytes.workspace = true
 futures.workspace = true
 # The code-cost benchmarks: callgrind and DHAT through the runner the core pins.
-gungraun = "=0.19.4"
+gungraun = "=0.20.0"
 serde = { version = "1.0.196", features = ["derive"] }
 serde_json = "1.0.113"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
