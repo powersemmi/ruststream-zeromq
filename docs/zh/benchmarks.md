@@ -129,5 +129,5 @@ just bench-code
 ```
 
 这条 recipe 在 valgrind 下统计代码表，并重写同一份文档里的 `code` 部分。这里同样没有测试台要起：
-服务绑定在回环地址上，对端是同一个进程里的一个套接字。它只需几秒，需要 valgrind 和基准测试运行器：
-`cargo install --locked gungraun-runner --version =0.19.4`。
+服务绑定在回环地址上，对端是同一个进程里的一个套接字。它只需几秒，需要 valgrind。基准测试运行器由
+recipe 自己安装，版本就是 `Cargo.lock` 锁定的那一版。

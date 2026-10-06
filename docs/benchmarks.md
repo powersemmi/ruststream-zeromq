@@ -155,5 +155,5 @@ just bench-code
 
 The recipe counts the code table under valgrind and rewrites the `code` section of the same
 document. There is no stand to start here either: the service binds the loopback, and the peer is
-a socket in the same process. It takes seconds and needs valgrind and the benchmark runner:
-`cargo install --locked gungraun-runner --version =0.19.4`.
+a socket in the same process. It takes seconds and needs valgrind. The recipe installs the
+benchmark runner itself, at the release `Cargo.lock` pins.

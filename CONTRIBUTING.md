@@ -37,7 +37,7 @@ git clone https://github.com/powersemmi/ruststream-zeromq.git
 | `just deny` | cargo-deny | `cargo install cargo-deny --locked` |
 | `just typo`, `just zizmor` | uv | the uv documentation |
 | `just bench` | Python 3 | the system package manager |
-| `just bench-code` | valgrind and the benchmark runner | the system package manager, then `cargo install --locked gungraun-runner --version =0.19.4` |
+| `just bench-code` | valgrind and Python 3 | the system package manager; the recipe installs the benchmark runner itself, at the release `Cargo.lock` pins |
 | the documentation site | Python 3.12 | `pip install -r docs/requirements.txt`, then `properdocs serve` |
 
 ## Checking a change
