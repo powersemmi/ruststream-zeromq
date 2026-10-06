@@ -157,3 +157,6 @@ The recipe counts the code table under valgrind and rewrites the `code` section 
 document. There is no stand to start here either: the service binds the loopback, and the peer is
 a socket in the same process. It takes seconds and needs valgrind. The recipe installs the
 benchmark runner itself, at the release `Cargo.lock` pins.
+
+`just bench-code 2000` measures every scenario over two thousand deliveries instead of a thousand:
+a steadier number for a longer run. The published document stays at the default.

@@ -34,8 +34,12 @@ comes from the DMI tables, which most systems only let root read.
 
     python3 scripts/bench_results.py target/bench-paired.json docs/benchmarks/results.json
     python3 scripts/bench_results.py --code target/bench-code.json docs/benchmarks/results.json
+
+`--messages` names the MESSAGES the code-cost benches were built with, when a run named another
+count than the default.
 """
 
+import argparse
 import json
 import re
 import subprocess
@@ -146,14 +150,30 @@ def environment(round_trip: str) -> dict[str, str]:
 # another version stops the conversion with a message naming both rather than with a missing field.
 SUMMARY_VERSION = "7"
 
-# Deliveries per measured run of the code-cost benches, the default of their `MESSAGES`.
-CODE_MESSAGES = 1000
+# Deliveries per measured run of the code-cost benches, the default of their `MESSAGES`. Every
+# published number is per message, so the totals are divided by it. `just bench-code N` builds the
+# benches with another count and passes the same one here through `--messages`.
+DEFAULT_CODE_MESSAGES = 1000
+CODE_MESSAGES = DEFAULT_CODE_MESSAGES
 
-# An instruction count below this on a code run means the measured region stopped matching its
-# frame and the run reported the process exit, not that the code got faster. The cold run handles
-# one delivery, so it is held to a lower floor.
-CODE_FLOOR = 100_000
+# An instruction count below this on a code run of the default count means the measured region
+# stopped matching its frame and the run reported the process exit, not that the code got faster.
+# The floor scales with the count. The cold run handles one delivery, so it is held to a lower
+# floor.
+CODE_FLOOR_PER_DEFAULT_RUN = 100_000
+CODE_FLOOR = CODE_FLOOR_PER_DEFAULT_RUN
 CODE_COLD_FLOOR = 1_000
+
+
+def configure(messages: int) -> None:
+    """Read a code run of another count of deliveries: the per-message division and the floor a
+    run is held to follow it."""
+    global CODE_MESSAGES, CODE_FLOOR
+    if messages <= 0:
+        sys.exit("--messages must be a positive number of deliveries")
+    CODE_MESSAGES = messages
+    CODE_FLOOR = CODE_FLOOR_PER_DEFAULT_RUN * messages // DEFAULT_CODE_MESSAGES
+
 
 # The code table, in reading order: the published name, the benchmark as `file/function`, and
 # whether the benchmark's hard limit holds its allocation floor.
@@ -352,14 +372,24 @@ def valgrind() -> str:
 
 
 def main() -> int:
-    args = sys.argv[1:]
-    code = bool(args) and args[0] == "--code"
-    if code:
-        args = args[1:]
-    if len(args) != 2:
-        print(__doc__, file=sys.stderr)
-        return 2
-    source, out = Path(args[0]), Path(args[1])
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--code", action="store_true", help="read the code-cost run instead of the paired one"
+    )
+    parser.add_argument(
+        "--messages",
+        type=int,
+        default=DEFAULT_CODE_MESSAGES,
+        help="deliveries per measured run, the count the code-cost benches were built with",
+    )
+    parser.add_argument("summary", type=Path, help="the summary the benchmark run wrote")
+    parser.add_argument("output", type=Path, help="the results document to write")
+    args = parser.parse_args()
+    code = args.code
+    configure(args.messages)
+    source, out = args.summary, args.output
     previous = json.loads(out.read_text(encoding="utf-8")) if out.exists() else {}
     breached = []
     if code:

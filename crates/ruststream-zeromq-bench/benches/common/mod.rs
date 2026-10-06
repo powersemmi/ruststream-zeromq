@@ -91,10 +91,45 @@ pub struct Order {
     pub quantity: u32,
 }
 
-/// Deliveries per measured run: large enough that entering and leaving the region is lost in the
-/// per-message number, small enough that a scenario stays within seconds of valgrind time.
-/// `scripts/bench_results.py` divides by the same count.
-pub const MESSAGES: usize = 1_000;
+/// Deliveries per measured run.
+///
+/// The default is large enough that entering and leaving the region is lost in the per-message
+/// number, small enough that a scenario stays within seconds of valgrind time.
+/// `RUSTSTREAM_BENCH_MESSAGES` at build time overrides it (`just bench-code 2000`) for a steadier
+/// number at the price of a longer run; the published document is measured at the default, and
+/// the allocation limits scale with the count through [`config`]. `scripts/bench_results.py`
+/// divides by the same count, which the recipe passes it. The peer writes every message of a run
+/// before the drain starts, so a count is bounded by what the loopback socket buffers hold while
+/// the service is not reading.
+pub const MESSAGES: usize = messages(option_env!("RUSTSTREAM_BENCH_MESSAGES"));
+
+/// The count a run measures when nothing names one.
+const DEFAULT_MESSAGES: usize = 1_000;
+
+/// The configured count, or the default; a value that is not a positive number is a build error
+/// naming the variable, so a typo cannot silently measure the default.
+const fn messages(configured: Option<&str>) -> usize {
+    let Some(text) = configured else {
+        return DEFAULT_MESSAGES;
+    };
+    let bytes = text.as_bytes();
+    let mut count = 0usize;
+    let mut index = 0;
+    while index < bytes.len() {
+        let digit = bytes[index];
+        assert!(
+            digit.is_ascii_digit(),
+            "RUSTSTREAM_BENCH_MESSAGES must be a positive number of deliveries"
+        );
+        count = count * 10 + (digit - b'0') as usize;
+        index += 1;
+    }
+    assert!(
+        count > 0,
+        "RUSTSTREAM_BENCH_MESSAGES must be a positive number of deliveries"
+    );
+    count
+}
 
 /// How long the benchmark waits on the peer before it calls the run stuck. Valgrind slows both
 /// threads about fifty times, so this is generous rather than tight.
