@@ -62,14 +62,12 @@ A subscription is named, and the name is the first frame on the wire. For `ZmqFa
 also the subscription prefix the socket filters on, so a subscriber on `events` receives
 `events.created` as well.
 
-```rust
---8<-- "crates/ruststream-zeromq/examples/zmq_pipeline.rs:handler"
+```rust reference="examples/zmq_pipeline.rs#handler"
 ```
 
 Wiring the handler onto a pattern is identical to any other broker:
 
-```rust
---8<-- "crates/ruststream-zeromq/examples/zmq_pipeline.rs:app"
+```rust reference="examples/zmq_pipeline.rs#app"
 ```
 
 ## Endpoints
@@ -152,8 +150,7 @@ The requester side uses the framework's `RequestReply` capability on `ZmqRpcPubl
 `correlation-id` header, or fails with a timeout when nothing answers in time. A caller-supplied
 correlation id is respected, so an upper layer can match on its own identifier.
 
-```rust
---8<-- "crates/ruststream-zeromq/examples/zmq_request_reply.rs:request"
+```rust reference="examples/zmq_request_reply.rs#request"
 ```
 
 The responder side is an ordinary reply handler. The ROUTER socket stamps each incoming request
@@ -161,14 +158,12 @@ with a `reply-to` header addressing the peer that sent it, and a publish transfo
 reply destination to that address, so the answer routes back to the requester instead of to the
 literal destination in the decorator:
 
-```rust
---8<-- "crates/ruststream-zeromq/examples/zmq_request_reply.rs:transform"
+```rust reference="examples/zmq_request_reply.rs#transform"
 ```
 
 Mounting the handler with that transform on its publisher is the whole wiring:
 
-```rust
---8<-- "crates/ruststream-zeromq/examples/zmq_request_reply.rs:responder"
+```rust reference="examples/zmq_request_reply.rs#responder"
 ```
 
 The runnable program is

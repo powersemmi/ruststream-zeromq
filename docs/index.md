@@ -20,19 +20,14 @@ ruststream-zeromq = "0.6"
 serde = { version = "1", features = ["derive"] }
 ```
 
-```rust
---8<-- "crates/ruststream-zeromq/examples/zmq_pipeline.rs:app"
+```rust reference="examples/zmq_pipeline.rs#app"
 ```
 
 ## Where to go next
 
-<div class="grid cards" markdown>
-
-- :material-transit-connection-horizontal: **[ZeroMQ guide](zeromq.md)** - the three patterns, endpoints, the wire contract, request/reply, and testing.
-- :material-book-open-variant: **[RustStream docs](https://powersemmi.github.io/ruststream/)** - the framework itself: subscribers, routing, codecs, middleware, the CLI.
-- :material-language-rust: **[API reference](https://docs.rs/ruststream-zeromq)** - the crate's rustdoc on docs.rs.
-
-</div>
+- **[ZeroMQ guide](zeromq.md)** - the three patterns, endpoints, the wire contract, request/reply, and testing.
+- **[RustStream docs](https://powersemmi.github.io/ruststream/)** - the framework itself: subscribers, routing, codecs, middleware, the CLI.
+- **[API reference](https://docs.rs/ruststream-zeromq)** - the crate's rustdoc on docs.rs.
 
 ## How this site relates to the RustStream docs
 
