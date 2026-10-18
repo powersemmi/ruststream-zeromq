@@ -56,9 +56,11 @@ use std::fmt;
 use std::future::{Future, ready};
 use std::marker::PhantomData;
 use std::num::NonZeroUsize;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Weak};
 
+use futures::StreamExt;
+use futures::channel::mpsc;
 use futures::lock::Mutex;
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::Bindings;
@@ -69,7 +71,7 @@ use ruststream::{
 use tokio::sync::OnceCell;
 use tokio::time::timeout;
 use zeromq::prelude::*;
-use zeromq::{PubSocket, SubSocket, XPubSocket, ZmqError as WireError};
+use zeromq::{PubSocket, SocketEvent, SubSocket, XPubSocket, ZmqError as WireError};
 
 #[cfg(feature = "asyncapi")]
 use crate::bindings::{self, SocketPair};
@@ -520,7 +522,11 @@ impl Publisher for ZmqFanoutPublisher {
         }
         let mut guard = self.socket.lock().await;
         if guard.is_none() {
-            *guard = Some(attach(lifecycle).await?);
+            let (sender, events) = attach(lifecycle).await?;
+            if let Some(events) = events {
+                drop(lifecycle.spawn(forget_on_disconnect(Arc::downgrade(&self.socket), events)));
+            }
+            *guard = Some(sender);
         }
         match guard.as_mut().expect("just attached") {
             // PUB never reports "no peers": an unmatched message is dropped by design, so the
@@ -549,16 +555,24 @@ impl Publisher for ZmqFanoutPublisher {
 /// subscription's filter before it returns: a PUB socket drops a message until the filter of the
 /// peer it dialed has arrived, and on the loopback that peer is the subscription a retry copy is
 /// published to. The wait is paid once per publisher, at the attach.
-async fn attach(lifecycle: &SharedLifecycle) -> Result<Sender<PubSide>, ZmqError> {
+///
+/// A socket that dials a peer comes with its event stream: the client does not dial a PUB socket
+/// again when that peer goes, so [`forget_on_disconnect`] drops the socket then.
+async fn attach(
+    lifecycle: &SharedLifecycle,
+) -> Result<(Sender<PubSide>, Option<SocketEvents>), ZmqError> {
     #[cfg(feature = "testing")]
     if let Some(bus) = lifecycle.in_process_bus() {
-        return Ok(Sender::InProcess {
-            bus: Arc::clone(bus),
-            local: lifecycle.local_listener().is_some(),
-        });
+        return Ok((
+            Sender::InProcess {
+                bus: Arc::clone(bus),
+                local: lifecycle.local_listener().is_some(),
+            },
+            None,
+        ));
     }
     let attaching = Arc::clone(lifecycle);
-    let socket = lifecycle
+    let (socket, events) = lifecycle
         .on_runtime(async move {
             match attaching.send_target() {
                 target @ SendTarget::Local(_) => {
@@ -566,17 +580,49 @@ async fn attach(lifecycle: &SharedLifecycle) -> Result<Sender<PubSide>, ZmqError
                     let mut socket = XPubSocket::new();
                     attach_to(&mut socket, target).await?;
                     await_filter(&mut socket, &address).await?;
-                    Ok(PubSide::Loopback(socket))
+                    Ok((PubSide::Loopback(socket), None))
+                }
+                target @ SendTarget::Dial(_) => {
+                    let mut socket = PubSocket::new();
+                    // Taken before the dial, so a peer that goes at once is not missed.
+                    let events = socket.monitor();
+                    attach_to(&mut socket, target).await?;
+                    Ok((PubSide::Remote(socket), Some(events)))
                 }
                 target => {
                     let mut socket = PubSocket::new();
                     attach_to(&mut socket, target).await?;
-                    Ok(PubSide::Remote(socket))
+                    Ok((PubSide::Remote(socket), None))
                 }
             }
         })
         .await?;
-    Ok(Sender::Socket(socket))
+    Ok((Sender::Socket(socket), events))
+}
+
+/// The events a socket reports about its peers.
+type SocketEvents = mpsc::Receiver<SocketEvent>;
+
+/// Empties the publisher's slot once the peer its socket dialed has gone, so the next publish
+/// dials the address again and reaches the peer once it is back. Without it the socket stays
+/// peerless and every publish is dropped as a message no subscriber matches.
+///
+/// One task per dialed socket, started at the attach; it ends with the socket, whose event stream
+/// closes when the socket is dropped. A dialing publisher has one peer, so the first disconnect is
+/// the one that matters, and only this task empties the slot of a dialing publisher: the socket it
+/// takes is the one it watched.
+async fn forget_on_disconnect(
+    slot: Weak<Mutex<Option<Sender<PubSide>>>>,
+    mut events: SocketEvents,
+) {
+    while let Some(event) = events.next().await {
+        if matches!(event, SocketEvent::Disconnected(_)) {
+            if let Some(slot) = slot.upgrade() {
+                slot.lock().await.take();
+            }
+            return;
+        }
+    }
 }
 
 /// Reads the subscribe message the SUB socket at `address` sends once the handshake is done,
