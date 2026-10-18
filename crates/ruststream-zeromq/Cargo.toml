@@ -473,3 +473,15 @@ name = "manual_guide_request_reply_client"
 path = "examples/manual/guide/request_reply_client.rs"
 required-features = ["testing"]
 test = true
+
+[[example]]
+name = "guide_retries"
+path = "examples/guide/retries.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_retries"
+path = "examples/manual/guide/retries.rs"
+required-features = ["testing"]
+test = true
