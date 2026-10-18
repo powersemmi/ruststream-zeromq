@@ -18,7 +18,7 @@ Each subscription opens its own socket as the runtime opens the subscription.
 A subscription on a [bound](./endpoint/bind.md) endpoint binds it, and a port another process holds fails startup with [`ZmqError::Endpoint`](./errors.md), naming the address.
 A subscription that [dials](./endpoint/connect.md) waits for its peer to listen.
 The ZeroMQ client retries the connection for up to 30 seconds, then the start fails with `ZmqError::Endpoint`, naming the address.
-A [publisher](../publishing/index.md) attaches its socket on its first publish, the same way.
+A [publisher](../publishing/index.md) on the bind side attaches its socket at startup, so it listens before its first publish; a publisher that dials attaches on its first publish, the same way.
 
 The sockets attach, and their drivers run, on the runtime the broker connected on.
 So a handler that runs on threads of its own, mounted with `threads(n)`, publishes through the same sockets as every other handler.

@@ -23,7 +23,8 @@ The payload frame is the buffer the codec wrote, so a payload of any size is sen
 A ZMTP send takes the frames and nothing else, so every publisher declares `Options = ()`, and the publish builder carries the core's steps alone.
 A handler body therefore imports `ruststream::prelude::*` alone and bounds its publisher with the capability it needs.
 
-The socket attaches on the first publish and waits for a peer.
+A publisher on the bind side attaches its socket when the service starts, so a peer that dials it connects before the first message.
+A publisher that dials attaches on its first publish and waits for a peer.
 When no peer has completed the handshake within five seconds, the publish fails with [`ZmqError::Send`](../broker/errors.md), "no connected peer".
 The window is a constant of the crate.
 

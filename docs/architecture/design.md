@@ -16,7 +16,7 @@ export const words = {
   "runtime": ["Runtime: dispatch, codecs, retries,", "batches assembled on the client"],
   "crate": "ruststream-zeromq",
   "subscriptions": ["Subscription: a task", "reads the socket into", "a bounded channel"],
-  "publishers": ["Publisher: a socket", "attached on the", "first publish"],
+  "publishers": ["Publisher: a socket", "bind: at startup", "dial: first publish"],
   "brokers": ["ZmqQueue, ZmqFanout,", "ZmqRpc"],
   "lifecycle": ["Shared state: the", "endpoint, the bound", "listener, closed"],
   "wire": ["Frame layout", "name, headers, payload"],
@@ -54,7 +54,8 @@ frames and nothing else.
 
 Each subscription opens a socket of its own and a task that owns it. The task reads one message
 at a time into a channel the handler takes from, as [Backpressure](backpressure.md) draws. Each
-publisher attaches a socket of its own on its first publish. A publisher on an endpoint this
+publisher has a socket of its own: on the bind side it attaches at startup, so peers that dial it
+connect before the first message, and a dialing publisher attaches on its first publish. A publisher on an endpoint this
 service binds for one of its subscriptions dials that subscription's listener. On the fan-out it
 is an XPUB that waits for the subscription's filter once, at the attach, so its first message is
 not dropped.

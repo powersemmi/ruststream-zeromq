@@ -1,7 +1,7 @@
 ---
 title: Lifecycle
 sidebar_position: 3
-description: "ZmqQueue::new records the endpoint, connect checks it, each subscription attaches a socket at startup, each publisher on its first publish."
+description: "ZmqQueue::new records the endpoint, connect checks it, subscriptions and binding publishers attach at startup, dialing publishers on first publish."
 ---
 
 import {Diagram} from '@site/src/components/Diagrams';
@@ -17,7 +17,7 @@ export const words = {
   "config": ["Endpoint recorded,", "no I/O"],
   "check": ["Address checked:", "tcp:// or ipc://"],
   "subscriptions": ["Each subscription", "binds or dials", "a socket of its own"],
-  "publishers": ["The first publish", "attaches the", "publisher's socket"],
+  "publishers": ["Publishers attach:", "bind side at startup,", "dial side on first publish"],
   "flag": ["Marked closed,", "nothing to flush"],
   "afterShutdown": ["A publisher that outlives the connection answers", "ZmqError::NotConnected, never a silent success"],
   "dropped": ["A dropped subscription stops its task", "and frees the endpoint it bound"],
@@ -28,7 +28,8 @@ export const words = {
 # Lifecycle
 
 [`ZmqQueue::new`](../components/broker/zmq-queue.md) records the endpoint, connect checks it,
-each subscription attaches a socket at startup, each publisher on its first publish. [`ZmqFanout`](../components/broker/zmq-fanout.md) and
+each subscription and each publisher on the bind side attach a socket at startup, a publisher that
+dials on its first publish. [`ZmqFanout`](../components/broker/zmq-fanout.md) and
 [`ZmqRpc`](../components/broker/zmq-rpc.md) go through the same steps.
 
 <Diagram name="lifecycle" words={words} />
@@ -46,8 +47,8 @@ broker is refused with an error naming both. On an endpoint this service
 the sending end of the pattern, so from then on a publish through the same broker is refused
 before it dials.
 
-A service that only consumes attaches no publisher socket. Each publisher attaches its own on its
-first publish, and a send retries for up to five seconds while the connection to its peer
+A service that only consumes attaches no publisher socket. A publisher on the bind side attaches
+its own at startup, one that dials on its first publish, and a send retries for up to five seconds while the connection to its peer
 finishes the handshake.
 
 [Shutdown](../components/broker/shutdown.md) marks the connection closed and returns. Nothing is

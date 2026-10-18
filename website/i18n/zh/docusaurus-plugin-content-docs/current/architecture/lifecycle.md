@@ -1,7 +1,7 @@
 ---
 title: 生命周期
 sidebar_position: 3
-description: "ZmqQueue::new 记录端点，connect 检查它，每个订阅在启动时接入一个套接字，每个发布者在第一次发布时接入。"
+description: "ZmqQueue::new 记录端点，connect 检查它，每个订阅和绑定一端的发布者在启动时接入套接字，拨号连接的发布者在第一次发布时接入。"
 ---
 
 import {Diagram} from '@site/src/components/Diagrams';
@@ -17,7 +17,7 @@ export const words = {
   "config": ["记录端点，", "不做 I/O"],
   "check": ["检查地址：", "tcp:// 或 ipc://"],
   "subscriptions": ["每个订阅", "绑定或拨号连接", "自己的套接字"],
-  "publishers": ["第一次发布", "接入发布者的", "套接字"],
+  "publishers": ["发布者的套接字：", "绑定端在启动时接入，", "拨号端在第一次发布时接入"],
   "flag": ["标记为已关闭，", "没有要刷出的内容"],
   "afterShutdown": ["比连接活得更久的发布者回答", "ZmqError::NotConnected，绝不会静默成功"],
   "dropped": ["被丢弃的订阅停止它的任务，", "并释放它绑定的端点"],
@@ -27,7 +27,7 @@ export const words = {
 
 # 生命周期
 
-[`ZmqQueue::new`](../components/broker/zmq-queue.md) 记录端点，connect 检查它，每个订阅在启动时接入一个套接字，每个发布者在第一次发布时接入。[`ZmqFanout`](../components/broker/zmq-fanout.md) 和 [`ZmqRpc`](../components/broker/zmq-rpc.md) 经历同样的步骤。
+[`ZmqQueue::new`](../components/broker/zmq-queue.md) 记录端点，connect 检查它，每个订阅和绑定一端的发布者在启动时接入套接字，拨号连接的发布者在第一次发布时接入。[`ZmqFanout`](../components/broker/zmq-fanout.md) 和 [`ZmqRpc`](../components/broker/zmq-rpc.md) 经历同样的步骤。
 
 <Diagram name="lifecycle" words={words} />
 
@@ -35,7 +35,7 @@ export const words = {
 
 每个订阅在打开时接入自己的套接字。在本服务[绑定](../components/broker/endpoint/bind.md)的端点上，订阅在那里监听，系统拒绝绑定就会让启动失败。一个已绑定的端点只归一个订阅：同一个 Broker 上的第二个订阅会被拒绝，错误中写明两者。在本服务[连接](../components/broker/endpoint/connect.md)的端点上，订阅拨号连接它。订阅的对端是该模式的发送端，因此从这时起，通过同一个 Broker 的发布会在拨号之前被拒绝。
 
-只消费的服务不接入发布者套接字。每个发布者在第一次发布时接入自己的套接字。在与对端的连接完成握手之前，发送最多重试五秒。
+只消费的服务不接入发布者套接字。绑定一端的发布者在启动时接入自己的套接字，拨号连接的发布者在第一次发布时接入。在与对端的连接完成握手之前，发送最多重试五秒。
 
 [关闭](../components/broker/shutdown.md)把连接标记为已关闭，然后返回。本 crate 不缓冲任何东西，因此没有要刷出的内容，关闭后的形态也不携带报告。此前交出的发布者从这时起回答 [`ZmqError::NotConnected`](../components/broker/errors.md)。
 

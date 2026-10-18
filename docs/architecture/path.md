@@ -41,8 +41,8 @@ up to the size the mount site names, or what arrived within 20 milliseconds of t
 
 The handler's reply is encoded into a buffer the publisher takes over. The buffer becomes the
 payload frame, and the name and the headers go in frames of their own in front of it, so the
-payload is not copied. The [publisher](../components/publishing/index.md) attaches its socket on its first
-publish. A queue send that finds no peer connected yet retries every 50 milliseconds, for up to
+payload is not copied. A [publisher](../components/publishing/index.md) on the bind side attached its socket at
+startup; one that dials attaches it on its first publish. A queue send that finds no peer connected yet retries every 50 milliseconds, for up to
 five seconds, and then fails with an error naming the destination.
 
 The delivery settles after the reply. ZeroMQ has nothing to settle, so the ack answers

@@ -58,7 +58,8 @@ A subscription that dials waits for its peer to listen.
 The client retries the connection for up to 30 seconds, then the start fails with `ZmqError::Endpoint`, naming the address.
 So a service that dials may start before the peer it dials, as long as the peer listens within that window.
 
-A publisher attaches on its first publish.
+A publisher on the bind side listens from the moment the service starts, so a peer that dials it connects before the first message.
+A publisher that dials attaches on its first publish.
 A send with no peer attached retries for five seconds, then fails with [`ZmqError::Send`](../components/broker/errors.md), naming the destination.
 
 ## Peer restarts
