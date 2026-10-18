@@ -21,9 +21,15 @@ const overlap = (a: Box, b: Box): boolean =>
 it('registers a diagram for every Architecture page that leads with one', () => {
   expect(names.sort()).toEqual(
     [
+      'backpressure',
+      'design',
       'envelope',
       'frames',
+      'lifecycle',
+      'path',
       'queues',
+      'retries',
+      'settlement',
       'sockets',
     ].sort(),
   );
