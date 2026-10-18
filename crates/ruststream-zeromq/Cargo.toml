@@ -144,3 +144,47 @@ name = "manual_zmq_broker_role"
 path = "examples/manual/zmq_broker_role.rs"
 required-features = ["testing"]
 test = true
+
+[[example]]
+name = "zmq_broker_startup"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_broker_startup"
+path = "examples/manual/zmq_broker_startup.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_broker_shutdown"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_broker_shutdown"
+path = "examples/manual/zmq_broker_shutdown.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_broker_prelude"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_broker_prelude"
+path = "examples/manual/zmq_broker_prelude.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_broker_errors"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_broker_errors"
+path = "examples/manual/zmq_broker_errors.rs"
+required-features = ["testing"]
+test = true
