@@ -277,3 +277,25 @@ name = "manual_zmq_settlement_dead_letters"
 path = "examples/manual/zmq_settlement_dead_letters.rs"
 required-features = ["testing"]
 test = true
+
+[[example]]
+name = "zmq_testing"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_testing"
+path = "examples/manual/zmq_testing.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_testing_live"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_testing_live"
+path = "examples/manual/zmq_testing_live.rs"
+required-features = ["testing"]
+test = true
