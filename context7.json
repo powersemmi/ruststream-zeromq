@@ -1,4 +1,19 @@
 {
+  "$schema": "https://context7.com/schema/context7.json",
+  "folders": [
+    "docs",
+    "crates/ruststream-zeromq/src",
+    "crates/ruststream-zeromq/examples",
+    "website/static"
+  ],
+  "excludeFolders": [
+    "docs/benchmarks",
+    "website/i18n",
+    "website/build",
+    "website/.docusaurus",
+    "website/node_modules",
+    "target"
+  ],
   "rules": [
     "Import the pattern's own prelude in a routes file (`ruststream_zeromq::queue::prelude::*`, `fanout::prelude::*` or `rpc::prelude::*`), which offers that pattern's publish policy as the bare `Publish`; a file mounting more than one pattern imports `ruststream_zeromq::prelude::*` and writes `ZmqQueuePublish`, `ZmqFanoutPublish` or `ZmqRpcPublish`.",
     "Pick the broker by shape: `ZmqQueue` (PUSH/PULL) for competing consumers, `ZmqFanout` (PUB/SUB) for broadcast filtered by name prefix, `ZmqRpc` (DEALER/ROUTER) for request and reply.",
