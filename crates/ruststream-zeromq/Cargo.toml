@@ -401,3 +401,27 @@ name = "manual_guide_getting_started"
 path = "examples/manual/guide/getting_started.rs"
 required-features = ["testing"]
 test = true
+
+[[example]]
+name = "guide_pipelines"
+path = "examples/guide/pipelines.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_pipelines"
+path = "examples/manual/guide/pipelines.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_pipeline_sink"
+path = "examples/guide/pipeline_sink.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_pipeline_sink"
+path = "examples/manual/guide/pipeline_sink.rs"
+required-features = ["testing"]
+test = true
