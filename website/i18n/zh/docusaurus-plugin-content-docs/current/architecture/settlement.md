@@ -55,7 +55,7 @@ ZeroMQ 套接字交出一条消息后就忘了它。协议中没有确认，因�
 
 普通的 `retry()` 不会再次投递任何东西，处理器也不会被第二次调用。声明了 [`max_attempts`](../components/settlement/retries.md) 或[死信目的地](../components/settlement/dead-letters.md)的注册会把 `retry()` 变成一个副本，和 `retry_after` 一样。
 
-ZeroMQ 不统计投递次数，因此 `redelivery_count` 为空，由运行时自己统计尝试次数。次数随副本的 `x-ruststream-retry-count` 头部传递，第一次投递算作一次。
+ZeroMQ 不统计投递次数，因此 `redelivery_count` 为空，由运行时自己统计尝试次数。次数随副本的 `x-ruststream-retry-count` 消息头传递，第一次投递算作一次。
 
 ## 重试 {/* #retries */}
 
