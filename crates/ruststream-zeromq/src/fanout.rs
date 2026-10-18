@@ -350,6 +350,20 @@ impl<Role> ConnectedZmqFanout<Role> {
         }
     }
 
+    /// The publisher a publish policy pairs: one whose side binds attaches its socket now, rather
+    /// than on its first publish, so a peer that dials the endpoint connects before anything is
+    /// sent. Startup work, once per pairing: the publish path itself is unchanged.
+    async fn paired(&self) -> Result<ZmqFanoutPublisher, PairError> {
+        let publisher = self.publisher();
+        if self.lifecycle.attaches_on_pairing() {
+            publisher
+                .attach(&self.lifecycle)
+                .await
+                .map_err(PairError::new)?;
+        }
+        Ok(publisher)
+    }
+
     /// Opens a SUB subscription on the endpoint, bound or dialed per the side, filtering on the
     /// name as a prefix.
     async fn open(&self, name: &str) -> Result<ZmqSubscriber, ZmqError> {
@@ -461,7 +475,11 @@ impl Subscribe for ConnectedZmqFanout<Connect> {
     }
 }
 
-/// Publishes to the fan-out over a lazily attached PUB socket.
+/// Publishes to the fan-out over a PUB socket of its own.
+///
+/// Paired by the runtime on the bind side, the socket listens from the moment the service starts,
+/// so a SUB peer that dials the endpoint connects before the first announcement. A publisher that
+/// dials, or one taken from a `publisher()` constructor, attaches on its first publish.
 ///
 /// A message with no matching subscriber is dropped silently - that is the pattern's
 /// contract, not an error. On an endpoint a subscription of this service dials, the peer there
@@ -737,11 +755,17 @@ pub struct ZmqFanoutPublish;
 impl<Role: EndpointRole> PublishPolicy<ConnectedZmqFanout<Role>> for ZmqFanoutPublish {
     type Live = ZmqFanoutPublisher;
 
+    /// On the bind side the publisher's socket attaches here, so it listens once the service has
+    /// started; a dialing publisher attaches on its first publish.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PairError`] when the socket of a binding publisher cannot take the endpoint.
     fn pair(
         self,
         connected: &ConnectedZmqFanout<Role>,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
-        ready(Ok(connected.publisher()))
+        connected.paired()
     }
 
     /// The destination reaches the binding, because on this pattern it is both frame 0 of every

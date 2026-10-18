@@ -370,6 +370,14 @@ impl Lifecycle {
         self.endpoint.side() == Side::Bind && !dialed_local
     }
 
+    /// Whether a publisher attaches its socket when it is paired rather than on its first
+    /// publish: on the bind side, so the socket listens from the moment the service starts and a
+    /// peer that dials the endpoint finds it before anything is sent. A dialing publisher waits
+    /// for its first publish, because the peer it dials may not be up yet.
+    pub(crate) fn attaches_on_pairing(&self) -> bool {
+        self.endpoint.side() == Side::Bind && !self.closed.load(Ordering::Acquire)
+    }
+
     /// Records a publisher listening on the endpoint itself, for a subscription that binds the
     /// endpoint later to make it give way. Called under [`attaching`](Self::attaching).
     pub(crate) fn listens_alongside(&self, publisher: OwnListener) {
