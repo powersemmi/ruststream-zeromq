@@ -45,7 +45,7 @@ pub(crate) const SEND_RETRY_STEP: Duration = Duration::from_millis(50);
 pub(crate) const BATCH_MAX_WAIT: Duration = Duration::from_millis(20);
 
 /// How many deliveries a subscription reads off its socket ahead of the handler, unless its
-/// descriptor names another bound: the receive high-water mark `ZeroMQ` itself gives a socket.
+/// broker names another bound: the receive high-water mark `ZeroMQ` itself gives a socket.
 pub(crate) const DEFAULT_READ_AHEAD: NonZeroUsize = nonzero!(1000_usize);
 
 /// The channel between a subscription's driver task and its handler, `read_ahead` deep.
@@ -53,7 +53,7 @@ pub(crate) const DEFAULT_READ_AHEAD: NonZeroUsize = nonzero!(1000_usize);
 /// Bounded, so a full channel stops the driver, the driver stops reading the socket, and the
 /// socket holds the sender back: a handler slower than the wire slows the wire down instead of
 /// accumulating the difference in memory. The bound is the connected form's own, taken from the
-/// descriptor it was connected from, so clones sharing one lifecycle keep their own bounds.
+/// broker it was connected from, so clones sharing one lifecycle keep their own bounds.
 pub(crate) fn delivery_channel(read_ahead: NonZeroUsize) -> (DeliverySender, DeliveryReceiver) {
     let (tx, rx) = mpsc::channel(read_ahead.get());
     (tx, DeliveryReceiver::Driver(rx))

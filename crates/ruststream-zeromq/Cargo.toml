@@ -6,6 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
 authors.workspace = true
 readme = "../../README.md"
 keywords = ["zeromq", "zmq", "messaging", "broker", "ruststream"]
@@ -54,3 +55,469 @@ trybuild = "1.0.121"
 
 [package.metadata.docs.rs]
 all-features = true
+
+# --- examples: broker ---
+[[example]]
+name = "zmq_pipeline"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_pipeline"
+path = "examples/manual/zmq_pipeline.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_broker_queue"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_broker_queue"
+path = "examples/manual/zmq_broker_queue.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_broker_fanout"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_broker_fanout"
+path = "examples/manual/zmq_broker_fanout.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_broker_rpc"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_broker_rpc"
+path = "examples/manual/zmq_broker_rpc.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_broker_endpoint"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_broker_endpoint"
+path = "examples/manual/zmq_broker_endpoint.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_broker_bind"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_broker_bind"
+path = "examples/manual/zmq_broker_bind.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_broker_connect"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_broker_connect"
+path = "examples/manual/zmq_broker_connect.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_broker_role"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_broker_role"
+path = "examples/manual/zmq_broker_role.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_broker_startup"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_broker_startup"
+path = "examples/manual/zmq_broker_startup.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_broker_shutdown"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_broker_shutdown"
+path = "examples/manual/zmq_broker_shutdown.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_broker_prelude"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_broker_prelude"
+path = "examples/manual/zmq_broker_prelude.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_broker_errors"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_broker_errors"
+path = "examples/manual/zmq_broker_errors.rs"
+required-features = ["testing"]
+test = true
+
+# --- examples: subscriptions ---
+[[example]]
+name = "zmq_subscriptions_name"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_subscriptions_name"
+path = "examples/manual/zmq_subscriptions_name.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_subscriptions_prefixes"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_subscriptions_prefixes"
+path = "examples/manual/zmq_subscriptions_prefixes.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_batches"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_batches"
+path = "examples/manual/zmq_batches.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_subscriptions_read_ahead"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_subscriptions_read_ahead"
+path = "examples/manual/zmq_subscriptions_read_ahead.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_settlement_at_most_once"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_settlement_at_most_once"
+path = "examples/manual/zmq_settlement_at_most_once.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_retries"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_retries"
+path = "examples/manual/zmq_retries.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_settlement_out_retry"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_settlement_out_retry"
+path = "examples/manual/zmq_settlement_out_retry.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_settlement_dead_letters"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_settlement_dead_letters"
+path = "examples/manual/zmq_settlement_dead_letters.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_testing"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_testing"
+path = "examples/manual/zmq_testing.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_testing_live"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_testing_live"
+path = "examples/manual/zmq_testing_live.rs"
+required-features = ["testing"]
+test = true
+
+# --- examples: publishing ---
+[[example]]
+name = "zmq_publishing_publish"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_publishing_replies"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_publishing_cancellation"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_request_reply"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_wire"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_wire_headers"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_wire_envelope"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_asyncapi"
+required-features = ["asyncapi"]
+test = true
+
+[[example]]
+name = "manual_zmq_publishing_publish"
+path = "examples/manual/zmq_publishing_publish.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_publishing_replies"
+path = "examples/manual/zmq_publishing_replies.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_publishing_cancellation"
+path = "examples/manual/zmq_publishing_cancellation.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_request_reply"
+path = "examples/manual/zmq_request_reply.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_wire"
+path = "examples/manual/zmq_wire.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_wire_headers"
+path = "examples/manual/zmq_wire_headers.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_wire_envelope"
+path = "examples/manual/zmq_wire_envelope.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_asyncapi"
+path = "examples/manual/zmq_asyncapi.rs"
+required-features = ["asyncapi"]
+test = true
+
+# --- examples: guides ---
+[[example]]
+name = "guide_getting_started"
+path = "examples/guide/getting_started.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_getting_started"
+path = "examples/manual/guide/getting_started.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_pipelines"
+path = "examples/guide/pipelines.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_pipelines"
+path = "examples/manual/guide/pipelines.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_pipeline_sink"
+path = "examples/guide/pipeline_sink.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_pipeline_sink"
+path = "examples/manual/guide/pipeline_sink.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_broadcast"
+path = "examples/guide/broadcast.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_broadcast"
+path = "examples/manual/guide/broadcast.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_broadcast_watcher"
+path = "examples/guide/broadcast_watcher.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_broadcast_watcher"
+path = "examples/manual/guide/broadcast_watcher.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_request_reply"
+path = "examples/guide/request_reply.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_request_reply"
+path = "examples/manual/guide/request_reply.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_request_reply_client"
+path = "examples/guide/request_reply_client.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_request_reply_client"
+path = "examples/manual/guide/request_reply_client.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_retries"
+path = "examples/guide/retries.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_retries"
+path = "examples/manual/guide/retries.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_interop"
+path = "examples/guide/interop.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_interop"
+path = "examples/manual/guide/interop.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_testing"
+path = "examples/guide/testing.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_testing"
+path = "examples/manual/guide/testing.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_production"
+path = "examples/guide/production.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_production"
+path = "examples/manual/guide/production.rs"
+required-features = ["testing"]
+test = true

@@ -45,8 +45,8 @@ pub enum ZmqError {
     #[error("zeromq transport is not connected")]
     NotConnected,
 
-    /// An endpoint or descriptor is invalid.
-    #[error("invalid zeromq descriptor: {0}")]
+    /// An endpoint the transport cannot serve, or a subscription its endpoint cannot take.
+    #[error("invalid zeromq endpoint or mount: {0}")]
     Invalid(String),
 }
 

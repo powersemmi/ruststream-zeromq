@@ -27,7 +27,7 @@ test:
 # What this crate costs over the zeromq client it wraps: two scenarios, each run as a RustStream
 # service and as a hand-written socket loop. There is no stand to start - ZeroMQ has no broker, so
 # the other peer is a second socket in the same process. On demand only: it takes minutes and it
-# wants the machine to itself. The page it feeds is docs/benchmarks.md.
+# wants the machine to itself. It feeds the site's benchmarks pages.
 bench *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -41,7 +41,7 @@ bench *ARGS:
 # What a message costs in this crate's code, counted under valgrind: instructions through
 # callgrind and allocations through DHAT. Each scenario is a service on the production broker,
 # bound on the loopback, fed by a raw `zeromq` peer on a thread of its own; there is no stand to
-# start. The page it feeds is the code table of docs/benchmarks.md. RUSTFLAGS is cleared because
+# start. It feeds the code table of the site's benchmarks pages. RUSTFLAGS is cleared because
 # valgrind aborts on the instructions a recent CPU advertises. Needs valgrind.
 #
 # The benchmarks hand the measurement to gungraun's runner, which has to be the release of the
