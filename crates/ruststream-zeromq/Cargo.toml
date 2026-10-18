@@ -55,3 +55,136 @@ trybuild = "1.0.121"
 
 [package.metadata.docs.rs]
 all-features = true
+
+# --- examples: broker ---
+[[example]]
+name = "zmq_pipeline"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_pipeline"
+path = "examples/manual/zmq_pipeline.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_broker_queue"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_broker_queue"
+path = "examples/manual/zmq_broker_queue.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_broker_fanout"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_broker_fanout"
+path = "examples/manual/zmq_broker_fanout.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_broker_rpc"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_broker_rpc"
+path = "examples/manual/zmq_broker_rpc.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_broker_endpoint"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_broker_endpoint"
+path = "examples/manual/zmq_broker_endpoint.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_broker_bind"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_broker_bind"
+path = "examples/manual/zmq_broker_bind.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_broker_connect"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_broker_connect"
+path = "examples/manual/zmq_broker_connect.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_broker_role"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_broker_role"
+path = "examples/manual/zmq_broker_role.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_broker_startup"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_broker_startup"
+path = "examples/manual/zmq_broker_startup.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_broker_shutdown"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_broker_shutdown"
+path = "examples/manual/zmq_broker_shutdown.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_broker_prelude"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_broker_prelude"
+path = "examples/manual/zmq_broker_prelude.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_broker_errors"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_broker_errors"
+path = "examples/manual/zmq_broker_errors.rs"
+required-features = ["testing"]
+test = true
