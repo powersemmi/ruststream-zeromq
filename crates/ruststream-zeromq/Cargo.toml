@@ -233,3 +233,47 @@ name = "manual_zmq_subscriptions_read_ahead"
 path = "examples/manual/zmq_subscriptions_read_ahead.rs"
 required-features = ["testing"]
 test = true
+
+[[example]]
+name = "zmq_settlement_at_most_once"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_settlement_at_most_once"
+path = "examples/manual/zmq_settlement_at_most_once.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_retries"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_retries"
+path = "examples/manual/zmq_retries.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_settlement_out_retry"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_settlement_out_retry"
+path = "examples/manual/zmq_settlement_out_retry.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_settlement_dead_letters"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_settlement_dead_letters"
+path = "examples/manual/zmq_settlement_dead_letters.rs"
+required-features = ["testing"]
+test = true
