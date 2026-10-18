@@ -211,6 +211,26 @@ required-features = ["testing"]
 test = true
 
 [[example]]
+name = "zmq_wire"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_wire_headers"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_wire_envelope"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_asyncapi"
+required-features = ["asyncapi"]
+test = true
+
+[[example]]
 name = "manual_zmq_publishing_publish"
 path = "examples/manual/zmq_publishing_publish.rs"
 required-features = ["testing"]
@@ -232,4 +252,28 @@ test = true
 name = "manual_zmq_request_reply"
 path = "examples/manual/zmq_request_reply.rs"
 required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_wire"
+path = "examples/manual/zmq_wire.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_wire_headers"
+path = "examples/manual/zmq_wire_headers.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_wire_envelope"
+path = "examples/manual/zmq_wire_envelope.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_asyncapi"
+path = "examples/manual/zmq_asyncapi.rs"
+required-features = ["asyncapi"]
 test = true
