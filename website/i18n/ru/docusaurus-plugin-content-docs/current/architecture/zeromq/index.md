@@ -24,7 +24,7 @@ export const words = {
   "jobsDone": "jobs.done",
   "pricesEur": "prices.eur",
   "reqrep": "DEALER/ROUTER: запрос и ответ",
-  "router": ["Отвечающий ROUTER, слушает", "идентичность на соединение"],
+  "responder": ["Отвечающий ROUTER, слушает", "идентичность на соединение"],
   "dealerA": ["Запросы: DEALER", "подключается"],
   "dealerB": ["Запросы: DEALER", "подключается"],
   "identityA": "идентичность A",

@@ -38,7 +38,7 @@ export function sockets(words: Words): {boxes: Box[]; links: Link[]} {
       box(id, cellX(index), 380, CELL, 58, index === 2 ? {kind: 'bad'} : {}),
     ),
     box('reqrep', 0, 480, 360, 168, {kind: 'group'}),
-    box('router', 80, 506, 200, 44),
+    box('responder', 80, 506, 200, 44),
     ...DEALERS.map((id, index) => box(id, 28 + index * 164, 592, 140, 44)),
   ];
   const links: Link[] = [
@@ -61,7 +61,7 @@ export function sockets(words: Words): {boxes: Box[]; links: Link[]} {
     })),
     ...DEALERS.map((id, index) => ({
       from: id,
-      to: 'router',
+      to: 'responder',
       enterAt: index === 0 ? 0.25 : 0.75,
       label: word(words, index === 0 ? 'identityA' : 'identityB'),
     })),

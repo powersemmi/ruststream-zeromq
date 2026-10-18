@@ -24,7 +24,7 @@ export const words = {
   "jobsDone": "jobs.done",
   "pricesEur": "prices.eur",
   "reqrep": "DEALER/ROUTER：请求与回复",
-  "router": ["应答方：ROUTER，绑定", "每个连接一个身份"],
+  "responder": ["应答方：ROUTER，绑定", "每个连接一个身份"],
   "dealerA": ["请求方：DEALER", "拨号连接"],
   "dealerB": ["请求方：DEALER", "拨号连接"],
   "identityA": "身份 A",

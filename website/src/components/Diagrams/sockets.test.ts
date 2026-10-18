@@ -28,6 +28,6 @@ it('sends a message only where a filter matches, and drops the one no filter mat
 });
 
 it('brings every requester to the one responder', () => {
-  expect(to('dealerA')).toEqual(['router']);
-  expect(to('dealerB')).toEqual(['router']);
+  expect(to('dealerA')).toEqual(['responder']);
+  expect(to('dealerB')).toEqual(['responder']);
 });
