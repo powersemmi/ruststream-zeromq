@@ -58,7 +58,7 @@ row is transport-bound.
 
 ## The code count
 
-Each scenario of the [cost chart](index.md) is the service a user writes, on the
+Each scenario of the [cost chart](index.md#cost-of-the-code) is the service a user writes, on the
 production broker bound to a TCP port on the loopback, built without the `testing` feature. The
 peer is a raw `zeromq` socket on a thread of its own that writes this crate's three frames.
 

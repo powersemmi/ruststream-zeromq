@@ -45,4 +45,4 @@ five seconds, and then fails with an error naming the destination.
 
 The delivery settles after the reply. ZeroMQ has nothing to settle, so the ack answers
 `Unsupported` at once, as [Settlement](settlement.md) draws. What a message costs on this path,
-in instructions and allocations, is on [Benchmarks](benchmarks/index.md).
+in instructions and allocations, is on [Benchmarks](benchmarks/index.md#cost-of-the-code).
