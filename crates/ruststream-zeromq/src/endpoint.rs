@@ -1,7 +1,7 @@
 //! [`ZmqEndpoint`]: an address plus the side of it this process takes, as a type.
 //!
-//! There is no server in the middle, so which side listens is a deployment decision, not a
-//! property of the transport; the endpoint states it. The side is a type parameter rather than a
+//! Two processes talk directly, so which side listens is a deployment decision, not a property
+//! of the transport; the endpoint states it. The side is a type parameter rather than a
 //! field because it decides what a subscription can promise about a retry copy, and that is
 //! settled where the mount site is compiled.
 
@@ -299,7 +299,7 @@ impl ZmqEndpoint<Bind> {
     ///
     /// #[subscriber("jobs")]
     /// async fn work(job: &Job) -> HandlerOutcome {
-    ///     println!("working on job {}", job.id);
+    ///     tracing::info!(job.id, "working on the job");
     ///     HandlerOutcome::ack()
     /// }
     ///
@@ -391,14 +391,14 @@ impl<Role> ZmqEndpoint<Role> {
     ///
     /// #[subscriber("jobs")]
     /// async fn work(job: &Job) -> HandlerOutcome {
-    ///     println!("working on job {}", job.id);
+    ///     tracing::info!(job.id, "working on the job");
     ///     HandlerOutcome::ack()
     /// }
     ///
     /// #[ruststream::app]
     /// fn app() -> impl App {
     ///     let endpoint = ZmqEndpoint::bind("tcp://0.0.0.0:5555");
-    ///     println!("worker listening on {}", endpoint.address());
+    ///     tracing::info!(address = endpoint.address(), "worker listening");
     ///     RustStream::new(AppInfo::new("worker", "0.1.0"))
     ///         .with_broker(ZmqQueue::new(endpoint), |b| {
     ///             b.include(work);

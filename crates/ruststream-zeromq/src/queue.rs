@@ -1,4 +1,19 @@
-//! [`ZmqQueue`]: the PUSH/PULL pattern - competing consumers, round-robin.
+//! [`ZmqQueue`]: the PUSH/PULL pattern, competing consumers served in turn.
+//!
+//! - [ZmqQueue][queue]: [`ZmqQueue`], connected into [`ConnectedZmqQueue`], with
+//!   [`read_ahead`](ZmqQueue::read_ahead) as its one setting beside the endpoint.
+//! - [Batches][batches]: [`ZmqSubscriber`], the subscription of both one-way patterns, singly or
+//!   in batches.
+//! - [Publishing][publishing]: [`ZmqQueuePublish`], offered as [`Publish`] by [`prelude`], and its
+//!   live [`ZmqQueuePublisher`].
+//! - [Replies][replies]: results and replies through a queue on an endpoint of its own.
+//! - [out_retry][out-retry]: retry copies, back into a bound queue or to a place the mount names.
+//!
+//! [queue]: https://powersemmi.github.io/ruststream-zeromq/latest/components/broker/zmq-queue/
+//! [batches]: https://powersemmi.github.io/ruststream-zeromq/latest/components/subscriptions/batches/
+//! [publishing]: https://powersemmi.github.io/ruststream-zeromq/latest/components/publishing/
+//! [replies]: https://powersemmi.github.io/ruststream-zeromq/latest/components/publishing/replies/
+//! [out-retry]: https://powersemmi.github.io/ruststream-zeromq/latest/components/settlement/out-retry/
 
 /// The publish policy of this form, under the name a mount site writes.
 pub use self::ZmqQueuePublish as Publish;
@@ -101,8 +116,45 @@ const _: () = assert!(size_of::<Sender<Outbox<PushSocket>>>() == size_of::<Outbo
 ///
 /// # Examples
 ///
-/// One of several workers that dial the same dispatcher and compete for its jobs. The dispatcher
-/// takes nothing back, so the retry copies go to a queue the worker binds itself:
+/// A worker that binds its queue retries on it. The copy goes back into the queue, whichever
+/// worker is free takes it, and the framework's retry-count header caps the deliveries at five:
+///
+/// ```
+/// use std::time::Duration;
+///
+/// use ruststream_zeromq::queue::prelude::*;
+/// use serde::Deserialize;
+///
+/// #[derive(Deserialize)]
+/// struct Job {
+///     id: u64,
+/// }
+///
+/// #[subscriber("jobs")]
+/// async fn handle(job: &Job) -> HandlerOutcome {
+///     if job.id == 0 {
+///         return HandlerOutcome::retry_after(Duration::from_secs(30));
+///     }
+///     HandlerOutcome::ack()
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
+///         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
+///         |b| {
+///             b.include(handle)
+///                 .max_attempts(nonzero!(5u32))
+///                 .out_retry(Publish);
+///         },
+///     )
+/// }
+/// ```
+///
+/// One of several workers that dial the same ventilator and compete for its jobs. The ventilator
+/// takes nothing back, so the retry copies go to a queue the worker binds itself, where the same
+/// handler takes them. The copies carry the framework's counter, so the cap holds across both
+/// subscriptions:
 ///
 /// ```
 /// use std::time::Duration;
@@ -128,11 +180,14 @@ const _: () = assert!(size_of::<Sender<Outbox<PushSocket>>>() == size_of::<Outbo
 ///     let retries = ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5560")).bindable();
 ///     let copies = retries.bind(Publish);
 ///     RustStream::new(AppInfo::new("worker", "0.1.0"))
-///         .with_broker(ZmqQueue::new(ZmqEndpoint::connect("tcp://dispatcher:5555")), |b| {
-///             b.include(work).out_retry(copies).to("jobs");
+///         .with_broker(ZmqQueue::new(ZmqEndpoint::connect("tcp://ventilator:5555")), |b| {
+///             b.include(work)
+///                 .max_attempts(nonzero!(5u32))
+///                 .out_retry(copies)
+///                 .to("jobs");
 ///         })
 ///         .with_broker(retries, |b| {
-///             b.include(work);
+///             b.include(work).max_attempts(nonzero!(5u32));
 ///         })
 /// }
 /// ```
@@ -162,7 +217,7 @@ impl<Role: EndpointRole> ZmqQueue<Role> {
     ///
     /// #[subscriber("jobs")]
     /// async fn work(job: &Job) -> HandlerOutcome {
-    ///     println!("working on job {}", job.id);
+    ///     tracing::info!(job.id, "working on the job");
     ///     HandlerOutcome::ack()
     /// }
     ///
@@ -210,7 +265,7 @@ impl<Role> ZmqQueue<Role> {
     ///
     /// #[subscriber("renders")]
     /// async fn render(job: &Render) -> HandlerOutcome {
-    ///     println!("rendering {}", job.scene);
+    ///     tracing::info!(scene = %job.scene, "rendering");
     ///     HandlerOutcome::ack()
     /// }
     ///
@@ -441,6 +496,40 @@ impl Subscribe for ConnectedZmqQueue<Connect> {
 
 /// A subscription on one of the one-way patterns - PUSH/PULL or PUB/SUB - yielding
 /// [`ZmqMessage`]s singly or in batches.
+///
+/// A receive on a socket yields one multipart message, so a batch is collected on this side: it
+/// closes once it holds the size the mount named, or 20 ms after its first delivery, whichever
+/// comes first. The 20 ms is a constant of this crate.
+///
+/// # Examples
+///
+/// A handler that takes a slice receives a whole batch, and the mount site caps its size:
+///
+/// ```
+/// use ruststream_zeromq::queue::prelude::*;
+/// use serde::Deserialize;
+///
+/// #[derive(Deserialize)]
+/// struct Job {
+///     id: u64,
+/// }
+///
+/// #[subscriber("jobs")]
+/// async fn drain(jobs: &[Job]) -> HandlerOutcome {
+///     tracing::info!(size = jobs.len(), "working on a batch");
+///     HandlerOutcome::ack()
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
+///         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
+///         |b| {
+///             b.include(drain.batch(nonzero!(32)));
+///         },
+///     )
+/// }
+/// ```
 pub struct ZmqSubscriber {
     name: String,
     inner: BufferedSubscriber<WireSubscriber>,
@@ -498,6 +587,50 @@ impl BatchSubscriber for ZmqSubscriber {
 /// [`ZmqError::Send`] rather than arriving at the subscription as its next delivery. On an
 /// endpoint a subscription of this service dials, the peer there only pushes, so every publish
 /// returns [`ZmqError::Send`] naming that subscription.
+///
+/// A publisher that sends before any subscription of its service binds the endpoint listens on
+/// the endpoint itself, for peers to dial. When a subscription of the same broker binds the
+/// endpoint later, the publisher gives the endpoint up first, on a fixed port and on port zero
+/// alike, and its next publish dials that subscription.
+///
+/// # Examples
+///
+/// A worker's results leave through a queue on an endpoint of their own, here one a sink binds.
+/// The jobs arrive on the socket the `jobs` subscription binds, and that socket takes every
+/// message pushed into it: a result published there would come back as the next job, so the
+/// worker's own publisher refuses it, and the mount binds the reply to the second broker:
+///
+/// ```
+/// use ruststream_zeromq::queue::prelude::*;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Deserialize)]
+/// struct Job {
+///     id: u64,
+/// }
+///
+/// #[derive(Serialize, Outgoing)]
+/// #[outgoing(name = "results")]
+/// struct Done {
+///     id: u64,
+/// }
+///
+/// #[subscriber("jobs", reply)]
+/// async fn work(job: &Job) -> Done {
+///     Done { id: job.id }
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     let results = ZmqQueue::new(ZmqEndpoint::connect("tcp://sink:5556")).bindable();
+///     let to_results = results.bind(Publish);
+///     RustStream::new(AppInfo::new("worker", "0.1.0"))
+///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
+///             b.include(work).out_reply(to_results);
+///         })
+///         .with_broker(results, |_b| {})
+/// }
+/// ```
 #[derive(Clone)]
 pub struct ZmqQueuePublisher {
     cell: Arc<OnceCell<SharedLifecycle>>,
@@ -607,7 +740,9 @@ impl Publisher for ZmqQueuePublisher {
     type Error = ZmqError;
 
     /// ZMTP carries no per-message setting: a send takes the frames and nothing else, so there is
-    /// nothing for a call site to adjust. See the [crate documentation](crate#per-message-settings).
+    /// nothing for a call site to adjust. The
+    /// [Publishing](https://powersemmi.github.io/ruststream-zeromq/latest/components/publishing/)
+    /// page shows what a publish carries.
     type Options = ();
 
     /// # Cancel safety

@@ -6,7 +6,9 @@
 //!
 //! Policies keep their prefixed names here, because all three forms call theirs `Publish` and one
 //! glob cannot carry three. A routes file on a single form imports that form's prelude instead -
-//! [`queue::prelude`], [`fanout::prelude`], [`rpc::prelude`] - and writes the bare `Publish`.
+//! [`queue::prelude`], [`fanout::prelude`], [`rpc::prelude`] - and writes the bare `Publish`. The
+//! [Prelude](https://powersemmi.github.io/ruststream-zeromq/latest/components/broker/prelude/)
+//! page shows both in a service.
 //!
 //! # Examples
 //!

@@ -1,9 +1,20 @@
-//! [`ZmqRpc`]: the DEALER/ROUTER pattern - request and reply.
+//! [`ZmqRpc`]: the DEALER/ROUTER pattern, request and reply.
 //!
-//! The responder side subscribes (a ROUTER socket): each request arrives with a `reply-to`
-//! header addressing the requesting peer, and the plain publisher routes replies back through
-//! the same ROUTER. The requester side uses the [`RequestReply`] capability: one DEALER per
-//! request, correlated by the `correlation-id` header.
+//! The responder subscribes on a ROUTER socket: each request arrives with a `reply-to` header
+//! addressing the requesting peer, and the publisher routes the answer back through the same
+//! ROUTER. The requester uses the [`RequestReply`] capability: one DEALER per request, matched by
+//! the `correlation-id` header.
+//!
+//! - [ZmqRpc][rpc]: [`ZmqRpc`], connected into [`ConnectedZmqRpc`], on either side of its
+//!   endpoint.
+//! - [Request-reply][request-reply]: [`ZmqRpcPublisher`] issues requests through
+//!   [`RequestReply`].
+//! - [Responders][responders]: [`ZmqRpcSubscriber`], answered at each request's `reply-to`
+//!   address through [`ZmqRpcPublish`], offered as [`Publish`] by [`prelude`].
+//!
+//! [rpc]: https://powersemmi.github.io/ruststream-zeromq/latest/components/broker/zmq-rpc/
+//! [request-reply]: https://powersemmi.github.io/ruststream-zeromq/latest/components/request-reply/
+//! [responders]: https://powersemmi.github.io/ruststream-zeromq/latest/components/request-reply/responders/
 
 /// The publish policy of this form, under the name a mount site writes.
 ///
@@ -44,7 +55,7 @@ pub use self::ZmqRpcPublish as Publish;
 /// }
 ///
 /// // Answers at the `reply-to` address each request carries, under its `correlation-id`; the
-/// // crate overview shows it in full.
+/// // `ZmqRpcPublisher` documentation shows it in full.
 /// # use ruststream::runtime::{Outgoing, PublishContext};
 /// # struct ReplyToRequester;
 /// # impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
@@ -218,7 +229,7 @@ fn hex_decode(text: &str) -> Option<Vec<u8>> {
 ///         .request(OutgoingMessage::new("score", request.as_ref()), Duration::from_secs(5))
 ///         .await?;
 ///     let score: Score = JsonCodec.decode(reply.payload())?;
-///     println!("job {} scored {}", job.id, score.value);
+///     tracing::info!(job.id, score = score.value, "scored");
 ///     Ok(())
 /// }
 ///
@@ -298,7 +309,8 @@ impl ZmqRpc {
     ///     }
     /// }
     ///
-    /// // Answers at the request's `reply-to` address; the crate overview shows it in full.
+    /// // Answers at the request's `reply-to` address; the `ZmqRpcPublisher` documentation shows it
+    /// // in full.
     /// # use ruststream::runtime::{Outgoing, PublishContext};
     /// # struct ReplyToRequester;
     /// # impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
@@ -375,7 +387,8 @@ impl ZmqRpc {
     ///     }
     /// }
     ///
-    /// // Answers at the request's `reply-to` address; the crate overview shows it in full.
+    /// // Answers at the request's `reply-to` address; the `ZmqRpcPublisher` documentation shows it
+    /// // in full.
     /// # use ruststream::runtime::{Outgoing, PublishContext};
     /// # struct ReplyToRequester;
     /// # impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
@@ -653,6 +666,114 @@ pub(crate) fn read_request(message: zeromq::ZmqMessage) -> Option<Result<ZmqMess
 
 /// Publishes replies back through the responder's ROUTER, and issues requests via
 /// [`RequestReply`].
+///
+/// A reply goes to the peer whose request it answers. The ROUTER stamps a `reply-to` header on
+/// each request, and a publish transform that declares `Destination = Names` sets the answer's
+/// destination to that address. The answer type therefore declares no destination of its own,
+/// and the name in the `reply("..")` clause is the fallback: what the generated document reports,
+/// and where a delivery the transform left alone is answered. The address travels from the
+/// request's own buffer: [`HeaderMap::get_shared`](ruststream::HeaderMap::get_shared) hands the
+/// header over as a counted handle and [`Str`] checks it is text, so answering costs a reference
+/// count rather than a copy. An answer whose requester has gone is refused with
+/// [`ZmqError::Send`], naming the reply address: the ROUTER holds no peer under that identity.
+///
+/// A request goes out over a DEALER socket of its own and returns the answer matched by the
+/// `correlation-id` header. A correlation id set on the request is kept, so an upper layer can
+/// match on its own identifier, and no answer within the timeout returns
+/// [`ZmqError::RequestTimeout`].
+///
+/// # Examples
+///
+/// A greeter that answers each request at the peer that sent it, and asks itself once it has
+/// started:
+///
+/// ```
+/// use std::io;
+/// use std::time::Duration;
+///
+/// use ruststream::codec::{Codec, JsonCodec};
+/// use ruststream::runtime::{ForReply, Names, Outgoing, PublishContext, PublishTransform};
+/// use ruststream::{IncomingMessage, OutgoingMessage, Str};
+/// use ruststream_zeromq::rpc::prelude::*;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Deserialize, Serialize)]
+/// struct Greeting {
+///     who: String,
+/// }
+///
+/// // No destination of its own: the ROUTER addresses each answer per request.
+/// #[derive(Deserialize, Serialize, ruststream::Outgoing)]
+/// struct Answer {
+///     text: String,
+/// }
+///
+/// struct ReplyToRequester;
+///
+/// impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
+///     type Destination = Names;
+///
+///     fn apply(
+///         &self,
+///         out: &mut Outgoing<'_>,
+///         _options: &mut Option<Options>,
+///         cx: &PublishContext<'_, C>,
+///     ) {
+///         if let Some(reply_to) = cx.headers().get_shared("reply-to")
+///             && let Ok(reply_to) = Str::try_from(reply_to)
+///         {
+///             out.set_name(reply_to);
+///         }
+///         if let Some(correlation) = cx.headers().get_shared("correlation-id") {
+///             out.headers_mut().insert(Str::from_static("correlation-id"), correlation);
+///         }
+///     }
+/// }
+///
+/// // The literal destination is the fallback the transform replaces per delivery.
+/// #[subscriber("greeter", reply("reply"))]
+/// async fn greet(request: &Greeting) -> Answer {
+///     Answer {
+///         text: format!("hello {}", request.who),
+///     }
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     // Port zero binds an ephemeral port; the requester dials whatever it resolved to.
+///     RustStream::new(AppInfo::new("greeter", "0.1.0")).with_broker(
+///         ZmqRpc::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")),
+///         |b| {
+///             // A responder addresses no retry copies, so the mount says where they go.
+///             b.include(greet)
+///                 .out_reply(Publish)
+///                 .transform(ReplyToRequester)
+///                 .out_retry(Publish)
+///                 .to("greeter.retry");
+///
+///             b.after_startup(Publish, async move |publisher| -> io::Result<()> {
+///                 let request = JsonCodec
+///                     .encode(&Greeting {
+///                         who: "world".to_owned(),
+///                     })
+///                     .map_err(io::Error::other)?;
+///                 let answer = publisher
+///                     .request(
+///                         OutgoingMessage::new("greeter", request.as_ref()),
+///                         Duration::from_secs(5),
+///                     )
+///                     .await
+///                     .map_err(io::Error::other)?;
+///                 let answer: Answer = JsonCodec
+///                     .decode(answer.payload())
+///                     .map_err(io::Error::other)?;
+///                 tracing::info!(text = %answer.text, "reply");
+///                 Ok(())
+///             });
+///         },
+///     )
+/// }
+/// ```
 #[derive(Clone)]
 pub struct ZmqRpcPublisher {
     cell: Arc<OnceCell<RpcShared>>,
@@ -681,8 +802,9 @@ impl Publisher for ZmqRpcPublisher {
 
     /// ZMTP carries no per-message setting: a send takes the frames and nothing else, so there is
     /// nothing for a call site to adjust. Which peer a reply reaches is a destination, not a
-    /// setting, and a naming publish transform supplies it. See the
-    /// [crate documentation](crate#per-message-settings).
+    /// setting, and a naming publish transform supplies it. The
+    /// [Publishing](https://powersemmi.github.io/ruststream-zeromq/latest/components/publishing/)
+    /// page shows what a publish carries.
     type Options = ();
 
     /// # Cancel safety

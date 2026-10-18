@@ -1,10 +1,20 @@
-//! [`ZmqFanout`]: the PUB/SUB pattern - broadcast with prefix filtering by name.
+//! [`ZmqFanout`]: the PUB/SUB pattern, broadcast filtered by name prefix.
 //!
-//! Honest scope, straight from the protocol: a subscriber that connects after a publisher has
-//! started misses what was sent before it arrived (the slow joiner), and a message published
-//! with no matching subscriber is dropped silently. A publisher that reaches a subscription of
-//! its own service reads that subscription's filter before its first send, so it loses nothing
-//! to the slow joiner.
+//! A subscriber that connects after a publisher has started misses what was sent before it
+//! arrived, and a message no subscriber matches is dropped without an error: both are the
+//! protocol's own rules. A publisher that reaches a subscription of its own service reads that
+//! subscription's filter before its first send, so inside one service nothing is lost to a late
+//! join.
+//!
+//! - [ZmqFanout][fanout]: [`ZmqFanout`], connected into [`ConnectedZmqFanout`], with
+//!   [`read_ahead`](ZmqFanout::read_ahead) as its one setting beside the endpoint.
+//! - [Prefixes][prefixes]: a subscription's name as its prefix filter.
+//! - [Publishing][publishing]: [`ZmqFanoutPublish`], offered as [`Publish`] by [`prelude`], and
+//!   its live [`ZmqFanoutPublisher`].
+//!
+//! [fanout]: https://powersemmi.github.io/ruststream-zeromq/latest/components/broker/zmq-fanout/
+//! [prefixes]: https://powersemmi.github.io/ruststream-zeromq/latest/components/subscriptions/prefixes/
+//! [publishing]: https://powersemmi.github.io/ruststream-zeromq/latest/components/publishing/
 
 /// The publish policy of this form, under the name a mount site writes.
 pub use self::ZmqFanoutPublish as Publish;
@@ -26,7 +36,7 @@ pub use self::ZmqFanoutPublish as Publish;
 ///
 /// #[subscriber("events")]
 /// async fn handle(event: &Event) -> HandlerOutcome {
-///     println!("event {}", event.id);
+///     tracing::info!(event.id, "event");
 ///     HandlerOutcome::ack()
 /// }
 ///
@@ -114,7 +124,7 @@ const _: () = assert!(size_of::<Sender<PubSide>>() == size_of::<PubSide>());
 ///
 /// #[subscriber("orders")]
 /// async fn watch(event: &OrderEvent, ctx: &mut Context<'_>) -> HandlerOutcome {
-///     println!("{} for order {}", ctx.name(), event.id);
+///     tracing::info!(name = ctx.name(), order = event.id, "order event");
 ///     HandlerOutcome::ack()
 /// }
 ///
@@ -212,7 +222,7 @@ impl<Role> ZmqFanout<Role> {
     ///
     /// #[subscriber("events")]
     /// async fn archive(event: &Event) -> HandlerOutcome {
-    ///     println!("archiving event {}", event.id);
+    ///     tracing::info!(event.id, "archiving the event");
     ///     HandlerOutcome::ack()
     /// }
     ///
@@ -455,6 +465,11 @@ impl Subscribe for ConnectedZmqFanout<Connect> {
 /// A message with no matching subscriber is dropped silently - that is the pattern's
 /// contract, not an error. On an endpoint a subscription of this service dials, the peer there
 /// only publishes, so every publish returns [`ZmqError::Send`] naming that subscription.
+///
+/// A publisher that sends before any subscription of its service binds the endpoint listens on
+/// the endpoint itself, for peers to dial. When a subscription of the same broker binds the
+/// endpoint later, the publisher gives the endpoint up first, and its next publish dials that
+/// subscription.
 #[derive(Clone)]
 pub struct ZmqFanoutPublisher {
     cell: Arc<OnceCell<SharedLifecycle>>,
@@ -519,7 +534,9 @@ impl Publisher for ZmqFanoutPublisher {
     type Error = ZmqError;
 
     /// ZMTP carries no per-message setting: a send takes the frames and nothing else, so there is
-    /// nothing for a call site to adjust. See the [crate documentation](crate#per-message-settings).
+    /// nothing for a call site to adjust. The
+    /// [Publishing](https://powersemmi.github.io/ruststream-zeromq/latest/components/publishing/)
+    /// page shows what a publish carries.
     type Options = ();
 
     /// # Cancel safety
