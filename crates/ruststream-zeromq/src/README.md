@@ -93,6 +93,12 @@ settles when a subscription binds, and `bound_address()` on the connected form r
 `None` until then. A publisher in the same process dials that resolved address by itself, so a
 binary holding both ends runs without a fixed port.
 
+A publisher that sends before any subscription of its service holds a bound endpoint listens on the
+endpoint itself, for peers to dial. When a subscription of the same broker binds the endpoint
+later, the publisher gives the endpoint up first, on a fixed port and on port zero alike, and its
+next publish dials that subscription. So a handler that publishes into a queue whose subscription
+opens after its own reaches that subscription once it is open.
+
 A publisher that dials a subscription of its own service reaches that subscription and nothing
 else, because the socket the subscription bound takes whatever is sent to it. On [`ZmqQueue`] that
 decides what the publisher may send. A message under the subscription's own name goes through: a
