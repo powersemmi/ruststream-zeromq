@@ -425,3 +425,27 @@ name = "manual_guide_pipeline_sink"
 path = "examples/manual/guide/pipeline_sink.rs"
 required-features = ["testing"]
 test = true
+
+[[example]]
+name = "guide_broadcast"
+path = "examples/guide/broadcast.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_broadcast"
+path = "examples/manual/guide/broadcast.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_broadcast_watcher"
+path = "examples/guide/broadcast_watcher.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_broadcast_watcher"
+path = "examples/manual/guide/broadcast_watcher.rs"
+required-features = ["testing"]
+test = true
