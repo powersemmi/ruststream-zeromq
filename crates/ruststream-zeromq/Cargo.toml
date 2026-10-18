@@ -497,3 +497,15 @@ name = "manual_guide_interop"
 path = "examples/manual/guide/interop.rs"
 required-features = ["testing"]
 test = true
+
+[[example]]
+name = "guide_testing"
+path = "examples/guide/testing.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_testing"
+path = "examples/manual/guide/testing.rs"
+required-features = ["testing"]
+test = true
