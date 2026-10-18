@@ -169,6 +169,12 @@ impl Lifecycle {
         }
     }
 
+    /// Whether this broker dials the endpoint, so a sending socket's only peer is the one at
+    /// that address.
+    pub(crate) fn dials(&self) -> bool {
+        self.endpoint.side() == Side::Connect
+    }
+
     /// The subscription of this service that dialed the endpoint, or `None` until one has.
     pub(crate) fn dialer(&self) -> Option<&str> {
         self.dialer.get().map(String::as_str)
