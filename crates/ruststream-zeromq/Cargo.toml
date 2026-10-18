@@ -388,3 +388,136 @@ name = "manual_zmq_asyncapi"
 path = "examples/manual/zmq_asyncapi.rs"
 required-features = ["asyncapi"]
 test = true
+
+# --- examples: guides ---
+[[example]]
+name = "guide_getting_started"
+path = "examples/guide/getting_started.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_getting_started"
+path = "examples/manual/guide/getting_started.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_pipelines"
+path = "examples/guide/pipelines.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_pipelines"
+path = "examples/manual/guide/pipelines.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_pipeline_sink"
+path = "examples/guide/pipeline_sink.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_pipeline_sink"
+path = "examples/manual/guide/pipeline_sink.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_broadcast"
+path = "examples/guide/broadcast.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_broadcast"
+path = "examples/manual/guide/broadcast.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_broadcast_watcher"
+path = "examples/guide/broadcast_watcher.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_broadcast_watcher"
+path = "examples/manual/guide/broadcast_watcher.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_request_reply"
+path = "examples/guide/request_reply.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_request_reply"
+path = "examples/manual/guide/request_reply.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_request_reply_client"
+path = "examples/guide/request_reply_client.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_request_reply_client"
+path = "examples/manual/guide/request_reply_client.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_retries"
+path = "examples/guide/retries.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_retries"
+path = "examples/manual/guide/retries.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_interop"
+path = "examples/guide/interop.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_interop"
+path = "examples/manual/guide/interop.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_testing"
+path = "examples/guide/testing.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_testing"
+path = "examples/manual/guide/testing.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_production"
+path = "examples/guide/production.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_production"
+path = "examples/manual/guide/production.rs"
+required-features = ["testing"]
+test = true
