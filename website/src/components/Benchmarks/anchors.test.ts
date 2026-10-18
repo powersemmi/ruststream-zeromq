@@ -10,6 +10,9 @@ describe('a section of the earlier benchmarks page', () => {
   it('opens the page of its own that took it over', () => {
     expect(movedSection('#what-they-do-not-mean')).toBe('numbers/#what-they-do-not-mean');
     expect(movedSection('#running-it-yourself')).toBe('methodology/#running-it-yourself');
+    expect(movedSection('#there-is-no-broker-in-this-row')).toBe(
+      'methodology/#there-is-no-broker-in-this-row',
+    );
   });
 
   it('leaves an anchor the results page still has where it is', () => {

@@ -9,6 +9,7 @@ const MOVED: Record<string, string> = {
   'the-crates-own-code': '#cost-of-the-code',
   'what-they-do-not-mean': 'numbers/#what-they-do-not-mean',
   'running-it-yourself': 'methodology/#running-it-yourself',
+  'there-is-no-broker-in-this-row': 'methodology/#there-is-no-broker-in-this-row',
 };
 
 /**
