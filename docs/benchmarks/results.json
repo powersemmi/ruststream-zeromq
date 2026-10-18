@@ -2,8 +2,8 @@
   "schema": 3,
   "crate": "ruststream-zeromq",
   "crate_version": "0.7.0",
-  "core_version": "0.7.0-rc.9",
-  "measured_at": "2026-09-23",
+  "core_version": "0.7.0",
+  "measured_at": "2026-10-18",
   "environment": {
     "cpu": "AMD Ryzen 9 7900X 12-Core Processor",
     "architecture": "x86_64",
@@ -11,11 +11,11 @@
     "cores": "12 physical, 24 logical",
     "memory": "62.4 GiB",
     "memory_speed": "unknown",
-    "os": "Linux 7.2.6-x64v3-xanmod1-1",
+    "os": "Linux 7.2.10-x64v3-xanmod1-1",
     "broker": "none: ZeroMQ has no broker, so the peer is a PUSH socket in the same process, over tcp:// on the loopback and over ipc://, with default socket options (the zeromq crate exposes no high-water mark)",
-    "round_trip": "tcp:// 15.6 us, ipc:// 10.9 us (20000 REQ/REP exchanges on the same transport, outside every loop)",
-    "rustc": "1.98.1",
-    "profile": "bench, inheriting release (opt-level = 3, lto = false, codegen-units = 16)",
+    "round_trip": "tcp:// 15.8 us, ipc:// 11.1 us (20000 REQ/REP exchanges on the same transport, outside every loop)",
+    "rustc": "1.99.0",
+    "profile": "bench, inheriting release (opt-level = 3, lto = fat, codegen-units = 16, debug = line-tables-only)",
     "features": "ruststream-zeromq default (none), ruststream macros,json",
     "rustflags": "none (the recipe clears RUSTFLAGS, so the numbers are not tied to this CPU)",
     "valgrind": "3.25.1"
@@ -24,53 +24,53 @@
     {
       "name": "PUSH/PULL over tcp:// on the loopback, 512 B JSON",
       "unit": "msg/s",
-      "messages": 1581862,
+      "messages": 1514619,
       "pairs": 3,
       "raw": {
-        "best": 261826,
-        "median": 253319,
-        "worst": 253202
+        "best": 241721,
+        "median": 237164,
+        "worst": 224416
       },
       "adapter": {
-        "best": 258888,
-        "median": 256180,
-        "worst": 253665
+        "best": 238327,
+        "median": 237795,
+        "worst": 235514
       },
       "framework": {
-        "best": 258655,
-        "median": 257016,
-        "worst": 255683
+        "best": 241545,
+        "median": 231957,
+        "worst": 224163
       },
-      "adapter_overhead_percent": 1.1,
+      "adapter_overhead_percent": 1.4,
       "adapter_verdict": "indistinguishable",
-      "overhead_percent": 1.2,
+      "overhead_percent": 0.1,
       "verdict": "indistinguishable",
       "broker_bound": false
     },
     {
       "name": "PUSH/PULL over ipc://, 512 B JSON",
       "unit": "msg/s",
-      "messages": 5724786,
+      "messages": 6021201,
       "pairs": 3,
       "raw": {
-        "best": 913687,
-        "median": 905306,
-        "worst": 905262
+        "best": 972020,
+        "median": 955055,
+        "worst": 954553
       },
       "adapter": {
-        "best": 914532,
-        "median": 905044,
-        "worst": 898626
+        "best": 952265,
+        "median": 934673,
+        "worst": 838326
       },
       "framework": {
-        "best": 914336,
-        "median": 906054,
-        "worst": 845452
+        "best": 939038,
+        "median": 936838,
+        "worst": 929978
       },
-      "adapter_overhead_percent": -0.1,
+      "adapter_overhead_percent": 2.0,
       "adapter_verdict": "indistinguishable",
-      "overhead_percent": -0.1,
-      "verdict": "indistinguishable",
+      "overhead_percent": 3.4,
+      "verdict": "measured",
       "broker_bound": false
     }
   ],
@@ -79,12 +79,12 @@
       "name": "PUSH/PULL on the loopback, JSON decode into a small struct, ack each",
       "messages": 1000,
       "framework": {
-        "instructions": 5560.1,
+        "instructions": 5036.1,
         "allocations": 5.0
       },
       "cold": {
-        "instructions": 588972,
-        "allocations": 609
+        "instructions": 1075776,
+        "allocations": 614
       },
       "gated": true
     },
@@ -92,12 +92,12 @@
       "name": "DEALER/ROUTER on the loopback, answered to the requesting peer",
       "messages": 1000,
       "framework": {
-        "instructions": 15585.8,
+        "instructions": 13686.0,
         "allocations": 18.0
       },
       "cold": {
-        "instructions": 604225,
-        "allocations": 627
+        "instructions": 1090494,
+        "allocations": 632
       },
       "gated": true
     },
@@ -105,14 +105,19 @@
       "name": "PUSH/PULL on the loopback, in batches of 64 assembled on the client",
       "messages": 1000,
       "framework": {
-        "instructions": 5486.8,
-        "allocations": 5.1
+        "instructions": 5017.1,
+        "allocations": 5.0
       },
       "cold": {
-        "instructions": 595990,
-        "allocations": 613
+        "instructions": 1082736,
+        "allocations": 618
       },
       "gated": true
     }
-  ]
+  ],
+  "code_measured": {
+    "crate_version": "0.7.0",
+    "core_version": "0.7.0",
+    "measured_at": "2026-10-18"
+  }
 }
