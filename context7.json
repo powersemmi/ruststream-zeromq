@@ -15,16 +15,18 @@
     "target"
   ],
   "rules": [
-    "Import the pattern's own prelude in a routes file (`ruststream_zeromq::queue::prelude::*`, `fanout::prelude::*` or `rpc::prelude::*`), which offers that pattern's publish policy as the bare `Publish`; a file mounting more than one pattern imports `ruststream_zeromq::prelude::*` and writes `ZmqQueuePublish`, `ZmqFanoutPublish` or `ZmqRpcPublish`.",
-    "Pick the broker by shape: `ZmqQueue` (PUSH/PULL) for competing consumers, `ZmqFanout` (PUB/SUB) for broadcast filtered by name prefix, `ZmqRpc` (DEALER/ROUTER) for request and reply.",
-    "A subscription is a plain name written as `#[subscriber(\"jobs\")]`: this crate ships no subscription descriptor, and that name is frame 0 of every message on the channel.",
-    "State the listening side on the endpoint with `ZmqEndpoint::bind(addr)` or `ZmqEndpoint::connect(addr)`, on the `tcp://` and `ipc://` transports only; the broker carries that side as its type (`ZmqQueue<Connect>`), written only where a mount site names the type.",
-    "There are no per-message settings here: every publisher declares `Options = ()`, this crate adds no publish builder step, and a handler body imports `ruststream::prelude::*` alone.",
-    "Nothing settles a delivery, so `ack` and `nack` report `AckError::Unsupported` and the `.max_attempts(n)` and `.dead_letter(name)` declared at the mount site are counted and republished by the framework, not by the transport; a dead-letter name on `ZmqQueue` or `ZmqFanout` is frame 0 rather than an address, so bind the copies to a publisher on another endpoint for them to leave the subscription.",
-    "Publish a reply or a result from a `ZmqQueue` handler through a queue on an endpoint of its own (`.out_reply(token)` over a second broker): the publisher of the endpoint the subscription binds sends only under that subscription's name and refuses any other with `ZmqError::Send`.",
-    "Bind the retry publisher with `.out_retry(Publish)` on a `ZmqQueue` or `ZmqFanout` endpoint this service binds, which addresses its own subscription; on one it connects to, and on `ZmqRpc`, name the destination with `.out_retry(token).to(\"name\")` over another broker or a naming transform, or the registration is refused before the subscription opens.",
-    "Address a reply on `ZmqRpc` with a publish transform declaring `Destination = Names` that reads the request's `reply-to` header; the reply type names no destination of its own, and `publish(\"..\")` at the mount site is the documented fallback.",
-    "Batch only the one-way patterns with `.batch(n)`, assembled on the client behind a 20 ms deadline; `.batch(..)` on a `ZmqRpc` responder does not compile, and no pattern is seekable, partitioned or transactional.",
-    "Test by handing `ruststream::testing::TestApp::start` the app `main` runs, with the `testing` feature enabled in dev-dependencies, and address a broker by its production type (`tb.broker::<ZmqQueue>()`); `TestApp::start_live` runs the same body over loopback sockets; do not mock the broker traits."
+    "Import the pattern's prelude in a routes file (`ruststream_zeromq::queue::prelude::*`, `fanout::prelude::*` or `rpc::prelude::*`) for its policy as `Publish`, and `ruststream_zeromq::prelude::*` to mount several patterns (Prelude page).",
+    "Pick the broker by shape (Broker page): `ZmqQueue` (PUSH/PULL) for competing consumers, `ZmqFanout` (PUB/SUB) for broadcast filtered by name prefix, `ZmqRpc` (DEALER/ROUTER) for request and reply.",
+    "Declare a subscription by its name, `#[subscriber(\"jobs\")]`, which is frame 0 of every message, and set `read_ahead` on the broker (Subscriptions page).",
+    "State the side on the endpoint with `ZmqEndpoint::bind(addr)` or `ZmqEndpoint::connect(addr)` on `tcp://` or `ipc://`, and write it as a type, `ZmqQueue<Connect>`, only where a mount site names one (ZmqEndpoint page).",
+    "Bound a handler's injected publisher with a core capability such as `Out<impl Publisher, Slot>` and import `ruststream::prelude::*` alone in a handler body, since a ZeroMQ send takes the frames alone (Publishing page).",
+    "Retry with `retry_after` and cap with `.max_attempts(n)` at the mount site: `ack` reports `AckError::Unsupported`, and the framework publishes and counts every copy (Retries page).",
+    "Bind the retry publisher with `.out_retry(Publish)` on a `ZmqQueue` or `ZmqFanout` this service binds, and with `.out_retry(token).to(\"name\")` on one it dials and on every `ZmqRpc` responder (out_retry page).",
+    "Park spent deliveries with `.dead_letter(name)` through a retry publisher on another endpoint, because a name on the subscription's own endpoint comes back to it (Dead letters page).",
+    "Send a `ZmqQueue` worker's replies through a queue on an endpoint of its own with `bindable()`, `.bind(Publish)` and `.out_reply(token)`, because the bound queue's publisher refuses any other name (Replies page).",
+    "Answer on `ZmqRpc` with a reply handler whose type names no destination, a `reply(\"..\")` fallback, and a transform of your own declaring `Destination = Names` that reads `reply-to` (Responders page).",
+    "Ask a `ZmqRpc` service from a handler bounded `Out<impl RequestReply>`, and give up through the request's timeout rather than a `select!` arm (Request-reply page).",
+    "Batch a `ZmqQueue` or `ZmqFanout` subscription with `.batch(n)`, which closes a batch at `n` deliveries or 20 ms after its first, and answer `ZmqRpc` requests one at a time (Batches page).",
+    "Test by handing the app `main` runs to `TestApp::start` with the `testing` feature in dev-dependencies, address a broker as `tb.broker::<ZmqQueue>()`, and run the same body over sockets with `TestApp::start_live` (Testing page)."
   ]
 }
