@@ -1,12 +1,12 @@
 ---
-title: Settlement
+title: Acknowledgement
 description: "ZeroMQ settles nothing: ack and nack report Unsupported, a plain retry delivers nothing again, and every retry is a copy this service publishes."
 ---
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Settlement
+# Acknowledgement
 
 ZeroMQ settles nothing: `ack` and `nack` report `Unsupported`, a plain retry delivers nothing again, and every retry is a copy this service publishes.
 

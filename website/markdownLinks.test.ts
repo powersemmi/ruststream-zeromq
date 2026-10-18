@@ -9,10 +9,10 @@ describe('resolveMarkdownLinks', () => {
   it('sends a translated page to an untranslated neighbour in the same language', () => {
     expect(
       resolve(
-        '../components/broker/security.md',
+        '../components/broker/startup.md',
         'i18n/ru/docusaurus-plugin-content-docs/current/guides/production.md',
       ),
-    ).toBe('/components/broker/security/');
+    ).toBe('/components/broker/startup/');
   });
 
   it('sends an untranslated page to a translated neighbour in the same language', () => {
