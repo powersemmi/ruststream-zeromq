@@ -61,6 +61,14 @@ So a service that dials may start before the peer it dials, as long as the peer 
 A publisher attaches on its first publish.
 A send with no peer attached retries for five seconds, then fails with [`ZmqError::Send`](../components/broker/errors.md), naming the destination.
 
+## Peer restarts
+
+A publisher that dials its peer dials again once that peer has gone, and reaches it when it is back.
+A queue publisher learns of the loss from a failed send: the message sent into the dead connection is lost, the next publish returns [`ZmqError::Send`](../components/broker/errors.md), and the one after it dials anew.
+A fan-out publisher learns of it from its socket and dials on its next publish.
+A fan-out subscription that dials is dialed again by the client.
+A subscription that dials a PUSH peer keeps the connection it opened, so after that peer restarts it receives nothing until the service restarts too.
+
 ## Read-ahead and back-pressure
 
 A subscription reads at most [`read_ahead`](../components/subscriptions/read-ahead.md) deliveries ahead of its handler, 1000 by default.

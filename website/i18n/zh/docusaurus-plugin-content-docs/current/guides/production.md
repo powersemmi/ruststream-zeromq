@@ -62,6 +62,14 @@ ZeroMQ 在服务之间没有服务器，因此原本由 Broker 决定的事情�
 发布者在第一次发布时接入。
 没有已接入对端的发送会重试五秒，然后以 [`ZmqError::Send`](../components/broker/errors.md) 失败，错误中写明目的地。
 
+## 对端重启 {/* #peer-restarts */}
+
+拨号连接对端的发布者在对端消失后会重新拨号，对端恢复后即可再次到达。
+队列发布者通过一次失败的发送得知连接丢失：发进已断开连接的消息会丢失，下一次发布返回 [`ZmqError::Send`](../components/broker/errors.md)，再下一次发布重新拨号。
+广播发布者从自己的套接字得知连接丢失，并在下一次发布时重新拨号。
+拨号连接的广播订阅由客户端自动重新拨号。
+拨号连接 PUSH 对端的订阅保留它打开的那条连接，因此该对端重启后，它收不到任何消息，直到服务也重启。
+
 ## 预读与背压 {/* #read-ahead-and-back-pressure */}
 
 订阅最多领先处理器 [`read_ahead`](../components/subscriptions/read-ahead.md) 次投递读取，默认 1000。
