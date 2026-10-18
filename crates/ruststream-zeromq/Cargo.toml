@@ -449,3 +449,27 @@ name = "manual_guide_broadcast_watcher"
 path = "examples/manual/guide/broadcast_watcher.rs"
 required-features = ["testing"]
 test = true
+
+[[example]]
+name = "guide_request_reply"
+path = "examples/guide/request_reply.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_request_reply"
+path = "examples/manual/guide/request_reply.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "guide_request_reply_client"
+path = "examples/guide/request_reply_client.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_guide_request_reply_client"
+path = "examples/manual/guide/request_reply_client.rs"
+required-features = ["testing"]
+test = true
