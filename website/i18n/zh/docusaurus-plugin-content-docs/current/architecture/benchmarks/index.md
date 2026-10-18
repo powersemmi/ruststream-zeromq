@@ -1,4 +1,8 @@
-# 基准测试 { #benchmarks }
+---
+description: "ruststream-zeromq 在每条消息上的开销：与原始 zeromq 客户端对比的吞吐量，以及其代码的指令数和内存分配次数。"
+---
+
+# 基准测试 {/* #benchmarks */}
 
 这个 crate 位于 `zeromq` 客户端和你的服务之间：一个产出消息的订阅、一份文档化的帧布局、一个把它
 写出去的发布者。框架的运行时又在这之上。这一页说明这两层各自花了多少，参照物是同样的活用客户端
@@ -20,7 +24,7 @@
 [RustStream 基准测试页](https://powersemmi.github.io/ruststream/latest/zh/benchmarks/#methodology)
 上；这一页公布它在这台机器上得出的结果。
 
-## 这一行里没有 Broker { #there-is-no-broker-in-this-row }
+## 这一行里没有 Broker {/* #there-is-no-broker-in-this-row */}
 
 框架里其他每个 crate 都拿自己和一台服务器相比：起一个容器，客户端连上去，这一行说的是这个 crate
 在那个客户端之上多付了多少。ZeroMQ 没有服务器。对端彼此直接讲话，所以每个循环的另一侧都是同一个
@@ -30,7 +34,7 @@
 都很便宜，于是这个 crate 自身的活在总数里占的比重比别处都大。把这里的百分比和别的 crate 放在
 一起看，只在记住这一点的前提下才有意义。
 
-## 数字 { #the-numbers }
+## 数字 {/* #the-numbers */}
 
 三个交错轮次中的最佳值，括号里是中位的一轮。速率那几列越大越好。
 
@@ -58,7 +62,7 @@
 [`benchmarks/results.json`](https://powersemmi.github.io/ruststream-zeromq/latest/benchmarks/results.json)，
 框架的站点用它拼出跨 Broker 的汇总表。
 
-## crate 自身的代码 { #the-crates-own-code }
+## crate 自身的代码 {/* #the-crates-own-code */}
 
 <div id="benchmark-code"></div>
 
@@ -83,7 +87,7 @@
 超过场景声明的下限时失败，这个下限是这几次运行里的最大值再加百分之零点一；加上 `--baseline=main` 时，
 指令数多出百分之二以上也算失败。改变开销的合并请求要附上自己的数字。
 
-## 机器 { #the-machine }
+## 机器 {/* #the-machine */}
 
 <div id="benchmark-environment"></div>
 
@@ -94,7 +98,7 @@
 构建标志和数字一起公布，因为它们会改变这些数字。用 `-C target-cpu=native` 构建出的二进制给出的
 结果，换一台机器就复现不了，所以这条 recipe 在构建前先把这个变量清空。
 
-## 这些数字不代表什么 { #what-they-do-not-mean }
+## 这些数字不代表什么 {/* #what-they-do-not-mean */}
 
 这里只有一个消费者、一个队列、一个很小的消息体，以及一个在同一进程里的对端。它测的是一次投递
 在这个 crate 里的开销，不是 ZeroMQ 能扛多少。这里的一行也不能拿去和另一个 Broker 公布的一行
@@ -114,7 +118,7 @@
 这些数字是一台机器在某一天的快照。它们由人手工重测，测量期间机器只跑这一项：这一页要讲的差值，
 比与其他任务共用的机器上的噪声还小。
 
-## 自己跑一遍 { #running-it-yourself }
+## 自己跑一遍 {/* #running-it-yourself */}
 
 ```bash
 just bench

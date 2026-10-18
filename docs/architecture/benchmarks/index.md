@@ -1,3 +1,7 @@
+---
+description: "What ruststream-zeromq costs on every message: throughput against the raw zeromq client, and instructions and allocations of its code."
+---
+
 # Benchmarks
 
 This crate sits between the `zeromq` client and your service: a subscription that yields messages,
