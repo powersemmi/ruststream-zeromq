@@ -1,0 +1,26 @@
+# ruststream-zeromq
+
+> `ruststream-zeromq` is the ZeroMQ broker crate for RustStream, a Rust framework for services that subscribe to message brokers and publish to them. It joins a service to a ZeroMQ topology over the pure-Rust `zeromq` client on the `tcp://` and `ipc://` transports, with no server in the middle and a documented frame layout, so the peer on the other side does not have to be Rust.
+
+A service picks one of three patterns: `ZmqQueue` (PUSH/PULL, competing consumers), `ZmqFanout` (PUB/SUB, broadcast filtered by name prefix) or `ZmqRpc` (DEALER/ROUTER, request and reply), each on a `ZmqEndpoint` that says whether this process binds or connects. A subscription is a plain name, `#[subscriber("jobs")]`. A routes file imports its pattern's prelude (`ruststream_zeromq::queue::prelude::*` and so on), which offers that pattern's publish policy as `Publish`; a file mounting more than one pattern imports `ruststream_zeromq::prelude::*`.
+
+This site holds the guides, one page per component and the architecture of the crate; the API reference is on docs.rs, and the framework itself is documented on the RustStream site.
+
+## Guides
+
+- [Guides](https://powersemmi.github.io/ruststream-zeromq/latest/): building a ZeroMQ service with the crate
+
+## Components
+
+- [Components](https://powersemmi.github.io/ruststream-zeromq/latest/components/): the parts of the crate a ZeroMQ service uses, one page each
+
+## Architecture
+
+- [Architecture](https://powersemmi.github.io/ruststream-zeromq/latest/architecture/): how ZeroMQ works, where the crate sits between the sockets and the RustStream runtime, and what that costs
+- [Benchmarks](https://powersemmi.github.io/ruststream-zeromq/latest/architecture/benchmarks/): what this crate and the framework's runtime cost over the raw `zeromq` sockets, and how to re-measure it with `just bench`
+
+## Optional
+
+- [API reference](https://docs.rs/ruststream-zeromq): the full rustdoc of the crate
+- [RustStream llms.txt](https://powersemmi.github.io/ruststream/llms.txt): the index of the framework's own documentation
+- [Source](https://github.com/powersemmi/ruststream-zeromq): the crate's repository
