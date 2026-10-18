@@ -13,10 +13,33 @@ const STEP = 92;
  */
 export function retries(words: Words): {boxes: Box[]; links: Link[]} {
   const answers = ['own', 'named', 'deadLetter', 'dropped'] as const;
+  const pages: Partial<Record<(typeof answers)[number], string>> = {
+    own: '/components/settlement/out-retry/',
+    named: '/components/settlement/out-retry/',
+    deadLetter: '/components/settlement/dead-letters/',
+  };
   const boxes: Box[] = [
     {id: 'delivery', x: 12, y: 0, w: 336, h: 44, kind: 'service', lines: lines(words, 'delivery')},
-    {id: 'outcome', x: 12, y: 72, w: 336, h: 44, kind: 'service', lines: lines(words, 'outcome')},
-    {id: 'cap', x: 12, y: 144, w: 336, h: 44, kind: 'core', lines: lines(words, 'cap')},
+    {
+      id: 'outcome',
+      x: 12,
+      y: 72,
+      w: 336,
+      h: 44,
+      kind: 'service',
+      lines: lines(words, 'outcome'),
+      href: '/components/settlement/retries/',
+    },
+    {
+      id: 'cap',
+      x: 12,
+      y: 144,
+      w: 336,
+      h: 44,
+      kind: 'core',
+      lines: lines(words, 'cap'),
+      href: '/components/settlement/retries/',
+    },
     ...answers.map(
       (id, index): Box => ({
         id,
@@ -26,6 +49,7 @@ export function retries(words: Words): {boxes: Box[]; links: Link[]} {
         h: 104,
         kind: index < 2 ? 'step' : 'bad',
         lines: lines(words, id),
+        href: pages[id],
       }),
     ),
     {

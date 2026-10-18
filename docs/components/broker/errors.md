@@ -16,13 +16,13 @@ The ZeroMQ client's own error is the `source` of `Endpoint`, so the client's typ
 
 | Variant | When |
 |---|---|
-| `Endpoint` | a socket could not bind or dial its address, such as a port another process holds, or a peer that did not listen within 30 seconds |
-| `Send` | a message could not leave: a publish its own subscription would receive back, a publish to a peer that only sends, an answer to a requester that has gone, a header value that is not text, or no peer within five seconds |
+| `Endpoint` | a socket could not bind or dial its address, such as a port another process holds at [startup](./startup.md), or a peer that did not listen within 30 seconds |
+| `Send` | a message could not leave: a publish its own subscription would receive back, a publish to a peer that only sends, an answer to a requester that has gone, a [header](../wire/headers.md) the text frame cannot carry, or no peer within five seconds |
 | `Receive` | an open subscription failed to receive |
 | `Wire` | a peer sent frames that do not follow the [wire layout](../wire/index.md) |
-| `RequestTimeout` | a request got no answer within its timeout |
-| `NotConnected` | a publisher, a responder or a request was used after the broker shut down |
-| `Invalid` | an address with a scheme other than `tcp://` or `ipc://`, or a second subscription on an endpoint the broker binds |
+| `RequestTimeout` | a [request](../request-reply/index.md) got no answer within its timeout |
+| `NotConnected` | a publisher, a responder or a request was used after the broker [shut down](./shutdown.md) |
+| `Invalid` | an address with a scheme other than `tcp://` or `ipc://`, or a second subscription on an endpoint the broker [binds](./endpoint/bind.md) |
 
 A service meets the error in two places.
 A failed startup carries it as the source of the runtime's error, and the service exits before it reads anything.

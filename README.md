@@ -16,14 +16,14 @@
 </p>
 
 <p align="center">
-  <b><a href="https://powersemmi.github.io/ruststream-zeromq/">Documentation</a></b>
+  <b><a href="https://powersemmi.github.io/ruststream-zeromq/latest/">Documentation</a></b>
 </p>
 
 ---
 
 `ruststream-zeromq` connects a RustStream service to a ZeroMQ topology over the pure-Rust
-[`zeromq`](https://crates.io/crates/zeromq) implementation, on TCP and IPC. There is no server in
-the middle, so a Rust service joins sockets a Python worker or a C++ daemon already speaks.
+[`zeromq`](https://crates.io/crates/zeromq) implementation, on TCP and IPC. Peers talk directly,
+so a Rust service joins sockets a Python worker or a C++ daemon already speaks.
 Handlers, routing, codecs and middleware come from the framework; this crate is the transport.
 
 ## Features
@@ -37,9 +37,9 @@ Handlers, routing, codecs and middleware come from the framework; this crate is 
 - **AsyncAPI** with the transport, role and socket pair, behind the `asyncapi` feature.
 - **Tests without sockets:** the service's own app runs with this crate's brokers in process.
 
-Delivery is at most once, with no durability: acknowledgement reports `AckError::Unsupported`. A
-subscriber that connects late misses what was sent before it arrived, and there is no encryption
-layer.
+Delivery is at most once and nothing is stored: acknowledgement reports `AckError::Unsupported`,
+and a subscriber that connects late misses what was sent before it arrived. Traffic travels in the
+clear, so a service runs on a trusted network or inside a tunnel.
 
 ## The wire contract
 
@@ -128,8 +128,18 @@ tb.broker::<ZmqQueue<Connect>>()
 
 ## Documentation
 
-- This crate: <https://docs.rs/ruststream-zeromq>
-- The framework: <https://powersemmi.github.io/ruststream/latest>
+- [Getting started](https://powersemmi.github.io/ruststream-zeromq/latest/guides/getting-started/) - installation and a first
+  worker fed by a Python peer.
+- [Guides](https://powersemmi.github.io/ruststream-zeromq/latest/) - pipelines, broadcast, request and reply, retries, peers in
+  other languages, testing and production.
+- [Components](https://powersemmi.github.io/ruststream-zeromq/latest/components/) - one page per part of the crate: the brokers
+  and endpoints, subscriptions, acknowledgement, publishing, request-reply, the wire format and testing.
+- [Architecture](https://powersemmi.github.io/ruststream-zeromq/latest/architecture/) - how the sockets work and where the crate
+  sits between them and the runtime.
+- [Benchmarks](https://powersemmi.github.io/ruststream-zeromq/latest/architecture/benchmarks/) - what the crate costs over the
+  raw client.
+- [API reference](https://docs.rs/ruststream-zeromq) - every item on docs.rs.
+- The framework: <https://powersemmi.github.io/ruststream/latest/>
 
 ## Minimum supported Rust version
 

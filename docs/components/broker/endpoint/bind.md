@@ -20,7 +20,9 @@ The subscription binds its socket as it opens, and a port another process holds 
 With port zero, as in `tcp://127.0.0.1:0`, the system picks the port when the subscription binds.
 A publisher of the same service dials the port the system picked, so a service that holds both ends runs with no fixed port.
 
-A broker that binds an endpoint and has no subscription on it listens through its publisher, and the peers dial it.
+A broker that binds an endpoint and has no subscription on it listens through its [publisher](../../publishing/index.md), and the peers dial it.
+When a subscription of the same broker binds the endpoint later, the publisher gives the endpoint up first, on a fixed port and on port zero alike, and its next publish dials that subscription.
+So a handler that publishes into a queue whose subscription opens after its own reaches that subscription once it is open.
 On a bound endpoint that a subscription of this service reads, a [`ZmqQueue`](../zmq-queue.md) publisher sends only under the subscription's own name.
 
 ## Example

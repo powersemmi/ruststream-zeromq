@@ -29,11 +29,13 @@ handler, the reply's frames and the send.
 
 <Diagram name="path" words={words} />
 
-The task that owns a subscription's socket receives one message at a time. It splits the frames
-into a name, the headers and the payload. The payload is the received frame itself, not a copy,
+The task that owns a subscription's socket receives one message at a time. It splits the
+[frames](../components/wire/index.md) into a name, the headers and the payload. The payload is the received frame itself, not a copy,
 and the handler's input is decoded from it in place.
 
-The message goes into the subscription's channel, and the dispatch loop takes it from there. A
+The message goes into the subscription's channel,
+[`read_ahead`](../components/subscriptions/read-ahead.md) deep, and the dispatch loop takes it
+from there. A
 [batch handler](../components/subscriptions/batches.md) gets the messages already in the channel,
 up to the size the mount site names, or what arrived within 20 milliseconds of the first.
 

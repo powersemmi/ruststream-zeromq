@@ -22,7 +22,7 @@ Under a [cap](./retries.md) a plain `retry` travels as such a copy too.
 Where the copies go follows the side of the endpoint, as [`out_retry`](./out-retry.md) describes.
 
 A delivery reports no [`redelivery_count`](api:ruststream::IncomingMessage::redelivery_count): the framework counts its copies in a header of its own.
-Delivery is at most once.
+Delivery is at most once, as [Settlement](../../architecture/settlement.md) draws.
 A process that stops loses what its subscriptions had read and not yet handled, and every copy still waiting out its delay.
 
 ## Example

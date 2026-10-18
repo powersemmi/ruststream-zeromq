@@ -15,7 +15,7 @@ When a [retry](./retries.md) would go past the cap of [`max_attempts`](api:rusts
 A mount with a dead-letter name and no cap sends every failed delivery there at once.
 A cap with no dead-letter name drops the spent delivery with a warning naming the subscription.
 
-A name is frame 0, not an address, and the dead letter leaves through the retry publisher.
+A name is frame 0, not an address, and the dead letter leaves through the [retry publisher](./out-retry.md).
 On the subscription's own bound queue that publisher refuses `jobs.dead` with [`ZmqError::Send`](../broker/errors.md), and the delivery is dropped with a warning.
 On the subscription's own bound fan-out `jobs.dead` matches the prefix `jobs` and comes back to the subscription that gave up on it.
 

@@ -27,7 +27,7 @@ Which subscriptions a message reaches is the pattern's own rule:
 
 A publish of this service reaches its own subscription only through the endpoint that subscription binds.
 On an endpoint the service dials, or binds with no subscription, the message leaves for a peer in another process: the test reads it with `published`, and no subscription receives it.
-The socket's refusals hold too: a publish a bound queue would hand back to its own subscription, any publish on an endpoint a subscription dials, a second subscription on a bound endpoint, an answer to a peer that is gone.
+The socket's refusals hold too: a publish a bound queue would hand back to its own subscription ([Replies](../publishing/replies.md)), any publish on an endpoint a subscription dials, a second subscription on a bound endpoint, an answer to a [peer that is gone](../request-reply/responders.md).
 [Settlement](../settlement/index.md) is the socket's as well, so a handler that settles by a plain retry fails its test instead of losing its message in production.
 What only sockets show, such as the [read-ahead](../subscriptions/read-ahead.md) bound or a port another process holds, is for a [live test](./live.md).
 

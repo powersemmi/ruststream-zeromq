@@ -27,12 +27,12 @@ binary.
 The body is 512 bytes of JSON. It decodes into a struct of two integer fields, so the decode
 allocates nothing and the number is about this crate rather than about the JSON parser.
 
-## There is no broker in this row
+## A peer in the same process
 
 Every other broker crate of the framework measures itself against a server: a container starts,
-the client connects to it, and the row is what the crate adds on top of that client. ZeroMQ has no
-server. The other end of every loop is a PUSH socket in the same process, with the default socket
-options, and there is nothing to start or stop.
+the client connects to it, and the row is what the crate adds on top of that client. ZeroMQ peers
+talk directly. The other end of every loop is a PUSH socket in the same process, with the default
+socket options, and the run starts nothing beside the binary.
 
 A transport with no server in the path is cheap per message. This crate's own work is then a
 larger share of the total than it is anywhere else, so a percentage here reads larger than the same

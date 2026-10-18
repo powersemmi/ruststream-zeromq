@@ -23,7 +23,7 @@ A publisher that reaches a subscription of its own service reads that subscripti
 The policy is [`ZmqFanoutPublish`](api:ruststream_zeromq::fanout::ZmqFanoutPublish), offered as `Publish` by [`fanout::prelude`](api:ruststream_zeromq::fanout::prelude).
 A PUB socket is held back by its slowest matching subscriber, as [`read_ahead`](../subscriptions/read-ahead.md) describes.
 
-A retry copy on a fan-out the subscription binds goes back to that subscription's listener and reaches the audience the original had.
+A [retry copy](../settlement/retries.md) on a fan-out the subscription binds goes back to that subscription's listener and reaches the audience the original had.
 A subscription that dials reads from a publisher that takes nothing back, so its mount site names where the copies go, as on [`ZmqQueue`](./zmq-queue.md).
 
 ## Example

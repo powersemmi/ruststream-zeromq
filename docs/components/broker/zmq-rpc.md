@@ -22,10 +22,10 @@ One policy, [`ZmqRpcPublish`](api:ruststream_zeromq::rpc::ZmqRpcPublish), serves
 It routes answers through the responder's ROUTER, and it sends [requests](../request-reply/index.md) over a DEALER socket of its own through the `RequestReply` capability.
 [`rpc::prelude`](api:ruststream_zeromq::rpc::prelude) offers it as `Publish`, together with `RequestReply`.
 
-A responder answers each request at its own address, so `.batch(..)` on a responder does not compile.
+A responder answers each request at its own address, so [`.batch(..)`](../subscriptions/batches.md) on a responder does not compile.
 
 A copy of a request has no address of its own, so a responder subscription addresses no retry copies.
-Every responder mount names where they go, with `.out_retry(policy).to("..")`, and a mount that names nothing fails startup with an error that names the subscription.
+Every responder mount names where they go, with [`.out_retry(policy).to("..")`](../settlement/out-retry.md), and a mount that names nothing fails startup with an error that names the subscription.
 A plain name reaches no peer on DEALER/ROUTER.
 A service that wants the copies to arrive sends them through a queue on another broker; a service that does not names a destination to say so and lets the requester ask again.
 

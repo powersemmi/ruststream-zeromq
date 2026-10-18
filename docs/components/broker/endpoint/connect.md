@@ -16,7 +16,7 @@ So one broker takes several of them: two [`ZmqQueue`](../zmq-queue.md) workers d
 
 A subscription that dials reads from the sending end of its pattern, a ventilator's PUSH socket or a publisher's PUB socket, and that peer takes nothing.
 So once a subscription of this service has dialed the endpoint, a publish through the same `ZmqQueue` or `ZmqFanout` is refused with [`ZmqError::Send`](../errors.md), naming the subscription.
-For the same reason a dialing subscription's retry copies go where its mount site names.
+For the same reason a dialing subscription's [retry copies](../../settlement/out-retry.md) go where its mount site names.
 
 A broker that only publishes, such as a worker's link to the sink that collects its results, dials and sends as usual.
 

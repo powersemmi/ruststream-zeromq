@@ -32,9 +32,8 @@ Both scenarios are PUSH/PULL, over the two transports this crate runs on: `tcp:/
 and `ipc://`. They differ in the path a message takes through the kernel and in nothing else, so
 the pair shows how much of the cost is the socket.
 
-There is no broker in either row. ZeroMQ has no server, so the other end of every loop is a
-socket in the same process, as [Methodology](methodology.md#there-is-no-broker-in-this-row)
-explains.
+The other end of every loop is a socket in the same process, because ZeroMQ peers talk directly,
+as [Methodology](methodology.md#a-peer-in-the-same-process) explains.
 
 ## Cost of the code
 
