@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/ruststream-zeromq", "crates/ruststream-zeromq-bench"]
 
 [workspace.package]
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 # Follows the core's floor, which ruststream 0.7 raised to 1.95.
 rust-version = "1.95"
