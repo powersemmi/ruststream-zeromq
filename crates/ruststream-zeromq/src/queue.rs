@@ -298,7 +298,7 @@ impl<Role: EndpointRole> DescribeServer for ZmqQueue<Role> {
     }
 }
 
-/// The connected form of [`ZmqQueue`]; sockets attach lazily per subscription and publisher.
+/// The connected form of [`ZmqQueue`]; sockets attach per subscription and per publisher.
 pub struct ConnectedZmqQueue<Role = Bind> {
     lifecycle: SharedLifecycle,
     /// How far this subscription reads ahead, from the descriptor this form was connected from.
@@ -335,6 +335,20 @@ impl<Role> ConnectedZmqQueue<Role> {
             cell: Arc::clone(&self.cell),
             push: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// The publisher a publish policy pairs: one whose side binds attaches its socket now, rather
+    /// than on its first publish, so a peer that dials the endpoint connects before anything is
+    /// sent. Startup work, once per pairing: the publish path itself is unchanged.
+    async fn paired(&self) -> Result<ZmqQueuePublisher, PairError> {
+        let publisher = self.publisher();
+        if self.lifecycle.attaches_on_pairing() {
+            publisher
+                .attach(&self.lifecycle)
+                .await
+                .map_err(PairError::new)?;
+        }
+        Ok(publisher)
     }
 
     /// Opens a PULL subscription on the endpoint, bound or dialed per the side.
@@ -490,7 +504,11 @@ impl BatchSubscriber for ZmqSubscriber {
     }
 }
 
-/// Publishes into the queue over a lazily attached PUSH socket.
+/// Publishes into the queue over a PUSH socket of its own.
+///
+/// Paired by the runtime on the bind side, the socket listens from the moment the service starts,
+/// so a PULL peer that dials the endpoint connects before the first push. A publisher that dials,
+/// or one taken from a `publisher()` constructor, attaches on its first publish.
 ///
 /// On an endpoint a subscription of this service bound, the socket dials that subscription, so a
 /// publish reaches it and nothing else: one under the subscription's own name (a retry copy, a
@@ -715,11 +733,17 @@ pub struct ZmqQueuePublish;
 impl<Role: EndpointRole> PublishPolicy<ConnectedZmqQueue<Role>> for ZmqQueuePublish {
     type Live = ZmqQueuePublisher;
 
+    /// On the bind side the publisher's socket attaches here, so it listens once the service has
+    /// started; a dialing publisher attaches on its first publish.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PairError`] when the socket of a binding publisher cannot take the endpoint.
     fn pair(
         self,
         connected: &ConnectedZmqQueue<Role>,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
-        ready(Ok(connected.publisher()))
+        connected.paired()
     }
 
     /// The destination reaches the binding, because on this pattern it is also what frame 0 of
