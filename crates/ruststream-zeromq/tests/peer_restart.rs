@@ -58,7 +58,10 @@ async fn a_dialing_queue_publisher_reaches_a_restarted_sink() {
         .expect("the sink reads it");
     assert_eq!(payload(&first).as_deref(), Some(&b"before"[..]));
 
-    drop(sink);
+    // Closed rather than dropped: a drop stops the listener in the background, and binding the
+    // address again before that is refused.
+    let errors = sink.close().await;
+    assert!(errors.is_empty(), "the sink closes: {errors:?}");
     let mut sink = zeromq::PullSocket::new();
     sink.bind(&address).await.expect("the sink binds again");
 
@@ -135,7 +138,10 @@ async fn a_dialing_fanout_publisher_reaches_a_restarted_subscriber() {
         Some(&b"before"[..]),
     );
 
-    drop(subscriber);
+    // Closed rather than dropped: a drop stops the listener in the background, and binding the
+    // address again before that is refused.
+    let errors = subscriber.close().await;
+    assert!(errors.is_empty(), "the subscriber closes: {errors:?}");
     let mut subscriber = zeromq::SubSocket::new();
     subscriber
         .bind(&address)
