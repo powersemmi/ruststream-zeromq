@@ -22,7 +22,7 @@ One glob cannot carry three policies under one name, so this prelude names them 
 It also carries the three brokers, `RequestReply` and the modules `queue`, `fanout` and `rpc`.
 
 A handler body bounds its injected publisher with a core capability, such as `Out<impl Publisher, Slot>`, and imports `ruststream::prelude::*` alone.
-A ZeroMQ send takes no per-message setting, so no handler body needs this crate's prelude.
+A ZeroMQ send takes the frames alone, so a handler body stays on the core's prelude, whichever pattern it runs on.
 
 ## Example
 

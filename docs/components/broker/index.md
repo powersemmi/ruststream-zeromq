@@ -16,9 +16,9 @@ The pattern decides who receives a message, and the [endpoint](./endpoint/index.
 
 | Broker | Sockets | Who receives a message | Publish policy |
 | --- | --- | --- | --- |
-| [`ZmqQueue`](./zmq-queue.md) | PUSH/PULL | one of the competing consumers, in turn | `ZmqQueuePublish` |
-| [`ZmqFanout`](./zmq-fanout.md) | PUB/SUB | every subscription whose name is a prefix of the message's | `ZmqFanoutPublish` |
-| [`ZmqRpc`](./zmq-rpc.md) | DEALER/ROUTER | the responder, and its answer the peer that asked | `ZmqRpcPublish` |
+| [`ZmqQueue`](./zmq-queue.md) | PUSH/PULL | one of the competing consumers, in turn | [`ZmqQueuePublish`](../publishing/index.md) |
+| [`ZmqFanout`](./zmq-fanout.md) | PUB/SUB | every subscription whose name is a prefix of the message's | [`ZmqFanoutPublish`](../publishing/index.md) |
+| [`ZmqRpc`](./zmq-rpc.md) | DEALER/ROUTER | the responder, and its answer the peer that asked | [`ZmqRpcPublish`](../publishing/index.md) |
 
 Each broker's `new` takes a [`ZmqEndpoint`](./endpoint/index.md) and opens nothing, so the whole service fits the synchronous `#[ruststream::app]` builder.
 At startup the runtime connects it and receives its connected form, such as [`ConnectedZmqQueue`](api:ruststream_zeromq::queue::ConnectedZmqQueue).

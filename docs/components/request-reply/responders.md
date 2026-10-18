@@ -12,7 +12,7 @@ import TabItem from '@theme/TabItem';
 A responder answers at the `reply-to` address the ROUTER stamps on each request, through a transform that names the destination.
 
 A responder is an ordinary reply handler on a [`ZmqRpc`](../broker/zmq-rpc.md) subscription.
-Its ROUTER socket reads the identity of the peer behind each request and stamps the request with a `reply-to` header that addresses that peer, `zmq-reply:` and the identity in hex.
+Its ROUTER socket reads the identity of the peer behind each request and stamps the request with a [`reply-to`](../wire/envelope.md) header that addresses that peer, `zmq-reply:` and the identity in hex.
 The reply publisher routes an answer to such an address only.
 It refuses any other name with [`ZmqError::Send`](../broker/errors.md), so an answer that misses its address fails where it is sent.
 

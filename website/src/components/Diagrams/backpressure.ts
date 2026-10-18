@@ -23,6 +23,7 @@ export function backpressure(words: Words): {boxes: Box[]; links: Link[]} {
         kind: id === 'handler' || id === 'peer' ? 'service' : id === 'kernel' ? 'step' : 'broker',
         code: id === 'channel',
         lines: lines(words, id),
+        href: id === 'channel' ? '/components/subscriptions/read-ahead/' : undefined,
       }),
     ),
     // The wait starts at the channel's row and climbs one row per step, up to the peer's.

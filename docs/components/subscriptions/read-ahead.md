@@ -16,7 +16,7 @@ A subscription reads its socket on a task of its own and hands the deliveries to
 When the buffer is full, the subscription stops reading.
 The socket buffers fill in turn, and the peer's send waits until the handler catches up.
 So a slow handler slows its sender down, and the memory of this process stays bounded.
-On PUB/SUB the waiting sender is the PUB socket, held back by its slowest matching subscriber.
+On PUB/SUB the waiting sender is the PUB socket, held back by its slowest matching subscriber, as [Backpressure](../../architecture/backpressure.md) draws.
 
 The setting belongs to the broker: [`ZmqQueue::read_ahead`](api:ruststream_zeromq::queue::ZmqQueue::read_ahead), [`ZmqFanout::read_ahead`](api:ruststream_zeromq::fanout::ZmqFanout::read_ahead) and [`ZmqRpc::read_ahead`](api:ruststream_zeromq::rpc::ZmqRpc::read_ahead) take a `NonZeroUsize`.
 Every subscription mounted on the broker reads with that bound, and a clone of the broker keeps its own value.

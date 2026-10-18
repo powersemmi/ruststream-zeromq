@@ -26,7 +26,16 @@ export function envelope(words: Words): {boxes: Box[]; links: Link[]} {
   const boxes: Box[] = [
     {id: 'request', x: 0, y: 0, w: 360, h: 82, kind: 'group', lines: lines(words, 'request')},
     ...row('request', 26),
-    {id: 'stamp', x: 12, y: 116, w: 336, h: 44, kind: 'core', lines: lines(words, 'stamp')},
+    {
+      id: 'stamp',
+      x: 12,
+      y: 116,
+      w: 336,
+      h: 44,
+      kind: 'core',
+      lines: lines(words, 'stamp'),
+      href: '/components/request-reply/responders/',
+    },
     {id: 'reply', x: 0, y: 194, w: 360, h: 82, kind: 'group', lines: lines(words, 'reply')},
     ...row('reply', 220),
     {id: 'dealer', x: 0, y: 292, w: 360, h: 44, kind: 'note', lines: lines(words, 'dealer')},

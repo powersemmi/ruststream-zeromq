@@ -7,14 +7,14 @@ export function path(words: Words): {boxes: Box[]; links: Link[]} {
   return chain(words, [
     {key: 'peer', kind: 'service', href: '/architecture/zeromq/'},
     {key: 'driver', kind: 'broker'},
-    {key: 'read', kind: 'broker', href: '/architecture/zeromq/frames/'},
-    {key: 'channel', kind: 'broker', href: '/architecture/backpressure/'},
+    {key: 'read', kind: 'broker', href: '/components/wire/'},
+    {key: 'channel', kind: 'broker', href: '/components/subscriptions/read-ahead/'},
     {key: 'dispatch', kind: 'core', href: '/architecture/backpressure/'},
     {key: 'decode'},
-    {key: 'body', kind: 'service'},
+    {key: 'body', kind: 'service', href: '/components/subscriptions/'},
     {key: 'encode'},
-    {key: 'frames', kind: 'broker', href: '/architecture/zeromq/frames/'},
-    {key: 'publisher', kind: 'broker'},
-    {key: 'settle', kind: 'core', href: '/architecture/settlement/'},
+    {key: 'frames', kind: 'broker', href: '/components/wire/'},
+    {key: 'publisher', kind: 'broker', href: '/components/publishing/'},
+    {key: 'settle', kind: 'core', href: '/components/settlement/'},
   ]);
 }

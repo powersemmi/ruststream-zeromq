@@ -19,7 +19,7 @@ The `protocol` is `zeromq`, and `protocolVersion` is `3.0`, the ZMTP version the
 The `x-ruststream-zeromq` extension of the server holds three fields.
 `transport` is `tcp` or `ipc`.
 `endpoint` is the same coordinate as `host`.
-`role` is `bind` when this service listens on the endpoint and `connect` when it dials it, so a peer reads which side it takes.
+`role` is `bind` when this service [listens](../broker/endpoint/bind.md) on the endpoint and `connect` when it dials it, so a peer reads which side it takes.
 
 ## Example
 

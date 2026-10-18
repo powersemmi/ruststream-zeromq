@@ -35,7 +35,16 @@ export function frames(words: Words): {boxes: Box[]; links: Link[]} {
         lines: lines(words, id),
       }),
     ),
-    {id: 'rules', x: 0, y: 360, w: 360, h: 44, kind: 'note', lines: lines(words, 'rules')},
+    {
+      id: 'rules',
+      x: 0,
+      y: 360,
+      w: 360,
+      h: 44,
+      kind: 'note',
+      lines: lines(words, 'rules'),
+      href: '/components/wire/',
+    },
   ];
   const links: Link[] = [
     {from: 'greeting', to: 'ready', label: word(words, 'bothWays')},

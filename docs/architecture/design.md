@@ -47,9 +47,10 @@ whether a subscription can address its own retry copies, and the type makes that
 fact. [`ZmqRpc`](../components/broker/zmq-rpc.md) has no side parameter: its copies always go
 where the mount names.
 
-The crate has no subscription descriptor. A subscription is a name, the broker carries
-`read_ahead`, and the endpoint is the rest of the configuration. A publish has no per-message
-settings either, because a ZMTP send takes frames and nothing else.
+A [subscription](../components/subscriptions/index.md) is a name, the broker carries
+`read_ahead`, and the endpoint is the rest of the configuration. A
+[publish](../components/publishing/index.md) carries its frames alone, because a ZMTP send takes
+frames and nothing else.
 
 Each subscription opens a socket of its own and a task that owns it. The task reads one message
 at a time into a channel the handler takes from, as [Backpressure](backpressure.md) draws. Each

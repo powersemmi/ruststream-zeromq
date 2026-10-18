@@ -13,7 +13,7 @@ import TabItem from '@theme/TabItem';
 
 A pipeline has a ventilator that pushes work, workers that pull it, and a sink that collects the results.
 Workers that dial one ventilator compete for its stream: each message reaches one of them, and none reaches two.
-PUSH hands the messages out in turn across the attached peers and reads no key, so the crate has no partitioning.
+PUSH hands the messages out in turn across the attached peers, whatever a message holds.
 Order holds per socket pair and nowhere else.
 
 A subscription that [binds](./endpoint/bind.md) its endpoint takes every message a peer pushes into it, whatever the name in frame 0 says.
@@ -25,7 +25,7 @@ A message under the subscription's own name goes through: a retry copy, or a job
 A message under any other name is refused with [`ZmqError::Send`](./errors.md), naming it and the subscription, because the subscription would receive it as its next job.
 So results and replies leave through a queue on an endpoint of its own, as the [replies](../publishing/replies.md) page shows.
 
-A retry copy is a message this service publishes.
+A [retry copy](../settlement/retries.md) is a message this service publishes.
 On a bound queue the copy goes back into the queue, and whichever worker is free takes it.
 A queue that [dials](./endpoint/connect.md) reads from a ventilator that takes nothing back, so its mount site names where the copies go; [`out_retry`](../settlement/out-retry.md) covers both forms.
 

@@ -1,6 +1,6 @@
 ---
 title: Publishing
-description: "Each pattern's Publish sends the three frames with no per-message settings; a send waits up to five seconds for a peer."
+description: "Each pattern's Publish sends the three frames and nothing else; a send waits up to five seconds for a peer."
 ---
 
 import Tabs from '@theme/Tabs';
@@ -8,7 +8,7 @@ import TabItem from '@theme/TabItem';
 
 # Publishing
 
-Each pattern's `Publish` sends the three frames with no per-message settings; a send waits up to five seconds for a peer.
+Each pattern's `Publish` sends the three frames and nothing else; a send waits up to five seconds for a peer.
 
 Each pattern ships one publish policy: [`ZmqQueuePublish`](api:ruststream_zeromq::queue::ZmqQueuePublish), [`ZmqFanoutPublish`](api:ruststream_zeromq::fanout::ZmqFanoutPublish) and [`ZmqRpcPublish`](api:ruststream_zeromq::rpc::ZmqRpcPublish).
 The pattern's [prelude](../broker/prelude.md) offers it as `Publish`, and the crate prelude offers all three under their own names.
@@ -19,7 +19,7 @@ To publish through another broker of the service, the mount site binds the polic
 
 A publish sends the message as the [three frames](../wire/index.md): its name, its headers and the payload the codec wrote.
 The payload frame is the buffer the codec wrote, so a payload of any size is sent without a copy.
-A ZMTP send takes the frames and nothing else, so every publisher declares `Options = ()` and this crate adds no step to the publish builder.
+A ZMTP send takes the frames and nothing else, so every publisher declares `Options = ()`, and the publish builder carries the core's steps alone.
 A handler body therefore imports `ruststream::prelude::*` alone and bounds its publisher with the capability it needs.
 
 The socket attaches on the first publish and waits for a peer.
@@ -27,10 +27,10 @@ When no peer has completed the handshake within five seconds, the publish fails 
 The window is a constant of the crate.
 
 Who receives the message is the pattern's rule.
-On `ZmqQueue` one peer takes it, in turn.
-On `ZmqFanout` every subscriber whose filter is a prefix of the name takes a copy, and a message no subscriber matches is dropped without an error.
-On `ZmqRpc` the publisher sends [replies](../request-reply/responders.md) only, and a request goes through [`request`](../request-reply/index.md).
-ZeroMQ has no transactions and no partition key: a publish is one send.
+On [`ZmqQueue`](../broker/zmq-queue.md) one peer takes it, in turn.
+On [`ZmqFanout`](../broker/zmq-fanout.md) every subscriber whose filter is a prefix of the name takes a copy, and a message no subscriber matches is dropped without an error.
+On [`ZmqRpc`](../broker/zmq-rpc.md) the publisher sends [replies](../request-reply/responders.md) only, and a request goes through [`request`](../request-reply/index.md).
+A publish is one send of one message, and a queue publish is safe to cancel, as [Cancellation](./cancellation.md) describes.
 
 ## Example
 

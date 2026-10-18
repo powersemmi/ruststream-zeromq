@@ -17,7 +17,7 @@ Its `x-ruststream-zeromq` extension comes from the publish policy, so it says ho
 `nameFrame` is the value frame 0 holds on the [wire](../wire/index.md), which is the destination itself.
 A peer reads from it what to send to reach the channel and, on PUB/SUB, which prefix to subscribe with.
 
-A responder's reply channel reports no `nameFrame`.
+A [responder](../request-reply/responders.md)'s reply channel reports no `nameFrame`.
 An answer travels to the identity the ROUTER supplies, and its frame 0 always holds `reply`, so the channel's own name reaches no peer.
 
 ## Example

@@ -21,7 +21,7 @@ Under a cap a plain [`retry`](api:ruststream::runtime::HandlerOutcome::retry) tr
 The delivery that reaches the cap goes to the [dead-letter destination](./dead-letters.md), and with none it is dropped with a warning naming the subscription.
 
 The copies leave through the [`Retry`](api:ruststream::runtime::Retry) slot, which [`out_retry`](./out-retry.md) sets.
-On a queue the service binds, a copy goes back into the same queue.
+On a queue the service [binds](../broker/endpoint/bind.md), a copy goes back into the same queue.
 The copy carries the bytes of the delivery, so a codec named at the retry position encodes nothing.
 A `.transform(..)` there reads the delivery it retries, which is where a service marks a redelivery.
 

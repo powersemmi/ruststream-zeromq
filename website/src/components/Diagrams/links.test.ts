@@ -47,3 +47,56 @@ describe('a route', () => {
     expect(page('/architecture/no-such-page/')).toBe(false);
   });
 });
+
+describe('a box that names a component', () => {
+  it('links to that component page on the path of a message', () => {
+    expect(hrefs('path')).toEqual({
+      peer: '/architecture/zeromq/',
+      read: '/components/wire/',
+      channel: '/components/subscriptions/read-ahead/',
+      dispatch: '/architecture/backpressure/',
+      body: '/components/subscriptions/',
+      frames: '/components/wire/',
+      publisher: '/components/publishing/',
+      settle: '/components/settlement/',
+    });
+  });
+
+  it('links to that component page in the design of the crate', () => {
+    expect(hrefs('design')).toEqual({
+      subscriptions: '/components/subscriptions/',
+      publishers: '/components/publishing/',
+      brokers: '/components/broker/',
+      lifecycle: '/architecture/lifecycle/',
+      wire: '/components/wire/',
+      peers: '/architecture/zeromq/',
+      testing: '/components/testing/',
+    });
+  });
+
+  it('links to that component page in the lifecycle', () => {
+    expect(hrefs('lifecycle')).toEqual({
+      unconnected: '/components/broker/',
+      check: '/components/broker/startup/',
+      subscriptions: '/components/subscriptions/',
+      publishers: '/components/publishing/',
+      closed: '/components/broker/shutdown/',
+      flag: '/components/broker/shutdown/',
+      afterShutdown: '/components/broker/shutdown/',
+      dropped: '/components/broker/endpoint/bind/',
+    });
+  });
+
+  it('links to that component page in the retries, the read-ahead and the envelope', () => {
+    expect(hrefs('retries')).toEqual({
+      outcome: '/components/settlement/retries/',
+      cap: '/components/settlement/retries/',
+      own: '/components/settlement/out-retry/',
+      named: '/components/settlement/out-retry/',
+      deadLetter: '/components/settlement/dead-letters/',
+    });
+    expect(hrefs('backpressure')).toEqual({channel: '/components/subscriptions/read-ahead/'});
+    expect(hrefs('envelope')).toEqual({stamp: '/components/request-reply/responders/'});
+    expect(hrefs('frames')).toEqual({rules: '/components/wire/'});
+  });
+});

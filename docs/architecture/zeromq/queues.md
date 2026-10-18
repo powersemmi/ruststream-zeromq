@@ -43,8 +43,8 @@ a slow one. A message that matches no filter is dropped without an error.
 
 libzmq, the C library most other languages use, works differently. Each connection there has a
 queue of its own, 1000 messages by default (the high-water marks `SNDHWM` and `RCVHWM`). When a
-queue is full, PUB drops the message and PUSH blocks the send. The `zeromq` client has no such
-queue and no such setting: a socket's options are a peer identity and a connect timeout.
+queue is full, PUB drops the message and PUSH blocks the send. The `zeromq` client writes a send
+straight into the connection, and a socket's options are a peer identity and a connect timeout.
 
 What bounds how far a subscription of this crate reads ahead is the crate's own channel,
 [`read_ahead`](../../components/subscriptions/read-ahead.md) deep, and

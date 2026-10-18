@@ -11,8 +11,8 @@ import TabItem from '@theme/TabItem';
 
 A queue publish is cancel-safe; a fan-out publish, a reply and a request are not, so give up through a timeout, not a `select!` arm.
 
-A publish waits while the peer applies back-pressure, so a caller may drop it before it completes.
-On `ZmqQueue` that is safe.
+A publish waits while the peer applies [back-pressure](../../architecture/backpressure.md), so a caller may drop it before it completes.
+On [`ZmqQueue`](../broker/zmq-queue.md) that is safe.
 A publish dropped before the socket took its message sends nothing.
 One dropped in the middle of the send leaves its message with the publisher, and the next publish through it completes that send before its own.
 

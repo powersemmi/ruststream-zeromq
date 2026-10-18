@@ -11,7 +11,7 @@ import TabItem from '@theme/TabItem';
 A subscription is a name, and the name is frame 0 of every message; `#[subscriber("jobs")]` is the whole declaration.
 
 Every message travels as three [frames](../wire/index.md), and the first one holds the name the publisher sent it under.
-A subscription needs nothing beyond that name, so the crate has no subscription descriptor, and the mount site carries every other setting.
+That name is the whole declaration of a subscription, and the mount site carries every other setting.
 The manual form passes the name to [`subscriber(name, handler)`](api:ruststream::runtime::subscriber).
 
 Only [`ZmqFanout`](../broker/zmq-fanout.md) reads the name: it hands a subscription every message whose name starts with the subscription's, as [Prefixes](./prefixes.md) describes.

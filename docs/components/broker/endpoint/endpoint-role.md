@@ -17,7 +17,7 @@ The parameter defaults to `Bind`, so `ZmqQueue` alone names a queue this process
 [`ZmqRpc`](../zmq-rpc.md) has no `Role` parameter.
 
 A mount site writes the side only where it names the type: a [`Router`](api:ruststream::runtime::Router) for a queue it dials is a `Router<ZmqQueue<Connect>>`, and a test addresses that broker as `tb.broker::<ZmqQueue<Connect>>()`.
-The side decides where a retry copy can go, and the compiler holds a routes file to it.
+The side decides where a [retry copy](../../settlement/out-retry.md) can go, and the compiler holds a routes file to it.
 On `ZmqQueue<Connect>`, a router chain whose `out_retry` names no destination does not compile.
 
 `EndpointRole` is the bound a helper writes to build a broker on either side.

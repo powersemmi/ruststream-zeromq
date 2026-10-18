@@ -13,7 +13,7 @@ Every message is three frames, name, headers, payload, so a peer in any language
 ZeroMQ carries messages made of frames and leaves their meaning to the application.
 This crate gives every message on PUSH/PULL and PUB/SUB the same three frames: the name, the headers and the payload.
 
-The name frame is the subscription's name on the fan-out; a queue takes every message whatever its name says.
+The name frame is the subscription's name on the fan-out, matched as a [prefix](../subscriptions/prefixes.md); a queue takes every message whatever its name says.
 The [header frame](./headers.md) is text, and an empty frame means no headers.
 A message of two frames, a name and a payload, reads as a message without headers, so a minimal peer can skip the middle frame.
 The payload frame is what the service's codec wrote, so a peer agrees on the codec only: with the default JSON codec it is the document the handler's input type deserializes from.
