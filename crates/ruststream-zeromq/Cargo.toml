@@ -188,3 +188,48 @@ name = "manual_zmq_broker_errors"
 path = "examples/manual/zmq_broker_errors.rs"
 required-features = ["testing"]
 test = true
+
+# --- examples: subscriptions ---
+[[example]]
+name = "zmq_subscriptions_name"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_subscriptions_name"
+path = "examples/manual/zmq_subscriptions_name.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_subscriptions_prefixes"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_subscriptions_prefixes"
+path = "examples/manual/zmq_subscriptions_prefixes.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_batches"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_batches"
+path = "examples/manual/zmq_batches.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_subscriptions_read_ahead"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_subscriptions_read_ahead"
+path = "examples/manual/zmq_subscriptions_read_ahead.rs"
+required-features = ["testing"]
+test = true
