@@ -116,8 +116,10 @@ such as a producer dialing a sink, sends as usual.
 
 The lifecycle is the framework's ladder of consuming transitions: `ZmqQueue::new(endpoint)` records
 configuration and performs no I/O, `connect` hands back [`ConnectedZmqQueue`], and `shutdown`
-consumes that, so subscribing or publishing afterwards does not compile. Sockets attach lazily, per
-subscription and per publisher. A publisher handed out earlier shares the same state and reports
+consumes that, so subscribing or publishing afterwards does not compile. A subscription attaches its
+socket when it opens. A publisher on the bind side attaches when the service starts, so it listens
+before its first publish and a peer that dials it connects before anything is sent. A publisher that
+dials attaches on its first publish. A publisher handed out earlier shares the same state and reports
 [`ZmqError::NotConnected`](ZmqError::NotConnected) once the connected form is gone, rather than
 succeeding against nothing.
 
