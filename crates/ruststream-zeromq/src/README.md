@@ -701,3 +701,12 @@ filter before its first send, so a live fan-out test publishes once, as an in-pr
   a `select!` arm.
 * Durability: none. Nothing is stored, so a subscriber that attaches late has no backlog to read
   and a restart replays nothing.
+* Peer restarts: a publisher that dials its peer dials again once that peer has gone, so it reaches
+  the peer when it is back. A queue publisher learns of the loss from a failed send: the message
+  sent into the dead connection is lost, the next publish returns [`ZmqError::Send`](ZmqError::Send), and the one
+  after it dials anew. A fan-out publisher learns of it from the socket and dials on its next
+  publish. A subscription that dials a PUSH peer is not dialed again by the client, so it receives
+  nothing more after that peer restarts until the service restarts too; a fan-out subscription
+  that dials is dialed again by the client.
+* Startup with a dialed peer down: a subscription that dials waits up to 30 seconds for its peer,
+  the client's connect timeout, and the start then fails with [`ZmqError::Endpoint`](ZmqError::Endpoint).

@@ -528,6 +528,10 @@ pub(crate) struct Attached {
     /// Set when a subscription of this service bound the endpoint and the socket dialed it: that
     /// subscription receives every message sent, so only its own name may be sent.
     local: Option<String>,
+    /// Set when the socket dialed a peer at the endpoint. The client does not dial a PUSH socket
+    /// again when that peer goes, so a failed send drops the socket and the next publish dials
+    /// anew.
+    dials: bool,
 }
 
 impl Attached {
@@ -544,6 +548,7 @@ impl Attached {
                     local: local.is_some(),
                 },
                 local,
+                dials: false,
             });
         }
         let attaching = Arc::clone(lifecycle);
@@ -560,6 +565,7 @@ impl Attached {
         Ok(Self {
             socket: Sender::Socket(Outbox::new(socket)),
             local,
+            dials: lifecycle.dials(),
         })
     }
 
@@ -674,7 +680,16 @@ impl Publisher for ZmqQueuePublisher {
         {
             return Err(returns_to_subscription(name, subscription));
         }
-        attached.send(name, frames).await
+        let dials = attached.dials;
+        let sent = attached.send(name, frames).await;
+        // A send fails on a dialed socket when its peer is gone: the connection broke, or no
+        // peer is left. The client keeps the socket peerless for good, so it goes, and the next
+        // publish dials the address again and reaches the peer once it is back. Only the failure
+        // path pays for it.
+        if sent.is_err() && dials {
+            *push = None;
+        }
+        sent
     }
 }
 
