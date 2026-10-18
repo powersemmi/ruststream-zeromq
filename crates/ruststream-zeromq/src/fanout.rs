@@ -76,8 +76,8 @@ use crate::bindings::{self, SocketPair};
 #[cfg(feature = "testing")]
 use crate::common::DeliveryReceiver;
 use crate::common::{
-    DEFAULT_READ_AHEAD, DriverHandle, Lifecycle, SEND_RETRY_WINDOW, SendTarget, Sender,
-    SharedLifecycle, attach_to, delivery_channel, dials_the_sender, send_with_retry,
+    DEFAULT_READ_AHEAD, DriverHandle, Lifecycle, OwnListener, SEND_RETRY_WINDOW, SendTarget,
+    Sender, SharedLifecycle, attach_to, delivery_channel, dials_the_sender, send_with_retry,
 };
 use crate::endpoint::{Bind, Connect, Endpoint, EndpointRole, ZmqEndpoint};
 use crate::error::{ZmqError, box_err};
@@ -466,13 +466,43 @@ pub struct ZmqFanoutPublisher {
 }
 
 /// The sending socket of a fan-out publisher, by the place it attached to.
-enum PubSide {
+pub(crate) enum PubSide {
     /// A peer outside this service: the socket learns its filters as they arrive, and what it
     /// sends before one arrives is dropped, as the pattern drops it.
     Remote(PubSocket),
     /// The listener a subscription of this service bound. The socket read that subscription's
     /// filter before its first send, so nothing it sends is dropped for want of one.
     Loopback(XPubSocket),
+}
+
+impl ZmqFanoutPublisher {
+    /// Attaches the socket under the lifecycle's attach lock. One that listens on the endpoint
+    /// itself is recorded there, for a subscription of this service that binds it later to make it
+    /// give way.
+    async fn attach(&self, lifecycle: &SharedLifecycle) -> Result<(), ZmqError> {
+        // Attaches run one at a time under this lock, so the slot found empty stays empty until
+        // the socket is installed, without holding the slot across the attach.
+        let _attaching = lifecycle.attaching().await;
+        if self.socket.lock().await.is_some() {
+            return Ok(());
+        }
+        let sender = attach(lifecycle).await?;
+        if lifecycle.listens_here(dials_a_subscription(&sender)) {
+            lifecycle.listens_alongside(OwnListener::Fanout(Arc::downgrade(&self.socket)));
+        }
+        *self.socket.lock().await = Some(sender);
+        Ok(())
+    }
+}
+
+/// Whether the socket dialed a subscription of this service rather than a place outside it.
+const fn dials_a_subscription(sender: &Sender<PubSide>) -> bool {
+    match sender {
+        Sender::Socket(PubSide::Loopback(_)) => true,
+        Sender::Socket(PubSide::Remote(_)) => false,
+        #[cfg(feature = "testing")]
+        Sender::InProcess { local, .. } => *local,
+    }
 }
 
 impl fmt::Debug for ZmqFanoutPublisher {
@@ -519,10 +549,14 @@ impl Publisher for ZmqFanoutPublisher {
             return Err(dials_the_sender(name, subscription, "PUB", "fan-out"));
         }
         let mut guard = self.socket.lock().await;
-        if guard.is_none() {
-            *guard = Some(attach(lifecycle).await?);
+        // A loop, because a subscription of this service that binds the endpoint may take back a
+        // socket that listened there between the attach and this lock; the next attach dials it.
+        while guard.is_none() {
+            drop(guard);
+            self.attach(lifecycle).await?;
+            guard = self.socket.lock().await;
         }
-        match guard.as_mut().expect("just attached") {
+        match guard.as_mut().expect("the loop leaves an attached socket") {
             // PUB never reports "no peers": an unmatched message is dropped by design, so the
             // retry helper only smooths transport-level failures.
             Sender::Socket(PubSide::Remote(socket)) => send_with_retry(socket, name, frames).await,
