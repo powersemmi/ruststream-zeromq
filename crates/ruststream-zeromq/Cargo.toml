@@ -188,3 +188,48 @@ name = "manual_zmq_broker_errors"
 path = "examples/manual/zmq_broker_errors.rs"
 required-features = ["testing"]
 test = true
+
+# --- examples: publishing ---
+[[example]]
+name = "zmq_publishing_publish"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_publishing_replies"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_publishing_cancellation"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "zmq_request_reply"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_publishing_publish"
+path = "examples/manual/zmq_publishing_publish.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_publishing_replies"
+path = "examples/manual/zmq_publishing_replies.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_publishing_cancellation"
+path = "examples/manual/zmq_publishing_cancellation.rs"
+required-features = ["testing"]
+test = true
+
+[[example]]
+name = "manual_zmq_request_reply"
+path = "examples/manual/zmq_request_reply.rs"
+required-features = ["testing"]
+test = true
