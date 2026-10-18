@@ -22,7 +22,7 @@ export const machine = {"cpu": "处理器", "architecture": "架构", "cpu_frequ
 
 两个场景都是 PUSH/PULL，分别运行在本 crate 支持的两种传输上：环回地址上的 `tcp://` 和 `ipc://`。两者只在消息穿过内核的路径上不同，因此这一对场景显示出开销中有多少属于套接字。
 
-两行里都没有 Broker。ZeroMQ 没有服务器，因此每个循环的另一端都是同一进程里的一个套接字，[方法论](methodology.md#there-is-no-broker-in-this-row)一页说明了这一点。
+每个循环的另一端都是同一进程里的一个套接字，因为 ZeroMQ 的对端彼此直接通信，[方法论](methodology.md#a-peer-in-the-same-process)一页说明了这一点。
 
 ## 代码的开销 {/* #cost-of-the-code */}
 

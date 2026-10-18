@@ -39,7 +39,7 @@ export const words = {
 
 每个 Broker 以类型携带其端点所在的一端：`Bind` 或 `Connect`。这一端决定订阅能否为自己的重试副本寻址，而类型让这成为编译期的事实。[`ZmqRpc`](../components/broker/zmq-rpc.md) 没有这个类型参数：它的副本总是发往挂载点指定的地方。
 
-本 crate 没有订阅描述符。订阅就是一个名称，Broker 携带 `read_ahead`，其余配置就是端点。发布也没有逐条消息的设置，因为 ZMTP 发送只接收帧。
+[订阅](../components/subscriptions/index.md)就是一个名称，Broker 携带 `read_ahead`，其余配置就是端点。[发布](../components/publishing/index.md)只携带自己的帧，因为 ZMTP 发送只接收帧。
 
 每个订阅打开自己的套接字，并由一个任务拥有它。该任务一次读一条消息，放进处理器从中取消息的通道，见[背压](backpressure.md)一页的图。每个发布者在第一次发布时接入自己的套接字。如果本服务为某个订阅绑定了一个端点，那么该端点上的发布者会拨号连接这个订阅的监听器。在广播上，它是一个 XPUB，在接入时等待一次订阅的过滤器，因此它的第一条消息不会被丢弃。
 
