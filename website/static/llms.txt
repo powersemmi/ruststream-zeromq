@@ -1,26 +1,78 @@
 # ruststream-zeromq
 
-> `ruststream-zeromq` is the ZeroMQ broker crate for RustStream, a Rust framework for services that subscribe to message brokers and publish to them. It joins a service to a ZeroMQ topology over the pure-Rust `zeromq` client on the `tcp://` and `ipc://` transports, with no server in the middle and a documented frame layout, so the peer on the other side does not have to be Rust.
+> `ruststream-zeromq` is the ZeroMQ broker crate for RustStream, a Rust framework for services that subscribe to message brokers and publish to them. It joins a service to a ZeroMQ topology over the pure-Rust `zeromq` client on the `tcp://` and `ipc://` transports: peers talk directly, and a documented frame layout lets the peer on the other side be written in any language.
 
-A service picks one of three patterns: `ZmqQueue` (PUSH/PULL, competing consumers), `ZmqFanout` (PUB/SUB, broadcast filtered by name prefix) or `ZmqRpc` (DEALER/ROUTER, request and reply), each on a `ZmqEndpoint` that says whether this process binds or connects. A subscription is a plain name, `#[subscriber("jobs")]`. A routes file imports its pattern's prelude (`ruststream_zeromq::queue::prelude::*` and so on), which offers that pattern's publish policy as `Publish`; a file mounting more than one pattern imports `ruststream_zeromq::prelude::*`.
+A service picks one broker per socket pattern: `ZmqQueue` (PUSH/PULL, competing consumers), `ZmqFanout` (PUB/SUB, broadcast filtered by name prefix) or `ZmqRpc` (DEALER/ROUTER, request and reply), each on a `ZmqEndpoint` that says whether this process binds or connects. A subscription is a plain name, `#[subscriber("jobs")]`, and that name is frame 0 of every message. A routes file imports its pattern's prelude (`ruststream_zeromq::queue::prelude::*` and so on), which offers that pattern's publish policy as `Publish`; a file mounting more than one pattern imports `ruststream_zeromq::prelude::*`. Delivery is at most once: `ack` reports `AckError::Unsupported`, and a retry is a copy the service publishes.
 
 This site holds the guides, one page per component and the architecture of the crate; the API reference is on docs.rs, and the framework itself is documented on the RustStream site.
 
 ## Guides
 
-- [Guides](https://powersemmi.github.io/ruststream-zeromq/latest/): building a ZeroMQ service with the crate
+- [Guides](https://powersemmi.github.io/ruststream-zeromq/latest/): building a ZeroMQ service with the crate, from a first worker to production
+- [Getting started](https://powersemmi.github.io/ruststream-zeromq/latest/guides/getting-started/): installation, a first worker on a PULL socket fed by a Python peer, and its test without a socket
+- [Pipelines with PUSH/PULL](https://powersemmi.github.io/ruststream-zeromq/latest/guides/pipelines/): a ventilator, workers and a sink: who binds, workers that compete, results to the sink, and batches
+- [Broadcast with PUB/SUB](https://powersemmi.github.io/ruststream-zeromq/latest/guides/broadcast/): events on a fan-out the worker binds, watchers that subscribe by prefix, late joiners and slow watchers
+- [Request and reply](https://powersemmi.github.io/ruststream-zeromq/latest/guides/request-reply/): a responder on DEALER/ROUTER as an ordinary reply handler, and a request from a handler with a timeout
+- [Retries and dead letters](https://powersemmi.github.io/ruststream-zeromq/latest/guides/retries/): a retry later, the attempt cap and the parked deliveries, on a transport that delivers at most once
+- [Peers in other languages](https://powersemmi.github.io/ruststream-zeromq/latest/guides/interop/): the three frames, a PUSH, a SUB and a DEALER peer in Python, codecs and versions
+- [Testing a ZeroMQ service](https://powersemmi.github.io/ruststream-zeromq/latest/guides/testing/): `TestApp` on the production app in process, delays on a paused clock, and the same test over loopback sockets
+- [Running in production](https://powersemmi.github.io/ruststream-zeromq/latest/guides/production/): endpoints from the environment, startup order, read-ahead and back-pressure, security and shutdown
 
 ## Components
 
 - [Components](https://powersemmi.github.io/ruststream-zeromq/latest/components/): the parts of the crate a ZeroMQ service uses, one page each
+- [Broker](https://powersemmi.github.io/ruststream-zeromq/latest/components/broker/): three brokers, one per socket pattern, each recording its endpoint with no I/O until the runtime connects it
+- [ZmqQueue](https://powersemmi.github.io/ruststream-zeromq/latest/components/broker/zmq-queue/): PUSH/PULL, competing consumers, each message to one of them in turn
+- [ZmqFanout](https://powersemmi.github.io/ruststream-zeromq/latest/components/broker/zmq-fanout/): PUB/SUB, a copy to every subscription whose name prefixes the message
+- [ZmqRpc](https://powersemmi.github.io/ruststream-zeromq/latest/components/broker/zmq-rpc/): DEALER/ROUTER, a responder that answers each request at the peer that sent it
+- [ZmqEndpoint](https://powersemmi.github.io/ruststream-zeromq/latest/components/broker/endpoint/): an address on `tcp://` or `ipc://` and the side this process takes
+- [bind](https://powersemmi.github.io/ruststream-zeromq/latest/components/broker/endpoint/bind/): `ZmqEndpoint::bind`, one subscription per bound socket, and port zero picked by the system
+- [connect](https://powersemmi.github.io/ruststream-zeromq/latest/components/broker/endpoint/connect/): `ZmqEndpoint::connect`, subscriptions that dial a sending peer, and brokers that only publish
+- [EndpointRole](https://powersemmi.github.io/ruststream-zeromq/latest/components/broker/endpoint/endpoint-role/): the side as a type, `ZmqQueue<Connect>` for a queue this process dials
+- [Startup](https://powersemmi.github.io/ruststream-zeromq/latest/components/broker/startup/): the endpoint check at connect, and a socket per subscription as it opens
+- [Shutdown](https://powersemmi.github.io/ruststream-zeromq/latest/components/broker/shutdown/): the connected form closed at once, and `ZmqError::NotConnected` for a publisher used afterwards
+- [Prelude](https://powersemmi.github.io/ruststream-zeromq/latest/components/broker/prelude/): each pattern's prelude with its policy as `Publish`, and `ruststream_zeromq::prelude` for several patterns
+- [Errors](https://powersemmi.github.io/ruststream-zeromq/latest/components/broker/errors/): `ZmqError`, the one error type of the crate
+- [Subscriptions](https://powersemmi.github.io/ruststream-zeromq/latest/components/subscriptions/): a name in `#[subscriber]`, which is frame 0 of every message
+- [Prefixes](https://powersemmi.github.io/ruststream-zeromq/latest/components/subscriptions/prefixes/): the name as a prefix filter on `ZmqFanout`
+- [Batches](https://powersemmi.github.io/ruststream-zeromq/latest/components/subscriptions/batches/): slice handlers over batches assembled on the client, closed at a size or after 20 ms
+- [read_ahead](https://powersemmi.github.io/ruststream-zeromq/latest/components/subscriptions/read-ahead/): how many deliveries a subscription reads ahead of its handler before the sender waits
+- [Acknowledgement](https://powersemmi.github.io/ruststream-zeromq/latest/components/settlement/): `ack` and `nack` report `Unsupported`, and every retry is a copy this service publishes
+- [Retries](https://powersemmi.github.io/ruststream-zeromq/latest/components/settlement/retries/): `retry_after` copies, and the `max_attempts` cap counted in the framework's header
+- [out_retry](https://powersemmi.github.io/ruststream-zeromq/latest/components/settlement/out-retry/): where the copies go, by the pattern and the side of the endpoint
+- [Dead letters](https://powersemmi.github.io/ruststream-zeromq/latest/components/settlement/dead-letters/): `dead_letter` through a publisher on another endpoint
+- [Publishing](https://powersemmi.github.io/ruststream-zeromq/latest/components/publishing/): each pattern's `Publish`, the three frames, and the five-second wait for a peer
+- [Replies](https://powersemmi.github.io/ruststream-zeromq/latest/components/publishing/replies/): a queue worker's replies through a queue on an endpoint of its own
+- [Cancellation](https://powersemmi.github.io/ruststream-zeromq/latest/components/publishing/cancellation/): a cancel-safe queue publish, and a timeout for a fan-out publish, a reply or a request
+- [Request-reply](https://powersemmi.github.io/ruststream-zeromq/latest/components/request-reply/): `request` over a DEALER of its own, matched by `correlation-id` within a timeout
+- [Responders](https://powersemmi.github.io/ruststream-zeromq/latest/components/request-reply/responders/): an answer at the `reply-to` address, set by a transform that names the destination
+- [Wire format](https://powersemmi.github.io/ruststream-zeromq/latest/components/wire/): name, headers and payload, the three frames a peer in any language sends
+- [Headers](https://powersemmi.github.io/ruststream-zeromq/latest/components/wire/headers/): the `name: value` lines of the header frame, and the headers refused on publish
+- [Envelope](https://powersemmi.github.io/ruststream-zeromq/latest/components/wire/envelope/): the identity frame of DEALER/ROUTER, and `reply` in frame 0 of an answer
+- [AsyncAPI](https://powersemmi.github.io/ruststream-zeromq/latest/components/asyncapi/): the `x-ruststream-zeromq` extension of the document behind the `asyncapi` feature
+- [Server](https://powersemmi.github.io/ruststream-zeromq/latest/components/asyncapi/server/): the coordinate without credentials, the transport, the side and ZMTP 3.0
+- [Channels](https://powersemmi.github.io/ruststream-zeromq/latest/components/asyncapi/channels/): the socket pair and the `nameFrame` a peer sends or subscribes with
+- [Reply address](https://powersemmi.github.io/ruststream-zeromq/latest/components/asyncapi/reply-address/): a responder's answers addressed by `$message.header#/reply-to`
+- [Testing](https://powersemmi.github.io/ruststream-zeromq/latest/components/testing/): `TestApp::start` with each broker in process behind the `testing` feature, the pattern's routing and the socket's refusals
+- [Live](https://powersemmi.github.io/ruststream-zeromq/latest/components/testing/live/): `TestApp::start_live`, the same test body over loopback sockets in every `cargo test`
 
 ## Architecture
 
 - [Architecture](https://powersemmi.github.io/ruststream-zeromq/latest/architecture/): how ZeroMQ works, where the crate sits between the sockets and the RustStream runtime, and what that costs
-- [Benchmarks](https://powersemmi.github.io/ruststream-zeromq/latest/architecture/benchmarks/): what this crate and the framework's runtime cost over the raw `zeromq` sockets, and how to re-measure it with `just bench`
+- [Sockets](https://powersemmi.github.io/ruststream-zeromq/latest/architecture/zeromq/): the three socket patterns, which side binds, and who receives each message
+- [Frames](https://powersemmi.github.io/ruststream-zeromq/latest/architecture/zeromq/frames/): the ZMTP greeting, messages of frames, and the identity envelope of a request
+- [Queues](https://powersemmi.github.io/ruststream-zeromq/latest/architecture/zeromq/queues/): where a message waits between two `zeromq` sockets: the kernel's socket buffers
+- [Design](https://powersemmi.github.io/ruststream-zeromq/latest/architecture/design/): a socket per subscription and per publisher, between the runtime and the client
+- [Lifecycle](https://powersemmi.github.io/ruststream-zeromq/latest/architecture/lifecycle/): `new`, `connect`, a socket per subscription at startup and per publisher on its first publish
+- [Path](https://powersemmi.github.io/ruststream-zeromq/latest/architecture/path/): one message from the socket task through the handler to the reply's frames
+- [Backpressure](https://powersemmi.github.io/ruststream-zeromq/latest/architecture/backpressure/): the read-ahead channel, and the wait that reaches back to the peer's send
+- [Settlement](https://powersemmi.github.io/ruststream-zeromq/latest/architecture/settlement/): what `ack`, drop, retry and `retry_after` become on a transport that settles nothing
+- [Benchmarks](https://powersemmi.github.io/ruststream-zeromq/latest/architecture/benchmarks/): what the crate and the framework's runtime cost over the raw `zeromq` sockets, and the cost of the crate's own code
+- [Benchmarks: Methodology](https://powersemmi.github.io/ruststream-zeromq/latest/architecture/benchmarks/methodology/): the three loops, a peer in the same process, and the code count with `just bench` and `just bench-code`
+- [Benchmarks: Numbers](https://powersemmi.github.io/ruststream-zeromq/latest/architecture/benchmarks/numbers/): what each published number measures, and what it does not allow you to conclude
 
 ## Optional
 
-- [API reference](https://docs.rs/ruststream-zeromq): the full rustdoc of the crate
+- [API reference](https://docs.rs/ruststream-zeromq): the full rustdoc of the crate, whose overview maps each module to its pages here
 - [RustStream llms.txt](https://powersemmi.github.io/ruststream/llms.txt): the index of the framework's own documentation
 - [Source](https://github.com/powersemmi/ruststream-zeromq): the crate's repository
