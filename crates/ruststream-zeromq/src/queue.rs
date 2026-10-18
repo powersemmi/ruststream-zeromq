@@ -19,7 +19,7 @@
 pub use self::ZmqQueuePublish as Publish;
 
 /// The imports a routes file on the PUSH/PULL queue writes, in one glob: the framework's prelude,
-/// the shared [`ZmqEndpoint`], the descriptor [`ZmqQueue`], and its publish policy as [`Publish`].
+/// the shared [`ZmqEndpoint`], the broker [`ZmqQueue`], and its publish policy as [`Publish`].
 ///
 /// # Examples
 ///
@@ -356,7 +356,7 @@ impl<Role: EndpointRole> DescribeServer for ZmqQueue<Role> {
 /// The connected form of [`ZmqQueue`]; sockets attach lazily per subscription and publisher.
 pub struct ConnectedZmqQueue<Role = Bind> {
     lifecycle: SharedLifecycle,
-    /// How far this subscription reads ahead, from the descriptor this form was connected from.
+    /// How far this subscription reads ahead, from the broker this form was connected from.
     read_ahead: NonZeroUsize,
     cell: Arc<OnceCell<SharedLifecycle>>,
     role: PhantomData<fn() -> Role>,

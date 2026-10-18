@@ -25,7 +25,7 @@ pub use self::ZmqRpcPublish as Publish;
 
 /// The imports a routes file on the DEALER/ROUTER exchange writes, in one glob.
 ///
-/// The framework's prelude, the shared [`ZmqEndpoint`], the descriptor [`ZmqRpc`], its publish
+/// The framework's prelude, the shared [`ZmqEndpoint`], the broker [`ZmqRpc`], its publish
 /// policy as [`Publish`], and the [`RequestReply`] capability.
 ///
 /// # Examples
@@ -482,7 +482,7 @@ impl DescribeServer for ZmqRpc {
 #[derive(Debug)]
 pub struct ConnectedZmqRpc {
     shared: RpcShared,
-    /// How far this subscription reads ahead, from the descriptor this form was connected from.
+    /// How far this subscription reads ahead, from the broker this form was connected from.
     read_ahead: NonZeroUsize,
     cell: Arc<OnceCell<RpcShared>>,
 }
@@ -957,8 +957,8 @@ pub(crate) fn peer_identity() -> Bytes {
     Bytes::copy_from_slice(&rand_suffix())
 }
 
-/// A per-request unique suffix without a randomness dependency: the address of a fresh
-/// allocation mixed with a monotonic counter.
+/// A per-request unique suffix without a randomness dependency: the next value of a counter this
+/// process shares, as eight big-endian bytes.
 fn rand_suffix() -> [u8; 8] {
     use std::sync::atomic::AtomicU64;
     static SEQ: AtomicU64 = AtomicU64::new(0);

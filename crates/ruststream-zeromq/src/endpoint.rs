@@ -513,6 +513,22 @@ mod tests {
         );
     }
 
+    /// The refusal names what was invalid, an endpoint, and the address it refused.
+    #[test]
+    fn a_refused_transport_reads_as_an_invalid_endpoint() {
+        let err = ZmqEndpoint::bind("inproc://x")
+            .into_inner()
+            .validate()
+            .expect_err("inproc is refused");
+        assert_eq!(
+            err.to_string(),
+            concat!(
+                "invalid zeromq endpoint or mount: ",
+                "'inproc://x' must use the tcp:// or ipc:// transport"
+            )
+        );
+    }
+
     /// The constructor is the only place a side is chosen, and the value the machinery reads is
     /// the one the type names.
     #[test]

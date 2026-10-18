@@ -20,8 +20,7 @@
 pub use self::ZmqFanoutPublish as Publish;
 
 /// The imports a routes file on the PUB/SUB fan-out writes, in one glob: the framework's prelude,
-/// the shared [`ZmqEndpoint`], the descriptor [`ZmqFanout`], and its publish policy as
-/// [`Publish`].
+/// the shared [`ZmqEndpoint`], the broker [`ZmqFanout`], and its publish policy as [`Publish`].
 ///
 /// # Examples
 ///
@@ -313,7 +312,7 @@ impl<Role: EndpointRole> DescribeServer for ZmqFanout<Role> {
 /// The connected form of [`ZmqFanout`].
 pub struct ConnectedZmqFanout<Role = Bind> {
     lifecycle: SharedLifecycle,
-    /// How far this subscription reads ahead, from the descriptor this form was connected from.
+    /// How far this subscription reads ahead, from the broker this form was connected from.
     read_ahead: NonZeroUsize,
     cell: Arc<OnceCell<SharedLifecycle>>,
     role: PhantomData<fn() -> Role>,
