@@ -182,14 +182,14 @@ zh = "typestate"
 en = "delivery"
 en_match = "deliver(y|ies)"
 ru = "доставка"
-ru_match = "доставк"
+ru_match = "достав(к|ок)"
 zh = "投递"
 
 [[term]]
 en = "redelivery"
 en_match = "redeliver(y|ed|s)?"
 ru = "повторная доставка"
-ru_match = "повторн\\w* доставк"
+ru_match = "повторн\\w* достав(к|ок)"
 zh = "重新投递"
 
 [[term]]
