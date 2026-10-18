@@ -76,8 +76,9 @@ use zeromq::{PullSocket, PushSocket};
 #[cfg(feature = "asyncapi")]
 use crate::bindings::{self, SocketPair};
 use crate::common::{
-    BATCH_MAX_WAIT, DEFAULT_READ_AHEAD, DeliveryReceiver, DriverHandle, Lifecycle, Outbox, Sender,
-    SharedLifecycle, WireSubscriber, delivery_channel, dials_the_sender, returns_to_subscription,
+    BATCH_MAX_WAIT, DEFAULT_READ_AHEAD, DeliveryReceiver, DriverHandle, Lifecycle, Outbox,
+    OwnListener, Sender, SharedLifecycle, WireSubscriber, delivery_channel, dials_the_sender,
+    release, returns_to_subscription,
 };
 use crate::endpoint::{Bind, Connect, Endpoint, EndpointRole, ZmqEndpoint};
 use crate::error::ZmqError;
@@ -504,7 +505,7 @@ pub struct ZmqQueuePublisher {
 }
 
 /// A PUSH socket, and the subscription of this service it reaches when it dialed one.
-struct Attached {
+pub(crate) struct Attached {
     socket: Sender<Outbox<PushSocket>>,
     /// Set when a subscription of this service bound the endpoint and the socket dialed it: that
     /// subscription receives every message sent, so only its own name may be sent.
@@ -550,6 +551,20 @@ impl Attached {
         })
     }
 
+    /// Closes the listener of a socket that listens on the endpoint itself, so a subscription of
+    /// this service can bind it.
+    pub(crate) async fn give_way(self) {
+        match self.socket {
+            Sender::Socket(outbox) => {
+                if let Some(mut socket) = outbox.into_socket().await {
+                    release(&mut socket).await;
+                }
+            }
+            #[cfg(feature = "testing")]
+            Sender::InProcess { .. } => {}
+        }
+    }
+
     async fn send(&mut self, name: &str, frames: zeromq::ZmqMessage) -> Result<(), ZmqError> {
         match &mut self.socket {
             Sender::Socket(outbox) => outbox.send(name, frames).await,
@@ -561,6 +576,26 @@ impl Attached {
                 Ok(())
             }
         }
+    }
+}
+
+impl ZmqQueuePublisher {
+    /// Attaches the socket under the lifecycle's attach lock. One that listens on the endpoint
+    /// itself is recorded there, for a subscription of this service that binds it later to make it
+    /// give way.
+    async fn attach(&self, lifecycle: &SharedLifecycle) -> Result<(), ZmqError> {
+        // Attaches run one at a time under this lock, so the slot found empty stays empty until
+        // the socket is installed, without holding the slot across the attach.
+        let _attaching = lifecycle.attaching().await;
+        if self.push.lock().await.is_some() {
+            return Ok(());
+        }
+        let attached = Attached::attach(lifecycle).await?;
+        if lifecycle.listens_here(attached.local.is_some()) {
+            lifecycle.listens_alongside(OwnListener::Queue(Arc::downgrade(&self.push)));
+        }
+        *self.push.lock().await = Some(attached);
+        Ok(())
     }
 }
 
@@ -609,10 +644,14 @@ impl Publisher for ZmqQueuePublisher {
             return Err(dials_the_sender(name, subscription, "PUSH", "queue"));
         }
         let mut push = self.push.lock().await;
-        if push.is_none() {
-            *push = Some(Attached::attach(lifecycle).await?);
+        // A loop, because a subscription of this service that binds the endpoint may take back a
+        // socket that listened there between the attach and this lock; the next attach dials it.
+        while push.is_none() {
+            drop(push);
+            self.attach(lifecycle).await?;
+            push = self.push.lock().await;
         }
-        let attached = push.as_mut().expect("just attached");
+        let attached = push.as_mut().expect("the loop leaves an attached socket");
         // Checked per message because the name is per message: a slot names it at the call site
         // and a transform may rewrite it per delivery, while whether a subscription of this
         // service holds the endpoint is deployment configuration read once one has bound. Nothing

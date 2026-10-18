@@ -1,16 +1,19 @@
 //! Machinery shared by the three socket patterns.
 
+use std::fmt;
 use std::future::{Future, poll_fn};
+use std::mem;
 use std::num::NonZeroUsize;
 use std::panic;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex as StdMutex, PoisonError};
+use std::sync::{Arc, Mutex as StdMutex, PoisonError, Weak};
 use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
 use aliasable::boxed::AliasableBox;
 use futures::Stream;
+use futures::lock::Mutex;
 use ruststream::{Subscriber, nonzero};
 use selfie::SelfieMut;
 use selfie::refs::RefType;
@@ -22,9 +25,11 @@ use zeromq::{Socket, ZmqError as WireError, ZmqResult};
 
 use crate::endpoint::{Endpoint, Side};
 use crate::error::{ZmqError, box_err};
+use crate::fanout::PubSide;
 #[cfg(feature = "testing")]
 use crate::in_process::{Bus, Deliveries, Registration};
 use crate::message::ZmqMessage;
+use crate::queue::Attached as QueueAttached;
 
 /// How long a send retries while the ZMTP handshake settles: the implementation returns the
 /// message immediately when no peer is attached yet, which is routine right after `connect`.
@@ -77,8 +82,14 @@ pub(crate) struct Lifecycle {
     /// The listener of the subscription bound here now; empty again once it has gone, so a later
     /// subscription can bind the endpoint.
     listener: Arc<StdMutex<Option<Arc<Listener>>>>,
-    /// Runs one bind at a time, so two subscriptions opening together cannot both bind.
+    /// Runs one bind at a time, so two subscriptions opening together cannot both bind, and
+    /// orders each publisher attach against them, so a subscription that binds finds every
+    /// publisher listening here in [`listening`](Self::listening).
     binding: tokio::sync::Mutex<()>,
+    /// The publishers of this service that listen on the endpoint themselves, because no
+    /// subscription held it when they attached. A subscription that binds the endpoint later
+    /// makes them give it up first, so their next publish dials that subscription.
+    listening: StdMutex<Vec<OwnListener>>,
     /// The first subscription of this service that dialed the endpoint. The peer it reads from is
     /// the sending end of the pattern, which takes nothing, so a publisher of the same broker has
     /// nowhere to send.
@@ -131,6 +142,7 @@ impl Lifecycle {
             transport: Transport::Sockets,
             listener: Arc::new(StdMutex::new(None)),
             binding: tokio::sync::Mutex::new(()),
+            listening: StdMutex::new(Vec::new()),
             dialer: OnceCell::new(),
             closed: AtomicBool::new(false),
             // Built inside `connect`, which the runtime the broker connects on polls.
@@ -296,6 +308,18 @@ impl Lifecycle {
         if let Some(held) = self.listener() {
             return Err(endpoint_taken(subscription, &held.subscription));
         }
+        // A publisher that attached while the endpoint was free listens on it itself: on a fixed
+        // port the bind below would find the address taken, and on port zero the publisher would
+        // keep sending to its own listener, which nothing reads.
+        let listening = mem::take(
+            &mut *self
+                .listening
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        for publisher in listening {
+            publisher.give_way().await;
+        }
         let listener = Arc::new(Listener {
             address: bind().await?,
             subscription: subscription.to_owned(),
@@ -330,6 +354,33 @@ impl Lifecycle {
         }
     }
 
+    /// Holds off subscriptions binding the endpoint while a publisher attaches, so the place the
+    /// publisher picks stays the place it attaches to, and a publisher that listens is on
+    /// [`listens_alongside`](Self::listens_alongside)'s list before a subscription looks.
+    ///
+    /// Taken before the publisher's own slot, as a subscription takes them, and only on the
+    /// attach, never on a send.
+    pub(crate) async fn attaching(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.binding.lock().await
+    }
+
+    /// Whether a sending socket attached on the bind side with no subscription of this service
+    /// holding the endpoint, and therefore listens on the endpoint itself.
+    pub(crate) fn listens_here(&self, dialed_local: bool) -> bool {
+        self.endpoint.side() == Side::Bind && !dialed_local
+    }
+
+    /// Records a publisher listening on the endpoint itself, for a subscription that binds the
+    /// endpoint later to make it give way. Called under [`attaching`](Self::attaching).
+    pub(crate) fn listens_alongside(&self, publisher: OwnListener) {
+        let mut listening = self
+            .listening
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        listening.retain(OwnListener::is_alive);
+        listening.push(publisher);
+    }
+
     /// Attaches a sending socket per [`send_target`](Self::send_target), and returns the local
     /// listener it dialed, if it dialed one.
     pub(crate) async fn attach_sender<S: Socket>(
@@ -359,6 +410,61 @@ pub(crate) async fn attach_to<S: Socket>(
         SendTarget::Local(listener) => Some(listener),
         SendTarget::Dial(_) | SendTarget::Listen(_) => None,
     })
+}
+
+/// A publisher slot of this service whose socket listens on the endpoint itself.
+pub(crate) enum OwnListener {
+    Queue(Weak<Mutex<Option<QueueAttached>>>),
+    Fanout(Weak<Mutex<Option<Sender<PubSide>>>>),
+}
+
+impl fmt::Debug for OwnListener {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Queue(_) => "OwnListener::Queue",
+            Self::Fanout(_) => "OwnListener::Fanout",
+        })
+    }
+}
+
+impl OwnListener {
+    fn is_alive(&self) -> bool {
+        match self {
+            Self::Queue(slot) => slot.strong_count() > 0,
+            Self::Fanout(slot) => slot.strong_count() > 0,
+        }
+    }
+
+    /// Closes the publisher's listener and empties its slot, so its next publish attaches again,
+    /// to the subscription about to bind. Waits for a send in flight on it to finish first.
+    async fn give_way(self) {
+        match self {
+            Self::Queue(slot) => {
+                if let Some(slot) = slot.upgrade() {
+                    let attached = slot.lock().await.take();
+                    if let Some(attached) = attached {
+                        attached.give_way().await;
+                    }
+                }
+            }
+            Self::Fanout(slot) => {
+                if let Some(slot) = slot.upgrade() {
+                    let sender = slot.lock().await.take();
+                    if let Some(Sender::Socket(PubSide::Remote(mut socket))) = sender {
+                        release(&mut socket).await;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Closes every listener `socket` holds and waits until each has let its address go, so a
+/// subscription can bind it next.
+pub(crate) async fn release<S: Socket>(socket: &mut S) {
+    for err in socket.unbind_all().await {
+        tracing::warn!(error = %err, "a publisher's listener did not close cleanly");
+    }
 }
 
 /// The endpoint a bound subscription holds: dropping it, when the subscription is dropped,
@@ -549,6 +655,14 @@ where
             send: None,
             dropped: None,
         }
+    }
+
+    /// Hands the socket back, once a send a dropped publish left parked has completed.
+    pub(crate) async fn into_socket(mut self) -> Option<S> {
+        self.complete_dropped().await;
+        self.socket
+            .take()
+            .map(|held| *AliasableBox::into_unique(Pin::into_inner(held)))
     }
 
     /// Sends `message` under `name` with the handshake retry, after completing a send whose

@@ -222,10 +222,11 @@ async fn wire_layout_is_stable_for_foreign_peers() {
     let address = connected.bound_address().expect("subscription bound");
 
     // The foreign peer: a raw PUSH socket composing the three documented frames by hand,
-    // exactly as the docs tell a Python peer to.
+    // exactly as the docs tell a Python peer to. The client's `connect` returns once the
+    // handshake is done and the subscription is the socket's peer, so the first send has
+    // somewhere to go.
     let mut raw = zeromq::PushSocket::new();
     raw.connect(&address).await.expect("raw peer connects");
-    tokio::time::sleep(Duration::from_millis(200)).await;
 
     let mut frames = zeromq::ZmqMessage::from("orders");
     frames.push_back(bytes::Bytes::from_static(b"content-type: application/json"));
@@ -605,12 +606,8 @@ async fn a_malformed_header_frame_from_a_foreign_peer_surfaces_on_the_subscripti
     let mut frames = zeromq::ZmqMessage::from("orders");
     frames.push_back(bytes::Bytes::from_static(b"content-type application/json"));
     frames.push_back(bytes::Bytes::from_static(b"{}"));
-    // The handshake may still be settling, so hand the frames over the same way a publisher does.
-    for _ in 0..50 {
-        if raw.send(frames.clone()).await.is_ok() {
-            break;
-        }
-    }
+    // The client's `connect` returns once the subscription is the socket's peer.
+    raw.send(frames).await.expect("raw send succeeds");
 
     let mut stream = pin!(subscriber.stream());
     let err = tokio::time::timeout(RECV_TIMEOUT, stream.next())

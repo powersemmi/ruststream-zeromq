@@ -11,10 +11,12 @@
 //!
 //! Headers are text in both directions, and neither direction guesses. A header value that is not
 //! UTF-8 has no representation in the frame, so publishing it returns an error naming the header
-//! and the destination. A header frame that is not UTF-8, or a line with no `:`, returns a wire
-//! error instead of dropping the header: a peer that composes the frame by hand hears about it on
-//! the first message rather than losing headers silently. Blank lines are skipped, so a peer that
-//! ends the frame with a newline interoperates.
+//! and the destination. So does a header that would read back as something else: a line break in
+//! its name or value, a `:` in its name, or whitespace at either end of either. A header frame
+//! that is not UTF-8, or a line with no `:`, returns a wire error instead of dropping the header:
+//! a peer that composes the frame by hand hears about it on the first message rather than losing
+//! headers silently. Blank lines are skipped, so a peer that ends the frame with a newline
+//! interoperates.
 
 use bytes::Bytes;
 use ruststream::HeaderMap;
@@ -23,10 +25,33 @@ use zeromq::ZmqMessage as WireMessage;
 use crate::error::ZmqError;
 use crate::message::ZmqMessage;
 
+/// Why a header cannot be written into the frame as it is, or `None` when the line it makes reads
+/// back as the same name and value.
+///
+/// The reader splits the frame into lines, splits a line at its first `:` and trims both sides,
+/// so a line break anywhere, a `:` in the name, or whitespace at either end of the name or the
+/// value would reach the receiver as a different header, or as a frame it refuses. Refusing them
+/// here keeps the frame format every peer already reads. The check is a scan of bytes the encoder
+/// copies anyway, and allocates only to describe a refusal.
+fn unwritable(name: &str, value: &str) -> Option<&'static str> {
+    let breaks_line = |text: &str| text.bytes().any(|b| b == b'\n' || b == b'\r');
+    let padded = |text: &str| text.trim() != text;
+    if breaks_line(name) || breaks_line(value) {
+        Some("holds a line break, and each header is one line of the frame")
+    } else if name.contains(':') {
+        Some("has a ':' in its name, and the first ':' of a line ends the name")
+    } else if padded(name) || padded(value) {
+        Some("starts or ends with whitespace, which the reader trims")
+    } else {
+        None
+    }
+}
+
 /// Encodes headers into the header frame ("name: value" lines).
 ///
-/// Returns the reason a value cannot be written, for the caller to report against its
-/// destination. The frame is text, so a value that is not UTF-8 has no representation in it.
+/// Returns the reason a header cannot be written, for the caller to report against its
+/// destination. The frame is text, so a value that is not UTF-8 has no representation in it, and
+/// a header [`unwritable`] describes would read back as something else.
 fn encode_headers(headers: &HeaderMap) -> Result<Bytes, String> {
     if headers.is_empty() {
         return Ok(Bytes::new());
@@ -36,6 +61,9 @@ fn encode_headers(headers: &HeaderMap) -> Result<Bytes, String> {
         let value = std::str::from_utf8(value).map_err(|_| {
             format!("header '{name}' holds a value that is not UTF-8, and the header frame is text")
         })?;
+        if let Some(reason) = unwritable(name, value) {
+            return Err(format!("header {name:?} {reason}"));
+        }
         text.push_str(name);
         text.push_str(": ");
         text.push_str(value);
@@ -277,6 +305,44 @@ mod tests {
             message.contains("orders"),
             "names the destination: {message}"
         );
+    }
+
+    /// A header that would read back as a different header, or as a frame the receiver refuses,
+    /// is refused before the socket is touched, naming the header and the destination.
+    #[test]
+    fn a_header_the_lines_cannot_hold_is_refused_with_its_destination() {
+        let cases = [
+            ("x-note", "first\nsecond"),
+            ("x-note", "first\rsecond"),
+            ("x-tenant", "acme\nx-ruststream-retry-count: 9"),
+            ("x-note", " padded"),
+            ("x-note", "padded\t"),
+            ("x-a:b", "value"),
+            ("x-a\nb", "value"),
+            ("x-note ", "value"),
+        ];
+        for (name, value) in cases {
+            let mut headers = HeaderMap::new();
+            headers.insert(name, value);
+            let err = encode_to("orders", "orders", &headers, Bytes::from_static(b"{}"))
+                .expect_err("the frame cannot carry this header as written")
+                .to_string();
+            assert!(
+                err.contains(&format!("{name:?}")) && err.contains("orders"),
+                "the refusal must name the header and the destination, got: {err}",
+            );
+        }
+    }
+
+    /// Only the ends of a value are trimmed by the reader, so inner whitespace and a `:` inside a
+    /// value round-trip.
+    #[test]
+    fn inner_spaces_and_separators_of_a_value_round_trip() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-note", "a: b  c");
+        let message = encode("orders", &headers, Bytes::from_static(b"{}")).expect("encodes");
+        let (_, decoded, _) = decode(message).expect("decodes");
+        assert_eq!(decoded.get_str("x-note"), Some("a: b  c"));
     }
 
     #[test]
