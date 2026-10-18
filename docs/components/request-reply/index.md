@@ -25,6 +25,8 @@ The [responder](./responders.md) on the other side copies the id onto its answer
 The timeout is the way to give up on a request: dropping the call closes its DEALER, as [Cancellation](../publishing/cancellation.md) describes.
 After shutdown a request returns `ZmqError::NotConnected`.
 
+[Request and reply](../../guides/request-reply.md) asks a scoring service about each order from inside a handler.
+
 ## Example
 
 A handler on a queue asks the greeter for each name it receives, and acknowledges once the answer came back.

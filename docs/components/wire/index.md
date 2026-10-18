@@ -22,6 +22,8 @@ A name frame that is not UTF-8 surfaces on the subscription as [`ZmqError::Wire`
 
 On DEALER/ROUTER a request has the same three frames, and its answer travels behind the requester's identity, as [Envelope](./envelope.md) shows.
 
+[Peers in other languages](../../guides/interop.md) feeds, watches and asks a service from Python peers.
+
 ## Example
 
 ```text

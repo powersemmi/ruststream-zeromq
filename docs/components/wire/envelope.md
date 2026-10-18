@@ -20,6 +20,8 @@ The ROUTER takes the identity frame off to route it, so the DEALER reads three f
 The requester matches the answer to its request by that id, because frame 0 is the same on every answer.
 The `correlation-id` reaches the answer through the responder's [transform](../request-reply/responders.md).
 
+[Peers in other languages](../../guides/interop.md) asks a responder from a Python DEALER.
+
 ## Example
 
 A Python requester:

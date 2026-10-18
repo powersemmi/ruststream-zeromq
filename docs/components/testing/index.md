@@ -31,6 +31,8 @@ The socket's refusals hold too: a publish a bound queue would hand back to its o
 [Settlement](../settlement/index.md) is the socket's as well, so a handler that settles by a plain retry fails its test instead of losing its message in production.
 What only sockets show, such as the [read-ahead](../subscriptions/read-ahead.md) bound or a port another process holds, is for a [live test](./live.md).
 
+[Testing a ZeroMQ service](../../guides/testing.md) tests a worker in process, with its delays on a paused clock.
+
 ## Example
 
 The dependency line:

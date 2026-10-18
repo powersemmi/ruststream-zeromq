@@ -22,6 +22,8 @@ When the broker connects, an address with any other scheme fails startup with [`
 The endpoint and its side are the whole configuration of a broker.
 The ZeroMQ implementation carries no CURVE or ZAP layer, so traffic is neither authenticated nor encrypted: a service runs on a trusted network or inside a tunnel.
 
+[Running in production](../../../guides/production.md) reads the endpoints from the environment.
+
 ## Example
 
 A worker listens on a socket file for the producers on its host, and pushes its results to a collector it dials over the network.

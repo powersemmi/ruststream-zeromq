@@ -27,7 +27,7 @@ ZeroMQ has no server between services, so the deployment decides what a broker w
 </TabItem>
 </Tabs>
 
-The endpoints and the read-ahead bound are the service's whole ZeroMQ configuration.
+The [endpoints](../components/broker/endpoint/index.md) and the read-ahead bound are the service's whole ZeroMQ configuration.
 `Settings` reads them from the environment the deployment sets, with a default for each.
 `from_vars` takes the lookup as a function, so a test passes its own values without touching the process environment.
 

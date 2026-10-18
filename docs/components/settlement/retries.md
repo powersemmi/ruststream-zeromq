@@ -25,6 +25,8 @@ On a queue the service [binds](../broker/endpoint/bind.md), a copy goes back int
 The copy carries the bytes of the delivery, so a codec named at the retry position encodes nothing.
 A `.transform(..)` there reads the delivery it retries, which is where a service marks a redelivery.
 
+[Retries and dead letters](../../guides/retries.md) retries a failed job into its own queue with a cap.
+
 ## Example
 
 A job that fails gets five deliveries, 30 seconds apart, and each copy returns to the queue the worker binds.

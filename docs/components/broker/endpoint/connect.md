@@ -20,6 +20,8 @@ For the same reason a dialing subscription's [retry copies](../../settlement/out
 
 A broker that only publishes, such as a worker's link to the sink that collects its results, dials and sends as usual.
 
+[Pipelines with PUSH/PULL](../../../guides/pipelines.md) runs workers that dial both the ventilator and the sink.
+
 ## Example
 
 A pipeline worker dials both ends: the ventilator it pulls jobs from and the sink it pushes results to.

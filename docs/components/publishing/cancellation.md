@@ -24,6 +24,8 @@ Dropping a [request](../request-reply/index.md) closes the DEALER socket it went
 So a handler gives up on a request through its timeout, which ends the wait cleanly and returns [`ZmqError::RequestTimeout`](../broker/errors.md).
 A fan-out publish or a reply that must not hold up other work runs in a task of its own rather than inside a `select!` arm.
 
+[Request and reply](../../guides/request-reply.md) gives up on a request through its timeout and asks again later.
+
 ## Example
 
 The handler asks the pricing service for a quote and waits at most two seconds.

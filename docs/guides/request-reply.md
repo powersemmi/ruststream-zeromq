@@ -42,7 +42,7 @@ The transform below replaces it for each request.
 
 A responder names where its [retry copies](../components/settlement/out-retry.md) go: `.out_retry(Publish).to("score.retry")`.
 A copy of a request has no address of its own, so a mount without it is refused at startup.
-A responder also takes no batches: `.batch(..)` on it does not compile, because each answer goes to its own peer.
+A responder also takes no [batches](../components/subscriptions/batches.md): `.batch(..)` on it does not compile, because each answer goes to its own peer.
 
 ## The transform
 
@@ -95,7 +95,7 @@ The `scoring` broker dials the scoring service and has no subscription; it only 
 ## Timeouts
 
 A request that gets no answer in `ASK_TIMEOUT` fails with [`ZmqError::RequestTimeout`](../components/broker/errors.md).
-`check` then returns `retry_after(ASK_AGAIN)`, and the order comes back ten seconds later.
+`check` then returns [`retry_after(ASK_AGAIN)`](../components/settlement/retries.md), and the order comes back ten seconds later.
 `max_attempts` caps the tries at three.
 This is the Lazy Pirate pattern of the [ZeroMQ guide](https://zguide.zeromq.org/docs/chapter4/#Client-Side-Reliability-Lazy-Pirate-Pattern), with the framework keeping the count.
 A request that timed out may still have reached the responder, so a request must be safe to send twice.

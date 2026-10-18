@@ -16,6 +16,8 @@ When the reply position carries a transform that names the destination, as a [re
 The receive operation's `reply.address.location` is `$message.header#/reply-to`, the header the ROUTER stamps on each request.
 The channel keeps the fallback name from `reply("..")` as its key.
 
+[Peers in other languages](../../guides/interop.md) asks such a responder from a Python DEALER.
+
 ## Example
 
 The greeter's answer names no destination, and a transform names it per request.

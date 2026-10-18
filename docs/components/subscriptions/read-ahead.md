@@ -23,6 +23,8 @@ Every subscription mounted on the broker reads with that bound, and a clone of t
 
 The in-process transport hands deliveries over without a bound, so a test sees the bound only over sockets, in a [live test](../testing/live.md).
 
+[Running in production](../../guides/production.md) sets the bound from the environment.
+
 ## Example
 
 Each frame takes the renderer seconds, so it reads four frames ahead and leaves the rest with the sender.

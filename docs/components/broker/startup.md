@@ -23,6 +23,8 @@ A [publisher](../publishing/index.md) attaches its socket on its first publish, 
 The sockets attach, and their drivers run, on the runtime the broker connected on.
 So a handler that runs on threads of its own, mounted with `threads(n)`, publishes through the same sockets as every other handler.
 
+[Running in production](../../guides/production.md) covers the order in which services start.
+
 ## Example
 
 The worker binds the address `service` takes, and opens it when the runtime starts the subscription.

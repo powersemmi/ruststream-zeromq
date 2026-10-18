@@ -25,6 +25,8 @@ A [`ZmqRpc`](../broker/zmq-rpc.md) responder takes no batches, and `.batch(..)` 
 A responder answers each request at the peer that sent it, while a batch carries one publish context for all of its replies.
 The compile error names `ZmqRpcSubscriber`, which implements no [`BatchSubscriber`](api:ruststream::BatchSubscriber).
 
+[Pipelines with PUSH/PULL](../../guides/pipelines.md) runs a sink that collects results in batches.
+
 ## Example
 
 Three jobs pushed at once arrive in one call.

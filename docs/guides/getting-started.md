@@ -60,7 +60,7 @@ Two processes talk to each other directly, over `tcp://` or over `ipc://`, a Uni
 It acknowledges a job with items and drops one without.
 [`ZmqQueue`](../components/broker/zmq-queue.md) is the PUSH/PULL pattern: each job reaches one worker.
 [`ZmqEndpoint::bind`](../components/broker/endpoint/bind.md) says that this process listens on the address.
-`ZmqQueue::new` only records the endpoint; the socket opens when the service starts.
+`ZmqQueue::new` only records the endpoint; the socket opens when the service [starts](../components/broker/startup.md).
 `#[ruststream::app]` turns `app` into `main`; in the manual form, [`run_main`](api:ruststream::runtime::cli::run_main) does the same.
 
 Run the service:

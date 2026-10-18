@@ -23,6 +23,8 @@ A publish, `settle` and `advance` wait on the real clock until every subscriptio
 
 The live mode is for what the in-process transport leaves out: the [read-ahead](../subscriptions/read-ahead.md) bound and the back-pressure it puts on a sender, a port another process holds, and the frames a peer in another language sends.
 
+[Testing a ZeroMQ service](../../guides/testing.md) runs the same test in process and over sockets.
+
 ## Example
 
 The two tests share one body: one in process, one over loopback sockets.

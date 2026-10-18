@@ -16,6 +16,7 @@ A mount site names it wherever a registration publishes: `.out_reply(Publish)` f
 The policy holds no connection.
 At startup the runtime pairs it with the connected broker into a live publisher, such as [`ZmqQueuePublisher`](api:ruststream_zeromq::queue::ZmqQueuePublisher).
 To publish through another broker of the service, the mount site binds the policy to it with `bindable()` and `.bind(Publish)`.
+[Pipelines with PUSH/PULL](../../guides/pipelines.md) publishes a worker's results to a sink this way.
 
 A publish sends the message as the [three frames](../wire/index.md): its name, its headers and the payload the codec wrote.
 The payload frame is the buffer the codec wrote, so a payload of any size is sent without a copy.

@@ -25,6 +25,8 @@ A delivery reports no [`redelivery_count`](api:ruststream::IncomingMessage::rede
 Delivery is at most once, as [Settlement](../../architecture/settlement.md) draws.
 A process that stops loses what its subscriptions had read and not yet handled, and every copy still waiting out its delay.
 
+[Retries and dead letters](../../guides/retries.md) retries jobs and parks failed invoices on a transport that delivers at most once.
+
 ## Example
 
 A payment of nothing is dropped.

@@ -19,6 +19,8 @@ A publisher can outlive the broker: one a startup hook kept, one a sibling task 
 After shutdown, a publish through it returns `ZmqError::NotConnected` and sends nothing.
 An answer and a request after shutdown fail the same way.
 
+[Running in production](../../guides/production.md) covers what a service does at shutdown.
+
 ## Example
 
 The service announces on a fan-out that it has started.

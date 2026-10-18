@@ -20,6 +20,8 @@ A peer reads from it what to send to reach the channel and, on PUB/SUB, which pr
 A [responder](../request-reply/responders.md)'s reply channel reports no `nameFrame`.
 An answer travels to the identity the ROUTER supplies, and its frame 0 always holds `reply`, so the channel's own name reaches no peer.
 
+[Peers in other languages](../../guides/interop.md) shows which frame 0 a peer sends or subscribes with.
+
 ## Example
 
 The worker's results go to `results` over PUSH/PULL, so the channel reports `nameFrame: results`.

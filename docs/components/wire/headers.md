@@ -21,6 +21,8 @@ A peer's header frame that is not UTF-8, or a line without `:`, fails the messag
 Blank lines are skipped, so a peer that ends the frame with a newline interoperates.
 A name and a value are trimmed of surrounding whitespace on receipt.
 
+[Peers in other languages](../../guides/interop.md) composes the header frame from a Python peer.
+
 ## Example
 
 A Python peer writes the frame by hand:

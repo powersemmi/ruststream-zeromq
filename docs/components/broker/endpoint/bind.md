@@ -25,6 +25,8 @@ When a subscription of the same broker binds the endpoint later, the publisher g
 So a handler that publishes into a queue whose subscription opens after its own reaches that subscription once it is open.
 On a bound endpoint that a subscription of this service reads, a [`ZmqQueue`](../zmq-queue.md) publisher sends only under the subscription's own name.
 
+[Pipelines with PUSH/PULL](../../../guides/pipelines.md) decides which side of a pipeline binds.
+
 ## Example
 
 A worker listens for jobs on one endpoint and for reports on another.

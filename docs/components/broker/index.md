@@ -29,6 +29,8 @@ Each pattern's publish policy is also the default of its connected form.
 So a reply handler mounted with no publish position answers through its own pattern.
 Each pattern's [prelude](./prelude.md) offers its policy as `Publish`, so moving a service to another pattern changes its import line and leaves the mount site as it is.
 
+[Getting started](../../guides/getting-started.md) runs a first worker on a queue and feeds it from a Python peer.
+
 ## Example
 
 A worker stage of a pipeline binds `tcp://0.0.0.0:5555`, and any peer that pushes the three [frames](../wire/index.md) feeds it.

@@ -26,6 +26,8 @@ The name in `reply("reply")` is the fallback that the [document](../asyncapi/rep
 An answer whose requester has gone is refused with `ZmqError::Send`, naming the reply address: the ROUTER holds no peer under that identity.
 A responder addresses no retry copies of its own, so every responder mount names where they go with [`.out_retry(Publish).to("..")`](../settlement/out-retry.md).
 
+[Request and reply](../../guides/request-reply.md) builds a scoring responder with this transform.
+
 ## Example
 
 The greeter answers each request at the peer that sent it.

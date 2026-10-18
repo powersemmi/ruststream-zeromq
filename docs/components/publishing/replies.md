@@ -24,6 +24,8 @@ The worker sends its replies through a second broker instead: an endpoint the si
 On `ZmqFanout` a reply on the fan-out the subscription reads reaches every subscription of the service whose name is a prefix of the reply's name, its own included when it matches.
 On `ZmqRpc` a reply goes back to the peer that asked, as [Responders](../request-reply/responders.md) shows.
 
+[Pipelines with PUSH/PULL](../../guides/pipelines.md) sends a worker's results to the sink this way.
+
 ## Example
 
 The worker binds `tcp://0.0.0.0:5555` for its jobs and dials the sink at `tcp://sink:5556` for its results.

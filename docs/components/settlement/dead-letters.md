@@ -23,6 +23,8 @@ So a dead letter leaves through a publisher on another endpoint, set with `.out_
 The retry copies leave through that publisher as well, so such a mount sends every failed delivery to the dead letters, with no retry first.
 A handler that should see its retries again keeps `.out_retry(..)` on its own endpoint and declares no dead-letter name.
 
+[Retries and dead letters](../../guides/retries.md) parks failed invoices on a queue of their own.
+
 ## Example
 
 A job that fails leaves for a second queue the service binds, where `park` reads it under `jobs.dead`.

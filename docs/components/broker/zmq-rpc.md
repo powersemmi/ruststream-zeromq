@@ -29,6 +29,8 @@ Every responder mount names where they go, with [`.out_retry(policy).to("..")`](
 A plain name reaches no peer on DEALER/ROUTER.
 A service that wants the copies to arrive sends them through a queue on another broker; a service that does not names a destination to say so and lets the requester ask again.
 
+[Request and reply](../../guides/request-reply.md) builds a scoring responder and a checkout service that asks it.
+
 ## Example
 
 A greeter binds `tcp://0.0.0.0:5557` and answers each request at the peer that asked.

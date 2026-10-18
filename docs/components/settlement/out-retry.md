@@ -25,6 +25,8 @@ Both hold for a mount that never asks for a retry, because the runtime pairs the
 Every [`ZmqRpc`](../broker/zmq-rpc.md) responder names a destination too.
 A request has no address a copy could return to: answers travel to the identity of the peer that asked, and the [reply publisher](../request-reply/responders.md) refuses a plain name.
 
+[Retries and dead letters](../../guides/retries.md) mounts both forms, a worker that binds and a worker that dials.
+
 ## Example
 
 The worker dials a ventilator and sends its copies to a queue it binds itself, where the same handler takes them.

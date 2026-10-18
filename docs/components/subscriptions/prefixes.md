@@ -23,6 +23,8 @@ A message this service publishes to its own bound fan-out is matched the same wa
 
 In the [generated document](../asyncapi/channels.md), a fan-out publish channel reports `nameFrame`: the prefix a SUB peer subscribes with to receive it.
 
+[Broadcast with PUB/SUB](../../guides/broadcast.md) runs a watcher that subscribes to every job announcement by prefix.
+
 ## Example
 
 The auditor reads every order event and leaves the archive records alone.

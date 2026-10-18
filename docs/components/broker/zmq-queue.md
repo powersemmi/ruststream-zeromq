@@ -29,6 +29,8 @@ A [retry copy](../settlement/retries.md) is a message this service publishes.
 On a bound queue the copy goes back into the queue, and whichever worker is free takes it.
 A queue that [dials](./endpoint/connect.md) reads from a ventilator that takes nothing back, so its mount site names where the copies go; [`out_retry`](../settlement/out-retry.md) covers both forms.
 
+[Pipelines with PUSH/PULL](../../guides/pipelines.md) builds a ventilator, competing workers and a sink on it.
+
 ## Example
 
 Two workers dial one ventilator, and each job it pushes reaches one of them.

@@ -58,7 +58,7 @@ On a fan-out the subscription name is a [prefix](../components/subscriptions/pre
 `ctx.name()` is the name the message arrived under.
 Every watcher that dials the announcer receives its own copy of each announcement.
 
-The watcher dials, so its mount names where retry copies go, even though `watch` never asks for a retry.
+The watcher dials, so its mount names where [retry copies](../components/settlement/out-retry.md) go, even though `watch` never asks for a retry.
 The copies go to a queue the watcher binds for itself, and the same handler reads it.
 [Retries and dead letters](retries.md) covers this rule.
 

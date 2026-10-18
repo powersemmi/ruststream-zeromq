@@ -21,6 +21,8 @@ The `x-ruststream-zeromq` extension of the server holds three fields.
 `endpoint` is the same coordinate as `host`.
 `role` is `bind` when this service [listens](../broker/endpoint/bind.md) on the endpoint and `connect` when it dials it, so a peer reads which side it takes.
 
+[Peers in other languages](../../guides/interop.md) reads the address and the side of each server from the document.
+
 ## Example
 
 The worker dials the dispatcher at `worker:5555`, and the greeter listens on every interface at port 5557.

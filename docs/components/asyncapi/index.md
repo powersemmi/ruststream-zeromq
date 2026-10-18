@@ -20,6 +20,8 @@ A responder's reply channel has no address, and the operation points a client at
 Everything comes from the service's own declarations: the brokers, their endpoints and the destinations the mount sites resolved.
 The binary `#[ruststream::app]` writes prints the document with `asyncapi gen`.
 
+[Peers in other languages](../../guides/interop.md) reads from the document how a peer joins each channel.
+
 ## Example
 
 The dependency line:

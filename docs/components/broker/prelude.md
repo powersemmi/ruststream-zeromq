@@ -24,6 +24,8 @@ It also carries the three brokers, `RequestReply` and the modules `queue`, `fano
 A handler body bounds its injected publisher with a core capability, such as `Out<impl Publisher, Slot>`, and imports `ruststream::prelude::*` alone.
 A ZeroMQ send takes the frames alone, so a handler body stays on the core's prelude, whichever pattern it runs on.
 
+[Broadcast with PUB/SUB](../../guides/broadcast.md) mounts a queue and a fan-out in one file with the crate's prelude.
+
 ## Example
 
 A worker takes jobs from a queue and announces each finished job on a fan-out, so the routes file imports the crate's prelude.

@@ -64,7 +64,7 @@ The `ventilator` broker dials the ventilator, and its subscription reads the job
 Workers that dial one ventilator compete: PUSH hands each job to one worker, in turn.
 
 The results leave through a second broker, `sink`, which dials the sink.
-`bindable()` turns a broker into one that publish policies can be bound to, and `sink.bind(Publish)` is a policy that publishes through it.
+[`bindable()`](../components/publishing/index.md) turns a broker into one that publish policies can be bound to, and `sink.bind(Publish)` is a policy that publishes through it.
 `.out_reply(results)` sends every `Done` there.
 The worker cannot reply through the `ventilator` broker: the ventilator only sends, so the broker refuses every publish once its subscription has dialed.
 [Replies](../components/publishing/replies.md) covers the refusals.
