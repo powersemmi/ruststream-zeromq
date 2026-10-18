@@ -514,9 +514,11 @@ identity frame in front of it addresses the peer that asked.
 Headers are text, and nothing is guessed in either direction. A two-frame message from a minimal
 peer reads as headerless, and a blank line inside the header frame is skipped, so a peer that ends
 its lines with a newline interoperates. Publishing a header value that is not UTF-8 returns an error
-naming the header, because a text frame cannot hold it. A header frame that is not UTF-8, a name
-frame that is not UTF-8, and a header line with no `:` each return
-[`ZmqError::Wire`](ZmqError::Wire) rather than losing the header silently.
+naming the header, because a text frame cannot hold it. So does a header that would read back as
+something else: a line break in its name or value, a `:` in its name, or whitespace at either end of
+either, which the reader trims. A header frame that is not UTF-8, a name frame that is not UTF-8,
+and a header line with no `:` each return [`ZmqError::Wire`](ZmqError::Wire) rather than losing the
+header silently.
 
 The payload frame is whatever the framework's codec produced, so the peer only has to agree on the
 codec: with the default JSON codec it is the document a handler's input type deserializes from.
