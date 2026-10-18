@@ -19,7 +19,7 @@ export const words = {
   "publishers": ["发布者：一个套接字，", "在第一次发布时", "接入"],
   "brokers": ["ZmqQueue、ZmqFanout、", "ZmqRpc"],
   "lifecycle": ["共享状态：", "端点、已绑定的", "监听器、关闭标记"],
-  "wire": ["帧布局", "名称、头部、载荷"],
+  "wire": ["帧布局", "名称、消息头、载荷"],
   "client": "zeromq 客户端",
   "receiving": ["PULL、SUB、ROUTER"],
   "sending": ["PUSH、PUB、XPUB、", "ROUTER、DEALER"],
