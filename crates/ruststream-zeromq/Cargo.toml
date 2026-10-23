@@ -11,6 +11,8 @@ authors.workspace = true
 readme = "../../README.md"
 keywords = ["zeromq", "zmq", "messaging", "broker", "ruststream"]
 categories = ["asynchronous", "network-programming"]
+# Every file under `tests/` is a module of one test binary: one link instead of one per file.
+autotests = false
 
 [lints]
 workspace = true
@@ -55,6 +57,10 @@ trybuild = "1.0.121"
 
 [package.metadata.docs.rs]
 all-features = true
+
+[[test]]
+name = "suite"
+path = "tests/main.rs"
 
 # --- examples: broker ---
 [[example]]
