@@ -114,7 +114,7 @@ mod tests {
     fn ipc(label: &str) -> (String, PathBuf) {
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let path = env::temp_dir().join(format!(
-            "zmq-wire-{label}-{}-{}.sock",
+            "zmq-wire-manual-{label}-{}-{}.sock",
             process::id(),
             SEQ.fetch_add(1, Ordering::Relaxed),
         ));
@@ -139,6 +139,9 @@ mod tests {
         peer.send(frames).await?;
         let result = timeout(ROUND_TRIP, results.recv()).await??;
 
+        // The peer reads the answer before the handler has returned, and the harness records
+        // the call when it returns: settling waits for that.
+        tb.settle().await?;
         tb.broker::<ZmqQueue>()
             .subscriber("jobs")
             .assert_called_once()

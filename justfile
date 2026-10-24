@@ -22,7 +22,11 @@ check:
 
 # The compile-fail snapshots run here too: the toolchain file pins stable, the one they record.
 test:
-    RUN_UI_TESTS=1 REQUIRE_UI_TESTS=1 cargo test --workspace --all-features
+    # The examples' tests are modules of one test binary, so `--tests` builds none per example;
+    # `check` compiles every example on its own. `--tests` leaves the doc examples out, so they
+    # run on their own line.
+    RUN_UI_TESTS=1 REQUIRE_UI_TESTS=1 cargo test --workspace --all-features --tests
+    cargo test --workspace --all-features --doc
 
 # What this crate costs over the zeromq client it wraps: two scenarios, each run as a RustStream
 # service and as a hand-written socket loop. There is no stand to start - ZeroMQ has no broker, so

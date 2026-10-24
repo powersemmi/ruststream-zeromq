@@ -10,7 +10,7 @@
 //! snapshots after an intentional message change, run on stable and read the diff:
 //!
 //! ```text
-//! TRYBUILD=overwrite RUN_UI_TESTS=1 cargo test -p ruststream-zeromq --all-features --test ui
+//! TRYBUILD=overwrite RUN_UI_TESTS=1 cargo test -p ruststream-zeromq --all-features --test suite ui::
 //! ```
 
 /// Whether this run skips the snapshots, and whether skipping them is allowed.
