@@ -172,6 +172,9 @@ mod tests {
             },
         );
 
+        // The peer reads the answer before the handler has returned, and the harness records
+        // the call when it returns: settling waits for that.
+        tb.settle().await?;
         tb.broker::<ZmqRpc>()
             .subscriber("greeter")
             .assert_called_once()

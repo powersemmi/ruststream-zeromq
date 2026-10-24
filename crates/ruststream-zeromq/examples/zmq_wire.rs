@@ -101,6 +101,9 @@ mod tests {
         peer.send(frames).await?;
         let result = timeout(ROUND_TRIP, results.recv()).await??;
 
+        // The peer reads the answer before the handler has returned, and the harness records
+        // the call when it returns: settling waits for that.
+        tb.settle().await?;
         tb.broker::<ZmqQueue>()
             .subscriber("jobs")
             .assert_called_once()
