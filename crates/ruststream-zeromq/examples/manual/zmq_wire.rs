@@ -114,7 +114,7 @@ mod tests {
     fn ipc(label: &str) -> (String, PathBuf) {
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let path = env::temp_dir().join(format!(
-            "zmq-wire-{label}-{}-{}.sock",
+            "zmq-wire-manual-{label}-{}-{}.sock",
             process::id(),
             SEQ.fetch_add(1, Ordering::Relaxed),
         ));
