@@ -729,6 +729,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ruststream-example-suite"
+version = "0.0.0"
+source = "git+https://github.com/powersemmi/ruststream?branch=main#c87b3de83e65677b1f319493fcc8bf0311fabfc7"
+dependencies = [
+ "toml",
+]
+
+[[package]]
 name = "ruststream-macros"
 version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -748,6 +756,7 @@ dependencies = [
  "bytes",
  "futures",
  "ruststream",
+ "ruststream-example-suite",
  "selfie",
  "serde",
  "serde_json",
