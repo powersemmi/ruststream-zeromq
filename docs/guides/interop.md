@@ -47,6 +47,7 @@ frame 2: payload   what the codec wrote; JSON by default
 
 A peer that sends two frames, the name and the payload, sends a message with no headers.
 A peer that sends one frame, as a plain ZeroMQ application does, sends that frame as the payload, with an empty name; on PUB/SUB the prefix is matched against it.
+A message of more than three frames fails the delivery with `ZmqError::Wire`.
 A blank line in the header frame is skipped, so a line that ends with a newline is fine.
 A header frame or a name that is not UTF-8, or a header line with no `:`, fails the delivery with [`ZmqError::Wire`](../components/wire/headers.md) on the subscription.
 The service checks the headers it publishes, so that each reads back unchanged: a header that is not text, holds a line break, has a `:` in its name, or starts or ends with whitespace fails the publish with `ZmqError::Send`, naming the header and the destination.

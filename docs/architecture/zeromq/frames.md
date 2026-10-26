@@ -61,7 +61,7 @@ This crate puts three frames in every message. Frame 0 is the name, frame 1 the
 composes one with a single multipart send, as the [wire format](../../components/wire/index.md)
 shows. A message of two frames is read as a name and a payload with no headers. A message of
 one frame, what a plain ZeroMQ peer sends, is read as the payload with an empty name, and a SUB
-matches its prefix against that frame.
+matches its prefix against that frame. A message of more frames is refused as a wire error.
 
 The payload frame is the buffer the codec wrote, not a copy of it. Each publisher of this crate
 takes the bytes the runtime encoded, and a frame owns its bytes, so the buffer becomes the frame.

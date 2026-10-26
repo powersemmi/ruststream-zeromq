@@ -8,6 +8,7 @@
 //!
 //! Two frames are a name and a payload, with no headers. One frame is a plain `ZeroMQ` message,
 //! the frame a SUB matched its prefix against: it is the payload, whole, and the name is empty.
+//! A message of more than three frames is refused with a wire error.
 //!
 //! A Python peer composes a message as
 //! `socket.send_multipart([b"orders", b"content-type: application/json", payload])`.
@@ -196,16 +197,21 @@ pub(crate) fn read_delivery(message: WireMessage) -> Option<Result<ZmqMessage, Z
 ///
 /// Three frames are the layout; two are a name and a payload with no headers. One frame is the
 /// message a plain `ZeroMQ` peer sends, and the frame a SUB matched its prefix against: it is the
-/// payload, whole, with an empty name and no headers.
+/// payload, whole, with an empty name and no headers. A message of more frames has no place for
+/// the frames past the payload and is refused with a wire error, so no frame is dropped.
 pub(crate) fn decode(message: WireMessage) -> Result<(String, HeaderMap, Bytes), ZmqError> {
     let mut frames = message.into_vecdeque();
+    let count = frames.len();
     match (frames.pop_front(), frames.pop_front(), frames.pop_front()) {
         (Some(payload), None, None) => Ok((String::new(), HeaderMap::new(), payload)),
         (Some(name), Some(payload), None) => Ok((decode_name(&name)?, HeaderMap::new(), payload)),
-        (Some(name), Some(headers), Some(payload)) => {
+        (Some(name), Some(headers), Some(payload)) if frames.is_empty() => {
             Ok((decode_name(&name)?, decode_headers(&headers)?, payload))
         }
-        _ => Err(ZmqError::Wire("a message needs at least one frame".into())),
+        _ => Err(ZmqError::Wire(format!(
+            "a message of {count} frames does not follow the layout of one to three frames \
+             (name, headers, payload)"
+        ))),
     }
 }
 
@@ -305,6 +311,23 @@ mod tests {
             assert_eq!(headers, HeaderMap::new());
             assert_eq!(payload.as_ref(), frame, "the single frame is the payload");
         }
+    }
+
+    /// The layout holds one payload frame, so a frame past it has nowhere to go: the message is
+    /// refused, naming how many frames it had, rather than read with its tail cut off.
+    #[test]
+    fn a_frame_past_the_payload_is_refused() {
+        let mut message = zeromq::ZmqMessage::from("orders");
+        message.push_back(Bytes::new());
+        message.push_back(Bytes::from_static(b"part one"));
+        message.push_back(Bytes::from_static(b"part two"));
+        let err = decode(message)
+            .expect_err("a fourth frame is not part of the layout")
+            .to_string();
+        assert!(
+            err.contains("4 frames"),
+            "the error names the count, got: {err}"
+        );
     }
 
     #[test]

@@ -368,6 +368,43 @@ async fn a_single_frame_request_from_a_plain_dealer_is_the_payload() {
     connected.shutdown().await.expect("shutdown succeeds");
 }
 
+/// The layout ends at the payload frame. A message with more frames is refused on the
+/// subscription, naming how many it had, instead of arriving with its tail cut off.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_frame_past_the_payload_is_refused_on_the_subscription() {
+    let connected = ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"))
+        .connect()
+        .await
+        .expect("queue connects");
+    let mut subscriber = connected
+        .subscribe("orders")
+        .await
+        .expect("subscription opens");
+    let address = connected.bound_address().expect("subscription bound");
+
+    let mut raw = zeromq::PushSocket::new();
+    raw.connect(&address).await.expect("raw peer connects");
+    let mut frames = zeromq::ZmqMessage::from("orders");
+    frames.push_back(bytes::Bytes::new());
+    frames.push_back(bytes::Bytes::from_static(b"part one"));
+    frames.push_back(bytes::Bytes::from_static(b"part two"));
+    raw.send(frames).await.expect("raw send succeeds");
+
+    let mut stream = pin!(subscriber.stream());
+    let err = tokio::time::timeout(RECV_TIMEOUT, stream.next())
+        .await
+        .expect("the subscription answers")
+        .expect("the stream is open")
+        .expect_err("a fourth frame is not part of the layout")
+        .to_string();
+    assert!(
+        err.contains("4 frames"),
+        "the error names the count, got: {err}"
+    );
+
+    connected.shutdown().await.expect("shutdown succeeds");
+}
+
 /// A unique `ipc://` endpoint for one test, so a run leaves nothing behind and two runs do not
 /// collide. `ipc` is the second transport the crate supports and the one that needs no port.
 fn ipc_endpoint(label: &str) -> (String, PathBuf) {
