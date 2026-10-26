@@ -6,6 +6,9 @@
 //! frame 2: payload   encoded by the framework's codec
 //! ```
 //!
+//! Two frames are a name and a payload, with no headers. One frame is a plain `ZeroMQ` message,
+//! the frame a SUB matched its prefix against: it is the payload, whole, and the name is empty.
+//!
 //! A Python peer composes a message as
 //! `socket.send_multipart([b"orders", b"content-type: application/json", payload])`.
 //!
@@ -189,23 +192,27 @@ pub(crate) fn read_delivery(message: WireMessage) -> Option<Result<ZmqMessage, Z
     Some(decode(message).map(|(name, headers, payload)| ZmqMessage::new(name, headers, payload)))
 }
 
-/// Splits a received message into (name, headers, payload), tolerating a missing header
-/// frame (a two-frame message from a minimal peer).
+/// Splits a received message into (name, headers, payload).
+///
+/// Three frames are the layout; two are a name and a payload with no headers. One frame is the
+/// message a plain `ZeroMQ` peer sends, and the frame a SUB matched its prefix against: it is the
+/// payload, whole, with an empty name and no headers.
 pub(crate) fn decode(message: WireMessage) -> Result<(String, HeaderMap, Bytes), ZmqError> {
     let mut frames = message.into_vecdeque();
-    let name = frames
-        .pop_front()
-        .ok_or_else(|| ZmqError::Wire("a message needs at least a name frame".into()))?;
-    let name = std::str::from_utf8(&name)
-        .map_err(|_| ZmqError::Wire("the name frame must be UTF-8".into()))?
-        .to_owned();
-    let (headers, payload) = match (frames.pop_front(), frames.pop_front()) {
-        (Some(headers), Some(payload)) => (decode_headers(&headers)?, payload),
-        (Some(payload), None) => (HeaderMap::new(), payload),
-        (None, None) => (HeaderMap::new(), Bytes::new()),
-        (None, Some(_)) => unreachable!("pop_front cannot skip"),
-    };
-    Ok((name, headers, payload))
+    match (frames.pop_front(), frames.pop_front(), frames.pop_front()) {
+        (Some(payload), None, None) => Ok((String::new(), HeaderMap::new(), payload)),
+        (Some(name), Some(payload), None) => Ok((decode_name(&name)?, HeaderMap::new(), payload)),
+        (Some(name), Some(headers), Some(payload)) => {
+            Ok((decode_name(&name)?, decode_headers(&headers)?, payload))
+        }
+        _ => Err(ZmqError::Wire("a message needs at least one frame".into())),
+    }
+}
+
+fn decode_name(frame: &[u8]) -> Result<String, ZmqError> {
+    std::str::from_utf8(frame)
+        .map(str::to_owned)
+        .map_err(|_| ZmqError::Wire("the name frame must be UTF-8".into()))
 }
 
 #[cfg(test)]
@@ -284,6 +291,20 @@ mod tests {
         assert_eq!(name, "orders");
         assert_eq!(headers, HeaderMap::new());
         assert_eq!(payload.as_ref(), b"raw");
+    }
+
+    /// A plain `ZeroMQ` peer sends its message as one frame, and a SUB matches its prefix against
+    /// that frame. The frame is the payload, whole, as a plain receiver reads it; there is no name
+    /// frame, so the name is empty, and the bytes need not be text.
+    #[test]
+    fn a_single_frame_is_the_payload() {
+        for frame in [&b"orders{\"id\":7}"[..], &[0xff, 0x00, 0xfe][..]] {
+            let message = zeromq::ZmqMessage::from(Bytes::copy_from_slice(frame));
+            let (name, headers, payload) = decode(message).expect("a single frame decodes");
+            assert_eq!(name, "", "a single frame carries no name frame");
+            assert_eq!(headers, HeaderMap::new());
+            assert_eq!(payload.as_ref(), frame, "the single frame is the payload");
+        }
     }
 
     #[test]

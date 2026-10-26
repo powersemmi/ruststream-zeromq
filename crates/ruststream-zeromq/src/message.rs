@@ -55,7 +55,8 @@ impl ZmqMessage {
         self
     }
 
-    /// The name frame this message carried.
+    /// The name frame this message carried, empty for a message of one frame, which a plain
+    /// `ZeroMQ` peer sends as its payload alone.
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name

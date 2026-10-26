@@ -249,6 +249,125 @@ async fn wire_layout_is_stable_for_foreign_peers() {
     connected.shutdown().await.expect("shutdown succeeds");
 }
 
+/// A plain `ZeroMQ` peer sends its message as one frame. That frame is the payload, whole, and
+/// the delivery has no name frame, so its name is empty.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_single_frame_from_a_plain_push_is_the_payload() {
+    let connected = ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"))
+        .connect()
+        .await
+        .expect("queue connects");
+    let mut subscriber = connected
+        .subscribe("orders")
+        .await
+        .expect("subscription opens");
+    let address = connected.bound_address().expect("subscription bound");
+
+    let mut raw = zeromq::PushSocket::new();
+    raw.connect(&address).await.expect("raw peer connects");
+    raw.send(zeromq::ZmqMessage::from("{\"id\":2}"))
+        .await
+        .expect("raw send succeeds");
+
+    let mut stream = pin!(subscriber.stream());
+    let message = tokio::time::timeout(RECV_TIMEOUT, stream.next())
+        .await
+        .expect("delivery arrives")
+        .expect("stream is open")
+        .expect("delivery is ok");
+    assert_eq!(
+        message.payload(),
+        b"{\"id\":2}",
+        "the single frame is the payload"
+    );
+    assert_eq!(message.name(), "", "a single frame carries no name frame");
+    assert!(message.headers().is_empty());
+
+    connected.shutdown().await.expect("shutdown succeeds");
+}
+
+/// A SUB matches its prefix against frame 0, and a plain PUB's single frame is its whole
+/// message: the subscription receives that frame, prefix included, as the payload, the way a
+/// plain SUB reads it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_single_frame_from_a_plain_pub_is_the_payload_its_prefix_matched() {
+    let connected = ZmqFanout::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"))
+        .connect()
+        .await
+        .expect("fanout connects");
+    let mut subscriber = connected
+        .subscribe("orders.eu")
+        .await
+        .expect("subscription opens");
+    let address = connected.bound_address().expect("subscription bound");
+
+    let mut raw = zeromq::PubSocket::new();
+    raw.connect(&address).await.expect("raw peer connects");
+    let mut stream = pin!(subscriber.stream());
+    // A PUB drops what it sends before the subscription's filter has reached it, so the peer
+    // repeats the frame until one arrives.
+    let mut received = None;
+    for _ in 0..50 {
+        raw.send(zeromq::ZmqMessage::from("orders.eu 7"))
+            .await
+            .expect("raw send succeeds");
+        if let Ok(Some(next)) =
+            tokio::time::timeout(Duration::from_millis(100), stream.next()).await
+        {
+            received = Some(next.expect("delivery is ok"));
+            break;
+        }
+    }
+    let message = received.expect("the frame its prefix matched reaches the subscription");
+    assert_eq!(
+        message.payload(),
+        b"orders.eu 7",
+        "the single frame is the payload"
+    );
+    assert_eq!(message.name(), "", "a single frame carries no name frame");
+
+    connected.shutdown().await.expect("shutdown succeeds");
+}
+
+/// A DEALER that sends one frame asks with that frame as the request's payload, and the ROUTER
+/// still addresses the answer by the identity in front of it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_single_frame_request_from_a_plain_dealer_is_the_payload() {
+    let connected = ZmqRpc::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"))
+        .connect()
+        .await
+        .expect("responder connects");
+    let mut subscriber = connected
+        .subscribe("score")
+        .await
+        .expect("subscription opens");
+    let address = connected.bound_address().expect("subscription bound");
+
+    let mut raw = zeromq::DealerSocket::new();
+    raw.connect(&address).await.expect("raw peer connects");
+    raw.send(zeromq::ZmqMessage::from("{\"amount\":3}"))
+        .await
+        .expect("raw send succeeds");
+
+    let mut stream = pin!(subscriber.stream());
+    let message = tokio::time::timeout(RECV_TIMEOUT, stream.next())
+        .await
+        .expect("delivery arrives")
+        .expect("stream is open")
+        .expect("delivery is ok");
+    assert_eq!(
+        message.payload(),
+        b"{\"amount\":3}",
+        "the single frame is the payload"
+    );
+    assert!(
+        message.headers().get_str("reply-to").is_some(),
+        "the answer is still addressed by the requester's identity",
+    );
+
+    connected.shutdown().await.expect("shutdown succeeds");
+}
+
 /// A unique `ipc://` endpoint for one test, so a run leaves nothing behind and two runs do not
 /// collide. `ipc` is the second transport the crate supports and the one that needs no port.
 fn ipc_endpoint(label: &str) -> (String, PathBuf) {
