@@ -16,6 +16,9 @@ This crate gives every message on PUSH/PULL and PUB/SUB the same three frames: t
 The name frame is the subscription's name on the fan-out, matched as a [prefix](../subscriptions/prefixes.md); a queue takes every message whatever its name says.
 The [header frame](./headers.md) is text, and an empty frame means no headers.
 A message of two frames, a name and a payload, reads as a message without headers, so a minimal peer can skip the middle frame.
+A message of one frame is what a plain ZeroMQ peer sends: that frame is the payload, whole, the name is empty and there are no headers.
+On the fan-out a SUB matches its prefix against that same frame, so a plain PUB's message reaches a subscription whose name prefixes it, and the handler reads the frame as it was sent, prefix included.
+A message of more than three frames has no place for the frames past the payload, and it surfaces on the subscription as [`ZmqError::Wire`](../broker/errors.md), naming how many frames it had.
 The payload frame is what the service's codec wrote, so a peer agrees on the codec only: with the default JSON codec it is the document the handler's input type deserializes from.
 Bytes a service already holds encoded go out through a `#[derive(Outgoing, Serialized)]` newtype, and no codec runs on them.
 A name frame that is not UTF-8 surfaces on the subscription as [`ZmqError::Wire`](../broker/errors.md).

@@ -47,6 +47,8 @@ frame 2: payload   what the codec wrote; JSON by default
 ```
 
 只发送名称和载荷两帧的对端，发送的是不带消息头的消息。
+像普通 ZeroMQ 应用那样只发送一帧的对端，这一帧就是载荷，名称为空；在 PUB/SUB 上，前缀与这一帧匹配。
+超过三帧的消息会以 `ZmqError::Wire` 使这次投递失败。
 消息头帧中的空行会被跳过，因此行尾多一个换行符也没有关系。
 如果消息头帧或名称不是 UTF-8，或者某个消息头行没有 `:`，这次投递就在订阅上以 [`ZmqError::Wire`](../components/wire/headers.md) 失败。
 服务会检查它发布的消息头，保证每个消息头都能原样读回。

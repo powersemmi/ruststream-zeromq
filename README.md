@@ -50,7 +50,9 @@ frame 2: payload   encoded by the framework's codec
 ```
 
 A Python peer sends `socket.send_multipart([b"orders", b"content-type: application/json", payload])`.
-A two-frame message reads as one without headers.
+A two-frame message reads as one without headers. A single frame, what a plain ZeroMQ peer
+sends, is the payload, whole, with an empty name. A message of more than three frames is refused
+with `ZmqError::Wire`.
 
 ## Install
 
