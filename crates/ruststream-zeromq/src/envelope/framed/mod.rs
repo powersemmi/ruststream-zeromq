@@ -1,8 +1,6 @@
 //! [`Framed`]: the name frame, then the headers and the payload as one document of a codec.
 
-#[cfg(any(feature = "cbor", feature = "msgpack"))]
 mod binary;
-#[cfg(any(feature = "json", feature = "cbor", feature = "msgpack"))]
 mod headers;
 #[cfg(feature = "json")]
 mod json;
@@ -12,7 +10,11 @@ use std::str;
 
 use bytes::Bytes;
 use ruststream::HeaderMap;
+#[cfg(feature = "cbor")]
+use ruststream::codec::CborCodec;
 use ruststream::codec::Codec;
+#[cfg(feature = "msgpack")]
+use ruststream::codec::MsgpackCodec;
 
 use super::{Envelope, Opened, Pattern, SealError, decode_name};
 use crate::error::ZmqError;
@@ -86,7 +88,7 @@ pub struct Framed<DocumentCodec> {
     codec: DocumentCodec,
 }
 
-impl<DocumentCodec: FramedCodec> Framed<DocumentCodec> {
+impl<DocumentCodec: FrameCodec> Framed<DocumentCodec> {
     /// The layout whose second frame is a document of `codec`.
     ///
     /// # Examples
@@ -124,64 +126,108 @@ impl<DocumentCodec: FramedCodec> Framed<DocumentCodec> {
     }
 }
 
-/// A codec [`Framed`] writes its document in: the core's `JsonCodec` (feature `json`),
-/// `CborCodec` (feature `cbor`) and `MsgpackCodec` (feature `msgpack`).
+/// A codec [`Framed`] writes its document in.
 ///
-/// Each one writes the payload the way its format carries bytes, which a document of another
-/// codec has no rule for, so the set is closed.
+/// The provided methods write and read the document with the payload as a byte string in
+/// `payload`, the form a binary format carries bytes in. The core's `CborCodec` (feature `cbor`)
+/// and `MsgpackCodec` (feature `msgpack`) implement it with an empty body; `JsonCodec` (feature
+/// `json`) writes `CloudEvents`' JSON form instead, a JSON payload as a value in `payload` and any
+/// other payload as base64 in `payload_base64`. A codec of the service's own implements it with
+/// an empty body too.
 ///
 /// # Examples
 ///
-/// [`Framed`] shows a broker that names one.
+/// A service whose orders travel in a CBOR variant of its own:
 ///
 /// ```
-/// use ruststream::codec::JsonCodec;
-/// use ruststream_zeromq::envelope::Framed;
+/// use ruststream::BytesMut;
+/// use ruststream::codec::{CborCodec, Codec, CodecError};
+/// use ruststream_zeromq::envelope::{FrameCodec, Framed};
 /// use ruststream_zeromq::queue::prelude::*;
-/// use serde::Deserialize;
+/// use serde::de::DeserializeOwned;
+/// use serde::{Deserialize, Serialize};
+///
+/// /// CBOR under the media type the order contract was published with.
+/// #[derive(Debug, Clone, Copy)]
+/// struct OrdersCbor;
+///
+/// impl Codec for OrdersCbor {
+///     const CONTENT_TYPE: &'static str = "application/vnd.orders+cbor";
+///
+///     fn encode<T: Serialize>(&self, value: &T) -> Result<BytesMut, CodecError> {
+///         CborCodec.encode(value)
+///     }
+///
+///     fn decode<T: DeserializeOwned>(&self, bytes: &[u8]) -> Result<T, CodecError> {
+///         CborCodec.decode(bytes)
+///     }
+/// }
+///
+/// // The document carries the payload as a byte string.
+/// impl FrameCodec for OrdersCbor {}
 ///
 /// #[derive(Deserialize)]
-/// struct Job {
+/// struct Order {
 ///     id: u64,
 /// }
 ///
-/// #[subscriber("jobs")]
-/// async fn work(job: &Job) -> HandlerOutcome {
-///     tracing::info!(job.id, "working on the job");
+/// #[subscriber("orders")]
+/// async fn take(order: &Order) -> HandlerOutcome {
+///     tracing::info!(order.id, "taken");
 ///     HandlerOutcome::ack()
 /// }
 ///
 /// #[ruststream::app]
 /// fn app() -> impl App {
-///     let jobs = ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555"))
-///         .envelope(Framed::new(JsonCodec));
-///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(jobs, |b| {
-///         b.include(work);
+///     let orders = ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555"))
+///         .envelope(Framed::new(OrdersCbor));
+///     RustStream::new(AppInfo::new("orders", "0.1.0")).with_broker(orders, |b| {
+///         b.include(take);
 ///     })
 /// }
 /// ```
-pub trait FramedCodec: Codec + Clone + 'static + sealed::Sealed {
-    /// Writes `headers`, already checked to be text, and `payload` as one document.
-    #[doc(hidden)]
-    fn seal_document(&self, headers: &HeaderMap, payload: &[u8]) -> Result<Bytes, SealError>;
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a codec `Framed` writes documents in",
+    note = "enable this crate's `json`, `cbor` or `msgpack` feature for the framework's codec, or \
+            implement `ruststream_zeromq::envelope::FrameCodec` for a codec of the service"
+)]
+pub trait FrameCodec: Codec + Clone + 'static {
+    /// Writes `headers`, whose values [`Framed`] has checked to be text, and `payload` as one
+    /// document: `{"headers": {..}, "payload": <byte string>}` unless the codec overrides it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SealError`] when the codec cannot encode the document.
+    fn frame(&self, headers: &HeaderMap, payload: &[u8]) -> Result<Bytes, SealError> {
+        binary::frame(self, headers, payload)
+    }
 
-    /// The payload of `document`, or `None` when it is not a document in this codec's shape.
-    #[doc(hidden)]
-    fn open_document(&self, document: &Bytes) -> Option<Bytes>;
+    /// The payload of `document`, or `None` when it is not a document in this codec's shape:
+    /// `headers` and `payload`, and nothing beside them.
+    fn frame_body(&self, document: &Bytes) -> Option<Bytes> {
+        binary::body(self, document)
+    }
 
-    /// The headers of a document [`open_document`](Self::open_document) recognised.
-    #[doc(hidden)]
-    fn document_headers(document: &Bytes) -> Result<HeaderMap, ZmqError>;
+    /// The headers of a document [`frame_body`](Self::frame_body) recognised.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ZmqError::Wire`] when the headers do not read.
+    fn frame_headers(&self, document: &Bytes) -> Result<HeaderMap, ZmqError> {
+        binary::headers(self, document)
+    }
 }
 
-mod sealed {
-    /// Closes [`FramedCodec`](super::FramedCodec) to the codecs this crate knows how to write.
-    pub trait Sealed {}
-}
+#[cfg(feature = "cbor")]
+impl FrameCodec for CborCodec {}
 
-impl<DocumentCodec: FramedCodec> Envelope for Framed<DocumentCodec> {
-    /// The document, kept to read the headers from; `None` for a frame that was no document.
-    type Head = Option<Bytes>;
+#[cfg(feature = "msgpack")]
+impl FrameCodec for MsgpackCodec {}
+
+impl<DocumentCodec: FrameCodec> Envelope for Framed<DocumentCodec> {
+    /// The document and the codec that reads its headers; `None` for a frame that was no
+    /// document.
+    type Head = Option<(Bytes, DocumentCodec)>;
 
     const NAME: &'static str = "framed";
 
@@ -197,8 +243,10 @@ impl<DocumentCodec: FramedCodec> Envelope for Framed<DocumentCodec> {
             (Some(payload), None) => Ok(Opened::new(String::new(), None, payload)),
             (Some(name), Some(document)) if frames.is_empty() => {
                 let name = decode_name(&name)?;
-                Ok(match self.codec.open_document(&document) {
-                    Some(payload) => Opened::new(name, Some(document), payload),
+                Ok(match self.codec.frame_body(&document) {
+                    Some(payload) => {
+                        Opened::new(name, Some((document, self.codec.clone())), payload)
+                    }
                     None => Opened::new(name, None, document),
                 })
             }
@@ -210,8 +258,10 @@ impl<DocumentCodec: FramedCodec> Envelope for Framed<DocumentCodec> {
     }
 
     fn headers(head: &Self::Head) -> Result<HeaderMap, ZmqError> {
-        head.as_ref()
-            .map_or_else(|| Ok(HeaderMap::new()), DocumentCodec::document_headers)
+        head.as_ref().map_or_else(
+            || Ok(HeaderMap::new()),
+            |(document, codec)| codec.frame_headers(document),
+        )
     }
 
     fn seal(
@@ -231,7 +281,7 @@ impl<DocumentCodec: FramedCodec> Envelope for Framed<DocumentCodec> {
                  text"
             )));
         }
-        let document = self.codec.seal_document(headers, &payload)?;
+        let document = self.codec.frame(headers, &payload)?;
         frames.push(Bytes::copy_from_slice(name.as_bytes()));
         frames.push(document);
         Ok(())
@@ -364,7 +414,7 @@ mod tests {
 
     /// A binary codec writes a payload that is not text as bytes, and reads it back unchanged.
     #[cfg(any(feature = "cbor", feature = "msgpack"))]
-    fn round_trips_through<DocumentCodec: FramedCodec>(codec: DocumentCodec) {
+    fn round_trips_through<DocumentCodec: FrameCodec>(codec: DocumentCodec) {
         let layout = Framed::new(codec);
         let mut headers = HeaderMap::new();
         headers.insert("x-tenant", "acme");
@@ -387,13 +437,13 @@ mod tests {
     #[cfg(feature = "cbor")]
     #[test]
     fn a_cbor_document_round_trips() {
-        round_trips_through(ruststream::codec::CborCodec);
+        round_trips_through(CborCodec);
     }
 
     #[cfg(feature = "msgpack")]
     #[test]
     fn a_msgpack_document_round_trips() {
-        round_trips_through(ruststream::codec::MsgpackCodec);
+        round_trips_through(MsgpackCodec);
     }
 
     #[test]

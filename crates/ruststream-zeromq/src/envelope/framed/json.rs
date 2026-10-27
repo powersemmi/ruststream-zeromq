@@ -12,17 +12,15 @@ use serde::de::IgnoredAny;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::value::RawValue;
 
+use super::FrameCodec;
 use super::headers::{HeaderText, HeadersOnly};
-use super::{FramedCodec, sealed};
 use crate::envelope::SealError;
 use crate::error::ZmqError;
 
-impl sealed::Sealed for JsonCodec {}
-
 /// A payload that is one JSON text travels as a value in `payload`, written as it is; any other
 /// payload as standard base64 in `payload_base64`.
-impl FramedCodec for JsonCodec {
-    fn seal_document(&self, headers: &HeaderMap, payload: &[u8]) -> Result<Bytes, SealError> {
+impl FrameCodec for JsonCodec {
+    fn frame(&self, headers: &HeaderMap, payload: &[u8]) -> Result<Bytes, SealError> {
         let document = Written {
             headers: HeaderText(headers),
             payload: json_text(payload),
@@ -33,7 +31,7 @@ impl FramedCodec for JsonCodec {
             .map_err(|err| SealError::new(format!("the document does not encode: {err}")))
     }
 
-    fn open_document(&self, document: &Bytes) -> Option<Bytes> {
+    fn frame_body(&self, document: &Bytes) -> Option<Bytes> {
         let read: Read<'_> = serde_json::from_slice(document).ok()?;
         match (read.payload, read.payload_base64) {
             (Some(value), None) => Some(document.slice_ref(value.get().as_bytes())),
@@ -42,7 +40,7 @@ impl FramedCodec for JsonCodec {
         }
     }
 
-    fn document_headers(document: &Bytes) -> Result<HeaderMap, ZmqError> {
+    fn frame_headers(&self, document: &Bytes) -> Result<HeaderMap, ZmqError> {
         serde_json::from_slice::<HeadersOnly>(document)
             .map(|read| read.headers.0)
             .map_err(|err| ZmqError::Wire(format!("the document's headers do not read: {err}")))

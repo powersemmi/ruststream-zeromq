@@ -23,7 +23,7 @@ use zeromq::ZmqMessage as WireMessage;
 use crate::error::ZmqError;
 use crate::message::ZmqMessage;
 
-pub use self::framed::Framed;
+pub use self::framed::{FrameCodec, Framed};
 pub use self::frames::Frames;
 pub use self::noop::NoOp;
 

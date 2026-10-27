@@ -1,57 +1,25 @@
-//! The CBOR and `MessagePack` documents of [`Framed`]: the payload as a byte string.
+//! The document [`Framed`](super::Framed) writes unless its codec says otherwise: the payload
+//! as a byte string.
 
 use std::fmt;
 
 use bytes::Bytes;
-#[cfg(feature = "cbor")]
-use ruststream::codec::CborCodec;
 use ruststream::codec::Codec;
-#[cfg(feature = "msgpack")]
-use ruststream::codec::MsgpackCodec;
 use ruststream::{BytesMut, HeaderMap};
 use serde::de::{self, IgnoredAny, Visitor};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::headers::{HeaderText, HeadersOnly};
-use super::{FramedCodec, sealed};
 use crate::envelope::SealError;
 use crate::error::ZmqError;
 
-/// Writes and reads the document of a binary codec, where the payload is a byte string.
-macro_rules! byte_string_document {
-    ($codec:ty) => {
-        impl sealed::Sealed for $codec {}
-
-        /// The payload is a byte string in `payload`, whatever its bytes are.
-        impl FramedCodec for $codec {
-            fn seal_document(
-                &self,
-                headers: &HeaderMap,
-                payload: &[u8],
-            ) -> Result<Bytes, SealError> {
-                seal(self, headers, payload)
-            }
-
-            fn open_document(&self, document: &Bytes) -> Option<Bytes> {
-                self.decode::<Read>(document)
-                    .ok()
-                    .map(|read| read.payload.0)
-            }
-
-            fn document_headers(document: &Bytes) -> Result<HeaderMap, ZmqError> {
-                headers(&Self, document)
-            }
-        }
-    };
-}
-
-#[cfg(feature = "cbor")]
-byte_string_document!(CborCodec);
-#[cfg(feature = "msgpack")]
-byte_string_document!(MsgpackCodec);
-
-fn seal(codec: &impl Codec, headers: &HeaderMap, payload: &[u8]) -> Result<Bytes, SealError> {
+/// The document with the payload as a byte string.
+pub(super) fn frame(
+    codec: &impl Codec,
+    headers: &HeaderMap,
+    payload: &[u8],
+) -> Result<Bytes, SealError> {
     codec
         .encode(&Written {
             headers: HeaderText(headers),
@@ -61,7 +29,16 @@ fn seal(codec: &impl Codec, headers: &HeaderMap, payload: &[u8]) -> Result<Bytes
         .map_err(|err| SealError::new(format!("the document does not encode: {err}")))
 }
 
-fn headers(codec: &impl Codec, document: &[u8]) -> Result<HeaderMap, ZmqError> {
+/// The payload of a document with a byte-string payload, or `None` for another record.
+pub(super) fn body(codec: &impl Codec, document: &[u8]) -> Option<Bytes> {
+    codec
+        .decode::<Read>(document)
+        .ok()
+        .map(|read| read.payload.0)
+}
+
+/// The headers of a document, whatever its payload field holds.
+pub(super) fn headers(codec: &impl Codec, document: &[u8]) -> Result<HeaderMap, ZmqError> {
     codec
         .decode::<HeadersOnly>(document)
         .map(|read| read.headers.0)
@@ -128,6 +105,11 @@ impl Visitor<'_> for PayloadVisitor {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "cbor")]
+    use ruststream::codec::CborCodec;
+    #[cfg(feature = "msgpack")]
+    use ruststream::codec::MsgpackCodec;
+
     use super::*;
     use crate::envelope::{Envelope, Framed, Pattern};
 
@@ -183,5 +165,80 @@ mod tests {
             frames[1].as_ref(),
             b"\x82\xa7headers\x80\xa7payload\xc4\x02\x08\x07"
         );
+    }
+}
+
+/// A codec of the service's own, with nothing of its own to say about the document.
+#[cfg(all(test, feature = "cbor"))]
+mod own_codec {
+    use ruststream::codec::{CborCodec, CodecError};
+    use serde::Serialize;
+    use serde::de::DeserializeOwned;
+
+    use super::*;
+    use crate::envelope::{Envelope, FrameCodec, Framed, Pattern};
+
+    #[derive(Debug, Clone, Copy)]
+    struct Versioned;
+
+    impl Codec for Versioned {
+        const CONTENT_TYPE: &'static str = "application/vnd.orders+cbor";
+
+        fn encode<T: Serialize>(&self, value: &T) -> Result<BytesMut, CodecError> {
+            CborCodec.encode(value)
+        }
+
+        fn decode<T: DeserializeOwned>(&self, bytes: &[u8]) -> Result<T, CodecError> {
+            CborCodec.decode(bytes)
+        }
+    }
+
+    impl FrameCodec for Versioned {}
+
+    fn sealed(headers: &HeaderMap) -> Result<Vec<Bytes>, SealError> {
+        let mut frames = Vec::new();
+        Framed::new(Versioned).seal(
+            Pattern::PushPull,
+            "orders",
+            headers,
+            Bytes::from_static(b"\x08\x07"),
+            &mut frames,
+        )?;
+        Ok(frames)
+    }
+
+    /// A codec that implements the trait with an empty body writes the payload as a byte string,
+    /// and reads it and its headers back.
+    #[test]
+    fn a_codec_of_the_service_writes_the_payload_as_a_byte_string() {
+        let mut headers = HeaderMap::new();
+        headers.insert("event", "created");
+        let frames = sealed(&headers).expect("seals");
+        assert_eq!(
+            frames[1].as_ref(),
+            b"\xa2\x67headers\xa1\x65event\x67created\x67payload\x42\x08\x07"
+        );
+        let opened = Framed::new(Versioned)
+            .open(Pattern::PushPull, frames.into())
+            .expect("opens");
+        assert_eq!(opened.payload.as_ref(), b"\x08\x07");
+        let read = Framed::<Versioned>::headers(&opened.head).expect("reads");
+        assert_eq!(read.get_str("event"), Some("created"));
+        assert_eq!(
+            Framed::<Versioned>::CONTENT_TYPE,
+            Some("application/vnd.orders+cbor")
+        );
+    }
+
+    /// Header values in a document are text, whatever the codec.
+    #[test]
+    fn a_header_value_that_is_not_text_is_refused_with_its_destination() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-binary", [0xff, 0xfe].as_slice());
+        let err = sealed(&headers)
+            .expect_err("the value has no text form")
+            .against("orders")
+            .to_string();
+        assert!(err.contains("x-binary") && err.contains("orders"), "{err}");
     }
 }

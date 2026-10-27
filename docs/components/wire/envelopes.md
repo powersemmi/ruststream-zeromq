@@ -21,7 +21,7 @@ The built-in envelopes:
 | Envelope | Frames | Headers |
 |---|---|---|
 | [`Frames`](api:ruststream_zeromq::envelope::Frames) | name, header lines, payload ([Wire format](./index.md)) | `name: value` lines |
-| [`Framed<Codec>`](api:ruststream_zeromq::envelope::Framed) | name, then one JSON, CBOR or MessagePack document of the headers and the payload | the document's `headers` map |
+| [`Framed<Codec>`](api:ruststream_zeromq::envelope::Framed) | name, then one document of the codec holding the headers and the payload | the document's `headers` map |
 | [`NoOp`](api:ruststream_zeromq::envelope::NoOp) | the payload alone; on the fan-out, the name and the payload | none |
 
 `Frames` is the default and the layout of earlier releases, so a service that names no envelope stays wire-compatible.
@@ -31,6 +31,7 @@ A payload that is one JSON text travels as a value in `payload`, byte for byte a
 Any other payload travels as standard base64 in `payload_base64`: `{"headers":{"event":"created"},"payload_base64":"CAc="}`.
 
 The CBOR and MessagePack documents carry the payload as a byte string in `payload`.
+A codec of your own implements [`FrameCodec`](api:ruststream_zeromq::envelope::FrameCodec) with an empty body, and its document carries the payload as a byte string too.
 `NoOp` suits a plain ZeroMQ peer, which sends and reads the payload and nothing else.
 
 A message that is not in the envelope's layout is a peer's own payload.
