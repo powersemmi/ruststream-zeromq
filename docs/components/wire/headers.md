@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: Headers
-description: "The header frame is UTF-8 name: value lines, read when a handler first asks; a header the frame cannot carry is refused on publish, and a malformed frame reads as no headers."
+description: "The header frame is UTF-8 name: value lines, read when a handler first asks; a header the frame cannot carry is refused on publish."
 ---
 
 import Tabs from '@theme/Tabs';
