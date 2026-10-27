@@ -25,9 +25,9 @@ testing = ["ruststream/testing"]
 # The protocol bindings and the server coordinate this crate contributes to the generated
 # AsyncAPI document. Forwarded from the core, which gates the hooks on the same name.
 asyncapi = ["ruststream/asyncapi"]
-# The core's codecs, forwarded so the in-process mode registers a `Framed` envelope over each one
-# a service enables. A service that enables a codec on `ruststream` alone builds the same API.
-json = ["ruststream/json"]
+# The core's codecs, each with the `Framed` document it writes, and the in-process mode's
+# registration of a `Framed` envelope over it.
+json = ["ruststream/json", "dep:serde_json", "dep:base64"]
 cbor = ["ruststream/cbor"]
 msgpack = ["ruststream/msgpack"]
 
@@ -39,6 +39,10 @@ futures.workspace = true
 aliasable.workspace = true
 selfie.workspace = true
 serde = { version = "1.0.196", features = ["derive"] }
+# `Framed<JsonCodec>` embeds a JSON payload as it is written (`RawValue`) and carries other bytes
+# as base64, the way CloudEvents' JSON format does.
+serde_json = { version = "1.0.113", features = ["raw_value"], optional = true }
+base64 = { version = "0.22.1", optional = true }
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true

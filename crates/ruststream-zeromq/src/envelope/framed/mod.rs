@@ -1,37 +1,45 @@
 //! [`Framed`]: the name frame, then the headers and the payload as one document of a codec.
 
+#[cfg(any(feature = "cbor", feature = "msgpack"))]
+mod binary;
+#[cfg(any(feature = "json", feature = "cbor", feature = "msgpack"))]
+mod headers;
+#[cfg(feature = "json")]
+mod json;
+
 use std::collections::VecDeque;
-use std::fmt;
 use std::str;
 
 use bytes::Bytes;
 use ruststream::HeaderMap;
 use ruststream::codec::Codec;
-use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
-use serde::ser::SerializeMap;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{Envelope, Opened, Pattern, SealError, decode_name};
 use crate::error::ZmqError;
 
-/// The name frame, then one frame holding a document of `Codec` with two fields: `headers`, a
-/// map of text values, and `payload`.
+/// The name frame, then one frame holding a document of `DocumentCodec`: `headers`, a map of text
+/// values, and the payload, the way `CloudEvents` writes an event in its structured mode.
 ///
 /// A peer that reads JSON, CBOR or `MessagePack` reads the whole message with its parser, with no
-/// frame layout to learn. The payload is written as text when it is UTF-8, as the JSON codec's
-/// output always is, and as bytes otherwise:
+/// frame layout to learn. The JSON document follows the `CloudEvents` JSON format: a payload that
+/// is one JSON text travels as a value in `payload`, byte for byte as it was written, and any
+/// other payload as standard base64 in `payload_base64`:
 ///
 /// ```text
 /// frame 0: orders
-/// frame 1: {"headers":{"x-tenant":"acme"},"payload":"{\"id\":7}"}
+/// frame 1: {"headers":{"event":"created"},"payload":{"id":7}}
+/// frame 1: {"headers":{"event":"created"},"payload_base64":"CAc="}
 /// ```
 ///
-/// A frame that is not such a document, exactly these two fields, is the payload of a peer that
-/// uses no envelope, and reads as it is with no headers; so does a message of one frame. The
-/// payload is decoded out of the document when the delivery is read, the headers when a handler
-/// first asks for one. The document is a copy of the payload, which a publish allocates and a
-/// delivery decodes; [`Frames`](super::Frames) and [`NoOp`](super::NoOp) carry the payload in a
-/// frame of its own.
+/// The CBOR and `MessagePack` documents carry the payload as a byte string in `payload`.
+///
+/// A frame that is not such a document, `headers` and exactly one payload field with nothing
+/// beside them, is the payload of a peer that uses no envelope, and reads as it is with no
+/// headers; so does a message of one frame. The payload is located when the delivery is read (a
+/// JSON value is a slice of the frame, a byte string or base64 a copy), the headers decoded when a
+/// handler first asks for one. A publish writes the document as a buffer of its own, after a scan
+/// that tells JSON text from other bytes; [`Frames`](super::Frames) and [`NoOp`](super::NoOp)
+/// carry the payload in a frame of its own.
 ///
 /// # Examples
 ///
@@ -78,7 +86,7 @@ pub struct Framed<DocumentCodec> {
     codec: DocumentCodec,
 }
 
-impl<DocumentCodec: Codec> Framed<DocumentCodec> {
+impl<DocumentCodec: FramedCodec> Framed<DocumentCodec> {
     /// The layout whose second frame is a document of `codec`.
     ///
     /// # Examples
@@ -116,12 +124,64 @@ impl<DocumentCodec: Codec> Framed<DocumentCodec> {
     }
 }
 
-impl<DocumentCodec> Envelope for Framed<DocumentCodec>
-where
-    DocumentCodec: Codec + Clone + 'static,
-{
-    /// The document and the codec that reads it; `None` for a frame that was no document.
-    type Head = Option<(Bytes, DocumentCodec)>;
+/// A codec [`Framed`] writes its document in: the core's `JsonCodec` (feature `json`),
+/// `CborCodec` (feature `cbor`) and `MsgpackCodec` (feature `msgpack`).
+///
+/// Each one writes the payload the way its format carries bytes, which a document of another
+/// codec has no rule for, so the set is closed.
+///
+/// # Examples
+///
+/// [`Framed`] shows a broker that names one.
+///
+/// ```
+/// use ruststream::codec::JsonCodec;
+/// use ruststream_zeromq::envelope::Framed;
+/// use ruststream_zeromq::queue::prelude::*;
+/// use serde::Deserialize;
+///
+/// #[derive(Deserialize)]
+/// struct Job {
+///     id: u64,
+/// }
+///
+/// #[subscriber("jobs")]
+/// async fn work(job: &Job) -> HandlerOutcome {
+///     tracing::info!(job.id, "working on the job");
+///     HandlerOutcome::ack()
+/// }
+///
+/// #[ruststream::app]
+/// fn app() -> impl App {
+///     let jobs = ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555"))
+///         .envelope(Framed::new(JsonCodec));
+///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(jobs, |b| {
+///         b.include(work);
+///     })
+/// }
+/// ```
+pub trait FramedCodec: Codec + Clone + 'static + sealed::Sealed {
+    /// Writes `headers`, already checked to be text, and `payload` as one document.
+    #[doc(hidden)]
+    fn seal_document(&self, headers: &HeaderMap, payload: &[u8]) -> Result<Bytes, SealError>;
+
+    /// The payload of `document`, or `None` when it is not a document in this codec's shape.
+    #[doc(hidden)]
+    fn open_document(&self, document: &Bytes) -> Option<Bytes>;
+
+    /// The headers of a document [`open_document`](Self::open_document) recognised.
+    #[doc(hidden)]
+    fn document_headers(document: &Bytes) -> Result<HeaderMap, ZmqError>;
+}
+
+mod sealed {
+    /// Closes [`FramedCodec`](super::FramedCodec) to the codecs this crate knows how to write.
+    pub trait Sealed {}
+}
+
+impl<DocumentCodec: FramedCodec> Envelope for Framed<DocumentCodec> {
+    /// The document, kept to read the headers from; `None` for a frame that was no document.
+    type Head = Option<Bytes>;
 
     const NAME: &'static str = "framed";
 
@@ -137,14 +197,10 @@ where
             (Some(payload), None) => Ok(Opened::new(String::new(), None, payload)),
             (Some(name), Some(document)) if frames.is_empty() => {
                 let name = decode_name(&name)?;
-                Ok(
-                    match self.codec.decode::<Shape<IgnoredAny, Payload>>(&document) {
-                        Ok(shape) => {
-                            Opened::new(name, Some((document, self.codec.clone())), shape.payload.0)
-                        }
-                        Err(_) => Opened::new(name, None, document),
-                    },
-                )
+                Ok(match self.codec.open_document(&document) {
+                    Some(payload) => Opened::new(name, Some(document), payload),
+                    None => Opened::new(name, None, document),
+                })
             }
             _ => Err(ZmqError::Wire(format!(
                 "a message of {count} frames does not follow the layout of one or two frames \
@@ -154,13 +210,8 @@ where
     }
 
     fn headers(head: &Self::Head) -> Result<HeaderMap, ZmqError> {
-        let Some((document, codec)) = head else {
-            return Ok(HeaderMap::new());
-        };
-        codec
-            .decode::<Shape<Headers, IgnoredAny>>(document)
-            .map(|shape| shape.headers.0)
-            .map_err(|err| ZmqError::Wire(format!("the document's headers do not read: {err}")))
+        head.as_ref()
+            .map_or_else(|| Ok(HeaderMap::new()), DocumentCodec::document_headers)
     }
 
     fn seal(
@@ -180,137 +231,14 @@ where
                  text"
             )));
         }
-        let document = self
-            .codec
-            .encode(&Document {
-                headers,
-                payload: &payload,
-            })
-            .map_err(|err| SealError::new(format!("the document does not encode: {err}")))?;
+        let document = self.codec.seal_document(headers, &payload)?;
         frames.push(Bytes::copy_from_slice(name.as_bytes()));
-        frames.push(document.freeze());
+        frames.push(document);
         Ok(())
     }
 }
 
-/// The document a publish writes.
-struct Document<'a> {
-    headers: &'a HeaderMap,
-    payload: &'a [u8],
-}
-
-impl Serialize for Document<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut document = serializer.serialize_map(Some(2))?;
-        document.serialize_entry("headers", &HeaderText(self.headers))?;
-        match str::from_utf8(self.payload) {
-            Ok(text) => document.serialize_entry("payload", text)?,
-            Err(_) => document.serialize_entry("payload", &RawBytes(self.payload))?,
-        }
-        document.end()
-    }
-}
-
-/// The headers as a map of text values; [`Framed::seal`] refuses a value that is not text first.
-struct HeaderText<'a>(&'a HeaderMap);
-
-impl Serialize for HeaderText<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_map(
-            self.0
-                .iter()
-                .map(|(name, value)| (name, str::from_utf8(value).unwrap_or_default())),
-        )
-    }
-}
-
-struct RawBytes<'a>(&'a [u8]);
-
-impl Serialize for RawBytes<'_> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_bytes(self.0)
-    }
-}
-
-/// What a delivery reads of the document, one field at a time: the other is skipped unread.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Shape<HeadersField, PayloadField> {
-    headers: HeadersField,
-    payload: PayloadField,
-}
-
-/// The payload, from text, bytes, or a sequence of byte values (how JSON writes bytes).
-struct Payload(Bytes);
-
-impl<'de> Deserialize<'de> for Payload {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_any(PayloadVisitor)
-    }
-}
-
-struct PayloadVisitor;
-
-impl<'de> Visitor<'de> for PayloadVisitor {
-    type Value = Payload;
-
-    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("the payload as text or bytes")
-    }
-
-    fn visit_str<E: de::Error>(self, text: &str) -> Result<Payload, E> {
-        Ok(Payload(Bytes::copy_from_slice(text.as_bytes())))
-    }
-
-    fn visit_string<E: de::Error>(self, text: String) -> Result<Payload, E> {
-        Ok(Payload(Bytes::from(text)))
-    }
-
-    fn visit_bytes<E: de::Error>(self, bytes: &[u8]) -> Result<Payload, E> {
-        Ok(Payload(Bytes::copy_from_slice(bytes)))
-    }
-
-    fn visit_byte_buf<E: de::Error>(self, bytes: Vec<u8>) -> Result<Payload, E> {
-        Ok(Payload(Bytes::from(bytes)))
-    }
-
-    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Payload, A::Error> {
-        let mut bytes = Vec::with_capacity(seq.size_hint().unwrap_or_default());
-        while let Some(byte) = seq.next_element::<u8>()? {
-            bytes.push(byte);
-        }
-        Ok(Payload(Bytes::from(bytes)))
-    }
-}
-
-/// The headers, read straight into the map a delivery hands out.
-struct Headers(HeaderMap);
-
-impl<'de> Deserialize<'de> for Headers {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_map(HeadersVisitor)
-    }
-}
-
-struct HeadersVisitor;
-
-impl<'de> Visitor<'de> for HeadersVisitor {
-    type Value = Headers;
-
-    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("a map of header names to text values")
-    }
-
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Headers, A::Error> {
-        let mut headers = HeaderMap::with_capacity(map.size_hint().unwrap_or_default());
-        while let Some((name, value)) = map.next_entry::<String, String>()? {
-            headers.insert(name, value);
-        }
-        Ok(Headers(headers))
-    }
-}
-
-#[cfg(test)]
+#[cfg(all(test, feature = "json"))]
 mod tests {
     use ruststream::codec::JsonCodec;
 
@@ -342,7 +270,7 @@ mod tests {
             serde_json::from_slice(&frames[1]).expect("the frame is JSON");
         assert_eq!(
             document,
-            serde_json::json!({"headers": {"x-tenant": "acme"}, "payload": "{\"id\":7}"}),
+            serde_json::json!({"headers": {"x-tenant": "acme"}, "payload": {"id": 7}}),
         );
     }
 
@@ -436,7 +364,7 @@ mod tests {
 
     /// A binary codec writes a payload that is not text as bytes, and reads it back unchanged.
     #[cfg(any(feature = "cbor", feature = "msgpack"))]
-    fn round_trips_through<DocumentCodec: Codec + Clone + 'static>(codec: DocumentCodec) {
+    fn round_trips_through<DocumentCodec: FramedCodec>(codec: DocumentCodec) {
         let layout = Framed::new(codec);
         let mut headers = HeaderMap::new();
         headers.insert("x-tenant", "acme");

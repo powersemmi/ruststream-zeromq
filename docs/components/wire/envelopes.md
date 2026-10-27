@@ -21,17 +21,21 @@ The built-in envelopes:
 | Envelope | Frames | Headers |
 |---|---|---|
 | [`Frames`](api:ruststream_zeromq::envelope::Frames) | name, header lines, payload ([Wire format](./index.md)) | `name: value` lines |
-| [`Framed<Codec>`](api:ruststream_zeromq::envelope::Framed) | name, then one document of the codec: `{"headers": {..}, "payload": ..}` | the document's `headers` map |
+| [`Framed<Codec>`](api:ruststream_zeromq::envelope::Framed) | name, then one JSON, CBOR or MessagePack document of the headers and the payload | the document's `headers` map |
 | [`NoOp`](api:ruststream_zeromq::envelope::NoOp) | the payload alone; on the fan-out, the name and the payload | none |
 
 `Frames` is the default and the layout of earlier releases, so a service that names no envelope stays wire-compatible.
 `Framed` suits a peer that reads every message with one parser.
-It writes the payload as text when it is UTF-8, as the JSON codec's output always is, and as bytes otherwise.
+Its JSON document follows the CloudEvents JSON format.
+A payload that is one JSON text travels as a value in `payload`, byte for byte as written: `{"headers":{"event":"created"},"payload":{"id":7}}`.
+Any other payload travels as standard base64 in `payload_base64`: `{"headers":{"event":"created"},"payload_base64":"CAc="}`.
+
+The CBOR and MessagePack documents carry the payload as a byte string in `payload`.
 `NoOp` suits a plain ZeroMQ peer, which sends and reads the payload and nothing else.
 
 A message that is not in the envelope's layout is a peer's own payload.
 A single frame reads as the payload, with an empty name and no headers, whichever envelope reads it.
-A `Framed` second frame that is not the document, exactly its two fields, reads as the payload too.
+A `Framed` second frame that is not a document, `headers` and exactly one payload field with nothing beside them, reads as the payload too.
 A payload that looks like a document is safe: `Framed` always writes the payload inside a document of its own.
 
 A delivery reads its headers on the first call to `headers()`, and keeps them.
