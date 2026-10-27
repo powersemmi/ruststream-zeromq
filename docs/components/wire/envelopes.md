@@ -11,11 +11,7 @@ import TabItem from '@theme/TabItem';
 
 An envelope is the frame layout of a message: `Frames` by default, `Framed` for one codec document, `NoOp` for the payload alone, or a layout of your own.
 
-A broker reads and writes through one envelope, named with `.envelope(..)` on the broker:
-
-```rust
-let queue = ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")).envelope(NoOp);
-```
+A broker reads and writes through one envelope, named with `.envelope(..)` on the broker: `ZmqQueue::new(endpoint).envelope(NoOp)`.
 
 A publish policy writes through its broker's envelope, or through its own when it names one: `Publish.envelope(NoOp)`.
 The envelope is a type parameter of the broker and the publisher, so the choice costs nothing per message.
@@ -57,6 +53,7 @@ The generated [AsyncAPI](../asyncapi/index.md) document names the envelope on ea
 A feed's PUB socket sends each tick as one `name payload` frame.
 The bridge reads it through an envelope of its own:
 
+{/* single-form: an Envelope impl is plain trait code, the same under the macros and the manual API */}
 ```rust reference="examples/zmq_wire_envelopes.rs#envelope"
 ```
 
