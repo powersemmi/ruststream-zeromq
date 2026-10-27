@@ -189,7 +189,7 @@ pub enum Pattern {
 /// #
 /// # #[ruststream::app]
 /// # fn app() -> impl App {
-/// #     let ticks = ZmqFanout::new(ZmqEndpoint::connect("tcp://feed:5556")).envelope(Spaced);
+/// #     let ticks = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")).envelope(Spaced);
 /// #     RustStream::new(AppInfo::new("recorder", "0.1.0")).with_broker(ticks, |b| {
 /// #         b.include(record);
 /// #     })
@@ -271,7 +271,7 @@ impl<Head> Opened<Head> {
     /// #
     /// # #[ruststream::app]
     /// # fn app() -> impl App {
-    /// #     let ticks = ZmqFanout::new(ZmqEndpoint::connect("tcp://feed:5556")).envelope(Spaced);
+    /// #     let ticks = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")).envelope(Spaced);
     /// #     RustStream::new(AppInfo::new("recorder", "0.1.0")).with_broker(ticks, |b| {
     /// #         b.include(record);
     /// #     })
@@ -357,7 +357,7 @@ impl<Head> Opened<Head> {
 /// #
 /// # #[ruststream::app]
 /// # fn app() -> impl App {
-/// #     let ticks = ZmqFanout::new(ZmqEndpoint::connect("tcp://feed:5556")).envelope(Spaced);
+/// #     let ticks = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")).envelope(Spaced);
 /// #     RustStream::new(AppInfo::new("recorder", "0.1.0")).with_broker(ticks, |b| {
 /// #         b.include(record);
 /// #     })
@@ -434,7 +434,7 @@ impl SealError {
     /// #
     /// # #[ruststream::app]
     /// # fn app() -> impl App {
-    /// #     let ticks = ZmqFanout::new(ZmqEndpoint::connect("tcp://feed:5556")).envelope(Spaced);
+    /// #     let ticks = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")).envelope(Spaced);
     /// #     RustStream::new(AppInfo::new("recorder", "0.1.0")).with_broker(ticks, |b| {
     /// #         b.include(record);
     /// #     })
@@ -534,7 +534,7 @@ impl SealError {
 ///
 /// #[ruststream::app]
 /// fn app() -> impl App {
-///     let ticks = ZmqFanout::new(ZmqEndpoint::connect("tcp://feed:5556")).envelope(Spaced);
+///     let ticks = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")).envelope(Spaced);
 ///     RustStream::new(AppInfo::new("recorder", "0.1.0")).with_broker(ticks, |b| {
 ///         b.include(record);
 ///     })

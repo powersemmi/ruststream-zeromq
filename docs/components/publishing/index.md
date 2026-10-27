@@ -18,7 +18,7 @@ At startup the runtime pairs it with the connected broker into a live publisher,
 To publish through another broker of the service, the mount site binds the policy to it with `bindable()` and `.bind(Publish)`.
 [Pipelines with PUSH/PULL](../../guides/pipelines.md) publishes a worker's results to a sink this way.
 
-A publish sends the message as the [three frames](../wire/index.md): its name, its headers and the payload the codec wrote.
+A publish sends the message in its [envelope](../wire/envelopes.md), by default the [three frames](../wire/index.md): its name, its headers and the payload the codec wrote.
 The payload frame is the buffer the codec wrote, so a payload of any size is sent without a copy.
 A ZMTP send takes the frames and nothing else, so every publisher declares `Options = ()`, and the publish builder carries the core's steps alone.
 A handler body therefore imports `ruststream::prelude::*` alone and bounds its publisher with the capability it needs.

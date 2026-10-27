@@ -203,8 +203,8 @@ impl<Role, Env: Envelope> ZmqFanout<Role, Env> {
     ///
     /// # Examples
     ///
-    /// A recorder subscribes to a plain PUB peer that sends each tick as one frame, which its
-    /// subscriptions match their prefix against:
+    /// A recorder takes the ticks of a plain PUB peer that dials it and sends each tick as one
+    /// frame, which its subscriptions match their prefix against:
     ///
     /// ```
     /// use ruststream_zeromq::envelope::NoOp;
@@ -224,7 +224,7 @@ impl<Role, Env: Envelope> ZmqFanout<Role, Env> {
     ///
     /// #[ruststream::app]
     /// fn app() -> impl App {
-    ///     let ticks = ZmqFanout::new(ZmqEndpoint::connect("tcp://feed:5556")).envelope(NoOp);
+    ///     let ticks = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")).envelope(NoOp);
     ///     RustStream::new(AppInfo::new("recorder", "0.1.0")).with_broker(ticks, |b| {
     ///         b.include(record);
     ///     })

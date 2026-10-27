@@ -1,64 +1,35 @@
-//! The service of `examples/zmq_wire_envelope.rs` without the macros: the handler is a named type
-//! and `main` is written by hand.
+//! The identity frame: a responder a Python DEALER asks. The request is the usual three
+//! frames with a `correlation-id` header line; the answer comes back behind the asker's identity,
+//! with `reply` in its name frame.
 //!
 //! ```text
-//! cargo test --example manual_zmq_wire_envelope --features testing
+//! cargo test --example zmq_wire_identity --features testing
 //! ```
 
-use std::future::{Future, ready};
-use std::process::ExitCode;
-
-use ruststream::runtime::cli::run_main;
+// The prelude's `Outgoing` is the derive; the publish pipeline's message of the same name is the
+// type a transform rewrites.
 use ruststream::runtime::{Outgoing, PublishContext};
-use ruststream::schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use ruststream_zeromq::rpc::prelude::*;
 
-#[derive(Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[schemars(crate = "ruststream::schemars")]
+#[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing)]
+#[outgoing(name = "greeter")]
 struct Greeting {
     who: String,
 }
 
-// `#[outgoing(name = "greeter")]` by hand: the type names the responder it is sent to.
-impl OutgoingDestination for Greeting {
-    type Form = FixedName;
-    const DESTINATION: &'static str = "greeter";
-}
-
-impl MessageHeaders for Greeting {
-    type Contract = NoHeaders;
-}
-
-#[derive(Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[schemars(crate = "ruststream::schemars")]
+// No destination of its own: the ROUTER addresses each answer per request.
+#[derive(Debug, PartialEq, Deserialize, Serialize, Outgoing)]
 struct Answer {
     text: String,
 }
 
-// `#[derive(Outgoing)]` with no name by hand: the ROUTER addresses each answer per request.
-impl OutgoingDestination for Answer {
-    type Form = CallerName;
-}
-
-impl MessageHeaders for Answer {
-    type Contract = NoHeaders;
-}
-
-struct Greet;
-
-impl Handle<Greeting, Answer> for Greet {
-    fn handle(
-        &self,
-        request: &Greeting,
-        _outs: &(),
-        _ctx: &mut Context<'_>,
-    ) -> impl Future<Output = Result<Answer, HandlerOutcome>> {
-        tracing::info!(who = %request.who, "greeting");
-        ready(Ok(Answer {
-            text: format!("hello {}", request.who),
-        }))
+#[subscriber("greeter", reply("reply"))]
+async fn greet(request: &Greeting) -> Answer {
+    tracing::info!(who = %request.who, "greeting");
+    Answer {
+        text: format!("hello {}", request.who),
     }
 }
 
@@ -67,7 +38,7 @@ fn service(endpoint: ZmqEndpoint) -> impl App {
     RustStream::new(AppInfo::new("greeter", "0.1.0")).with_broker(ZmqRpc::new(endpoint), |b| {
         // The answer goes to the identity the ROUTER read off the request, and it carries the
         // request's `correlation-id` back.
-        b.include(subscriber("greeter", Greet).reply().to("reply").build())
+        b.include(greet)
             .out_reply(Publish)
             .transform(ReplyToRequester)
             .out_retry(Publish)
@@ -75,15 +46,11 @@ fn service(endpoint: ZmqEndpoint) -> impl App {
     })
 }
 
+#[ruststream::app]
 fn app() -> impl App {
     service(ZmqEndpoint::bind("tcp://0.0.0.0:5557"))
 }
 // --8<-- [end:app]
-
-// What `#[ruststream::app]` writes: the command line on a multi-threaded Tokio runtime.
-fn main() -> ExitCode {
-    run_main(app)
-}
 
 /// Answers at the `reply-to` address the ROUTER stamped on the request, under the request's
 /// `correlation-id`.
@@ -134,7 +101,7 @@ mod tests {
     fn ipc(label: &str) -> (String, PathBuf) {
         static SEQ: AtomicU64 = AtomicU64::new(0);
         let path = env::temp_dir().join(format!(
-            "zmq-envelope-manual-{label}-{}-{}.sock",
+            "zmq-identity-{label}-{}-{}.sock",
             process::id(),
             SEQ.fetch_add(1, Ordering::Relaxed),
         ));
