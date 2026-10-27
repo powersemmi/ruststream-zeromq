@@ -52,7 +52,7 @@ frame 2: payload   what the codec wrote; JSON by default
 对于每条消息只读一帧或一个 JSON 文档的对端，在 broker 上换用另一种[信封](../components/wire/envelopes.md)即可。
 消息头帧中的空行会被跳过，因此行尾多一个换行符也没有关系。
 如果名称不是 UTF-8，这次投递就在订阅上以 `ZmqError::Wire` 失败。
-如果消息头帧不是 UTF-8，或者某个消息头行没有 `:`，错误会写入日志，消息不带[消息头](../components/wire/headers.md)到达处理函数。
+如果消息头帧不是 UTF-8，或者某个消息头行没有 `:`，错误会写入日志，消息不带[消息头](../components/wire/headers.md)到达处理器。
 服务会检查它发布的消息头，保证每个消息头都能原样读回。
 如果消息头不是文本、含有换行、名称中带有 `:`，或者以空白开头或结尾，发布就以 `ZmqError::Send` 失败，错误中写明该消息头和目的地。
 
