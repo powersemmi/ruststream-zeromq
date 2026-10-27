@@ -12,12 +12,19 @@
 //! (a queue this service dials, a listener it binds before any subscription) is recorded in the
 //! published log and reaches no subscription, since that peer is another process.
 
+use std::any::TypeId;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
 use bytes::Bytes;
+#[cfg(feature = "cbor")]
+use ruststream::codec::CborCodec;
+#[cfg(feature = "json")]
+use ruststream::codec::JsonCodec;
+#[cfg(feature = "msgpack")]
+use ruststream::codec::MsgpackCodec;
 use ruststream::testing::{Coordinator, InProcess, TestableBroker};
 use ruststream::{OutgoingMessage, RawMessage};
 use tokio::sync::mpsc;
@@ -26,18 +33,22 @@ use zeromq::ZmqMessage as WireMessage;
 
 use crate::common::Lifecycle;
 use crate::endpoint::{Bind, Connect, EndpointRole, Side};
+#[cfg(any(feature = "json", feature = "cbor", feature = "msgpack"))]
+use crate::envelope::Framed;
+use crate::envelope::{self, Envelope, Frames, NoOp, Pattern, frames};
 use crate::error::ZmqError;
 use crate::fanout::{ConnectedZmqFanout, ZmqFanout};
 use crate::message::ZmqMessage;
 use crate::queue::{ConnectedZmqQueue, ZmqQueue};
-use crate::rpc::{ConnectedZmqRpc, REPLY_PREFIX, ZmqRpc, peer_identity};
-use crate::wire;
+use crate::rpc::{ConnectedZmqRpc, REPLY_PREFIX, ZmqRpc, answers, peer_identity};
 
 /// The channel a subscription reads its deliveries from, the same one a socket driver feeds.
-pub(crate) type Deliveries = mpsc::UnboundedReceiver<Result<ZmqMessage, ZmqError>>;
+pub(crate) type Deliveries<Env> = mpsc::UnboundedReceiver<Result<ZmqMessage<Env>, ZmqError>>;
 
-/// How a subscription reads the frames it receives: the reader its socket's driver uses.
-pub(crate) type Read = fn(WireMessage) -> Option<Result<ZmqMessage, ZmqError>>;
+/// Hands a subscription the frames it receives: read the way its socket's driver reads them,
+/// counted with the harness's coordinator, and sent to the subscription's channel. Erased, since
+/// the subscriptions of one transport may read through different envelopes.
+type Deliver = Arc<dyn Fn(WireMessage, Option<&Coordinator>) + Send + Sync>;
 
 /// Which subscriptions of a broker one message reaches: the socket pattern's own rule.
 #[derive(Debug, Clone, Copy)]
@@ -50,6 +61,9 @@ pub(crate) enum Pick<'a> {
     OneInTurn,
     /// Every subscription whose name is a prefix of this name: the SUB filter.
     Prefix(&'a str),
+    /// Every subscription whose name is a prefix of the message's first frame: the SUB filter
+    /// over the frames a message is sent in.
+    FirstFrame,
     /// None: the message leaves for a peer outside this broker.
     Nobody,
 }
@@ -67,8 +81,7 @@ enum Peer {
 struct Subscription {
     id: u64,
     name: String,
-    deliveries: mpsc::UnboundedSender<Result<ZmqMessage, ZmqError>>,
-    read: Read,
+    deliver: Deliver,
 }
 
 #[derive(Default)]
@@ -138,21 +151,43 @@ impl Bus {
         let _ = self.coordinator.set(coordinator);
     }
 
-    /// Opens a subscription named `name`, whose deliveries are read with `read`.
-    pub(crate) fn subscribe(
+    /// Opens a subscription named `name`, whose deliveries are read with `read`; `None` is a
+    /// message its socket's driver skips.
+    pub(crate) fn subscribe<Env, Read, Item>(
         self: &Arc<Self>,
         name: &str,
         read: Read,
-    ) -> (Deliveries, Registration) {
+    ) -> (Deliveries<Env>, Registration)
+    where
+        Env: Envelope,
+        Read: Fn(WireMessage) -> Item + Send + Sync + 'static,
+        Item: Into<Option<Result<ZmqMessage<Env>, ZmqError>>>,
+    {
         let (tx, rx) = mpsc::unbounded_channel();
+        let deliver: Deliver = Arc::new(move |frames, coordinator| {
+            let Some(delivery) = read(frames).into() else {
+                return;
+            };
+            let delivery = match (delivery, coordinator) {
+                (Ok(message), Some(coordinator)) => {
+                    // Counted before it is handed over, so the harness never sees the delivery
+                    // consumed before it saw it enqueued.
+                    coordinator.enqueued();
+                    Ok(message.counted(Release(Some(coordinator.clone()))))
+                }
+                (delivery, _) => delivery,
+            };
+            // A subscription that closed between the pick and the send takes nothing; its
+            // delivery drops here and gives its count back.
+            let _ = tx.send(delivery);
+        });
         let mut state = self.state();
         let id = state.next_id;
         state.next_id += 1;
         state.subscriptions.push(Subscription {
             id,
             name: name.to_owned(),
-            deliveries: tx,
-            read,
+            deliver,
         });
         drop(state);
         (
@@ -164,17 +199,20 @@ impl Bus {
         )
     }
 
-    /// Carries `frames`, published to `destination`, to the subscriptions `pick` names, behind
-    /// the peer `identity` when a ROUTER is to read it, and records it in the log.
-    pub(crate) fn send(
+    /// Carries `frames`, published to `destination` through `envelope` over `pattern`, to the
+    /// subscriptions `pick` names, behind the peer `identity` when a ROUTER is to read it, and
+    /// records it in the log.
+    pub(crate) fn send<Env: Envelope>(
         &self,
+        (envelope, pattern): (&Env, Pattern),
         destination: &str,
         frames: WireMessage,
         identity: Option<&Bytes>,
         pick: Pick<'_>,
     ) -> usize {
         let mut state = self.state();
-        record(&mut state, destination, &frames);
+        record(&mut state, envelope, pattern, destination, &frames);
+        let first = frames.get(0).map_or(&[][..], Bytes::as_ref);
         let chosen: Vec<_> = match pick {
             Pick::Nobody => Vec::new(),
             Pick::All => state.subscriptions.iter().collect(),
@@ -183,6 +221,11 @@ impl Bus {
                 .iter()
                 .filter(|sub| name.starts_with(sub.name.as_str()))
                 .collect(),
+            Pick::FirstFrame => state
+                .subscriptions
+                .iter()
+                .filter(|sub| first.starts_with(sub.name.as_bytes()))
+                .collect(),
             Pick::OneInTurn if state.subscriptions.is_empty() => Vec::new(),
             Pick::OneInTurn => {
                 let at = state.turn % state.subscriptions.len();
@@ -190,9 +233,9 @@ impl Bus {
                 vec![&state.subscriptions[at]]
             }
         };
-        let chosen: Vec<_> = chosen
+        let chosen: Vec<Deliver> = chosen
             .into_iter()
-            .map(|sub| (sub.deliveries.clone(), sub.read))
+            .map(|sub| Arc::clone(&sub.deliver))
             .collect();
         // The sends are the subscribers' business, not the registry's.
         drop(state);
@@ -202,22 +245,8 @@ impl Bus {
             received.push_front(identity.clone());
         }
         let reached = chosen.len();
-        for (deliveries, read) in chosen {
-            let Some(delivery) = read(received.clone()) else {
-                continue;
-            };
-            let delivery = match (delivery, self.coordinator.get()) {
-                (Ok(message), Some(coordinator)) => {
-                    // Counted before it is handed over, so the harness never sees the delivery
-                    // consumed before it saw it enqueued.
-                    coordinator.enqueued();
-                    Ok(message.counted(Release(Some(coordinator.clone()))))
-                }
-                (delivery, _) => delivery,
-            };
-            // A subscription that closed between the pick and the send takes nothing; its
-            // delivery drops here and gives its count back.
-            let _ = deliveries.send(delivery);
+        for deliver in chosen {
+            deliver(received.clone(), self.coordinator.get());
         }
         reached
     }
@@ -229,11 +258,16 @@ impl Bus {
     /// # Errors
     ///
     /// Returns [`ZmqError::Send`] in the ROUTER's own words when no peer carries the identity.
-    pub(crate) fn reply(&self, destination: &str, frames: WireMessage) -> Result<(), ZmqError> {
+    pub(crate) fn reply<Env: Envelope>(
+        &self,
+        envelope: &Env,
+        destination: &str,
+        frames: WireMessage,
+    ) -> Result<(), ZmqError> {
         let mut frames = frames.into_vecdeque();
         let identity = frames.pop_front().unwrap_or_default();
         let frames = WireMessage::try_from(frames)
-            .map_err(|_| ZmqError::Wire("a reply needs name and payload frames".into()))?;
+            .map_err(|_| ZmqError::Wire("a reply needs a frame behind the peer identity".into()))?;
         let mut state = self.state();
         let waiting = match state.peers.get(&identity) {
             Some(Peer::Waiting(inbox)) => Some(inbox.clone()),
@@ -250,7 +284,13 @@ impl Bus {
                 });
             }
         };
-        record(&mut state, destination, &frames);
+        record(
+            &mut state,
+            envelope,
+            Pattern::DealerRouter,
+            destination,
+            &frames,
+        );
         drop(state);
         if let Some(inbox) = waiting {
             let _ = inbox.send(frames);
@@ -282,12 +322,23 @@ impl Bus {
     }
 }
 
-/// Records what a peer receiving `frames` reads: the payload frame as it was written, the headers
-/// the frame decodes to. A message whose frames no peer could read is recorded as its bytes.
-fn record(state: &mut State, destination: &str, frames: &WireMessage) {
-    let entry = match wire::decode(frames.clone()) {
-        Ok((_, headers, payload)) => RawMessage::new(destination, payload).with_headers(headers),
-        Err(_) => RawMessage::new(destination, frames.get(2).cloned().unwrap_or_default()),
+/// Records what a peer reading `frames` through the `envelope` they were written in reads: the
+/// payload as it was written, and the headers. A message no such peer could read is recorded as
+/// its last frame.
+fn record<Env: Envelope>(
+    state: &mut State,
+    envelope: &Env,
+    pattern: Pattern,
+    destination: &str,
+    frames: &WireMessage,
+) {
+    let entry = match envelope.open(pattern, frames.clone().into_vecdeque()) {
+        Ok(opened) => RawMessage::new(destination, opened.payload)
+            .with_headers(Env::headers(&opened.head).unwrap_or_default()),
+        Err(_) => RawMessage::new(
+            destination,
+            frames.iter().last().cloned().unwrap_or_default(),
+        ),
     };
     state
         .log
@@ -296,19 +347,54 @@ fn record(state: &mut State, destination: &str, frames: &WireMessage) {
         .push(entry);
 }
 
-/// Builds the frames a foreign peer sends for `message`.
-fn foreign(message: &OutgoingMessage<'_>) -> WireMessage {
-    wire::encode_foreign(
+/// Builds the frames a peer that writes `envelope` sends for `message`.
+///
+/// A peer composing [`Frames`] by hand writes whatever bytes it likes into the header frame, so a
+/// header this crate would refuse to write reaches the subscription as such a peer sends it.
+///
+/// # Panics
+///
+/// Panics when another envelope cannot carry the message, a header it has no place for: no peer
+/// writing it could send the message the test injects.
+fn foreign<Env: Envelope>(
+    envelope: &Env,
+    pattern: Pattern,
+    message: &OutgoingMessage<'_>,
+) -> WireMessage {
+    envelope::write(
+        envelope,
+        pattern,
         message.name(),
-        message.headers(),
-        Bytes::copy_from_slice(message.payload()),
+        None,
+        (
+            message.name(),
+            message.headers(),
+            Bytes::copy_from_slice(message.payload()),
+        ),
     )
+    .unwrap_or_else(|err| {
+        // The one layout with a frame a peer writes by hand; the check runs once per injected
+        // message, in the test harness only.
+        if TypeId::of::<Env>() == TypeId::of::<Frames>() {
+            let frames = frames::foreign(
+                message.name(),
+                message.headers(),
+                Bytes::copy_from_slice(message.payload()),
+            );
+            return WireMessage::try_from(frames)
+                .expect("a list built from named frames is never empty");
+        }
+        panic!(
+            "a peer writing the {} envelope cannot send the injected message: {err}",
+            Env::NAME
+        )
+    })
 }
 
 /// The positions of the subscriptions `pick` reaches, answered from the names alone.
 fn positions(subscriptions: &[&str], pick: Pick<'_>) -> Vec<usize> {
     match pick {
-        Pick::Nobody | Pick::OneInTurn => Vec::new(),
+        Pick::Nobody | Pick::OneInTurn | Pick::FirstFrame => Vec::new(),
         Pick::All => (0..subscriptions.len()).collect(),
         Pick::Prefix(name) => subscriptions
             .iter()
@@ -319,19 +405,19 @@ fn positions(subscriptions: &[&str], pick: Pick<'_>) -> Vec<usize> {
     }
 }
 
-impl<Role: EndpointRole> InProcess for ZmqQueue<Role> {
+impl<Role: EndpointRole, Env: Envelope> InProcess for ZmqQueue<Role, Env> {
     async fn connect_in_process(self) -> Result<Self::Connected, Self::Error> {
         self.connect_with(Lifecycle::in_process).await
     }
 }
 
-impl<Role: EndpointRole> InProcess for ZmqFanout<Role> {
+impl<Role: EndpointRole, Env: Envelope> InProcess for ZmqFanout<Role, Env> {
     async fn connect_in_process(self) -> Result<Self::Connected, Self::Error> {
         self.connect_with(Lifecycle::in_process).await
     }
 }
 
-impl InProcess for ZmqRpc {
+impl<Env: Envelope> InProcess for ZmqRpc<Env> {
     async fn connect_in_process(self) -> Result<Self::Connected, Self::Error> {
         self.connect_with(Lifecycle::in_process).await
     }
@@ -341,7 +427,7 @@ impl InProcess for ZmqRpc {
 /// subscription, and one that subscriptions dial hands each message to one of them in turn,
 /// whatever its name frame says. A publish of this service reaches its own subscription only
 /// through the listener that subscription bound.
-impl<Role: EndpointRole> TestableBroker for ConnectedZmqQueue<Role> {
+impl<Role: EndpointRole, Env: Envelope> TestableBroker for ConnectedZmqQueue<Role, Env> {
     fn install_coordinator(&self, coordinator: Coordinator) {
         if let Some(bus) = self.lifecycle().in_process_bus() {
             bus.install(coordinator);
@@ -354,7 +440,14 @@ impl<Role: EndpointRole> TestableBroker for ConnectedZmqQueue<Role> {
                 Side::Bind => Pick::All,
                 Side::Connect => Pick::OneInTurn,
             };
-            bus.send(message.name(), foreign(&message), None, pick);
+            let frames = foreign(self.envelope(), Pattern::PushPull, &message);
+            bus.send(
+                (self.envelope(), Pattern::PushPull),
+                message.name(),
+                frames,
+                None,
+                pick,
+            );
         }
     }
 
@@ -378,7 +471,7 @@ impl<Role: EndpointRole> TestableBroker for ConnectedZmqQueue<Role> {
 
 /// The fan-out's routing: every subscription whose name prefixes the message's name, on either
 /// side, and for a publish of this service only through the listener its subscription bound.
-impl<Role: EndpointRole> TestableBroker for ConnectedZmqFanout<Role> {
+impl<Role: EndpointRole, Env: Envelope> TestableBroker for ConnectedZmqFanout<Role, Env> {
     fn install_coordinator(&self, coordinator: Coordinator) {
         if let Some(bus) = self.lifecycle().in_process_bus() {
             bus.install(coordinator);
@@ -387,11 +480,13 @@ impl<Role: EndpointRole> TestableBroker for ConnectedZmqFanout<Role> {
 
     fn inject(&self, message: OutgoingMessage<'_>) {
         if let Some(bus) = self.lifecycle().in_process_bus() {
+            let frames = foreign(self.envelope(), Pattern::PubSub, &message);
             bus.send(
+                (self.envelope(), Pattern::PubSub),
                 message.name(),
-                foreign(&message),
+                frames,
                 None,
-                Pick::Prefix(message.name()),
+                Pick::FirstFrame,
             );
         }
     }
@@ -415,7 +510,7 @@ impl<Role: EndpointRole> TestableBroker for ConnectedZmqFanout<Role> {
 /// The exchange's routing: a request reaches the responder that binds the endpoint, or one of the
 /// responders that dial it in turn, stamped with the peer that asked; an answer reaches that peer
 /// and no subscription.
-impl TestableBroker for ConnectedZmqRpc {
+impl<Env: Envelope> TestableBroker for ConnectedZmqRpc<Env> {
     fn install_coordinator(&self, coordinator: Coordinator) {
         if let Some(bus) = self.lifecycle().in_process_bus() {
             bus.install(coordinator);
@@ -429,7 +524,15 @@ impl TestableBroker for ConnectedZmqRpc {
                 Side::Connect => Pick::OneInTurn,
             };
             let identity = bus.foreign_peer();
-            if bus.send(message.name(), foreign(&message), Some(&identity), pick) == 0 {
+            let frames = foreign(self.envelope(), Pattern::DealerRouter, &message);
+            let sent = bus.send(
+                (self.envelope(), Pattern::DealerRouter),
+                message.name(),
+                frames,
+                Some(&identity),
+                pick,
+            );
+            if sent == 0 {
                 // No responder took the request, so no answer will come for the peer.
                 bus.close_inbox(&identity);
             }
@@ -452,23 +555,37 @@ impl TestableBroker for ConnectedZmqRpc {
     }
 }
 
-ruststream::register_testable_broker!(ZmqQueue<Bind>);
-ruststream::register_testable_broker!(ZmqQueue<Connect>);
-ruststream::register_testable_broker!(ZmqFanout<Bind>);
-ruststream::register_testable_broker!(ZmqFanout<Connect>);
-ruststream::register_testable_broker!(ZmqRpc);
+/// Registers every broker type of this crate on the envelope `$envelope`.
+macro_rules! register_envelope {
+    ($envelope:ty) => {
+        ruststream::register_testable_broker!(ZmqQueue<Bind, $envelope>);
+        ruststream::register_testable_broker!(ZmqQueue<Connect, $envelope>);
+        ruststream::register_testable_broker!(ZmqFanout<Bind, $envelope>);
+        ruststream::register_testable_broker!(ZmqFanout<Connect, $envelope>);
+        ruststream::register_testable_broker!(ZmqRpc<$envelope>);
+    };
+}
+
+register_envelope!(Frames);
+register_envelope!(NoOp);
+#[cfg(feature = "json")]
+register_envelope!(Framed<JsonCodec>);
+#[cfg(feature = "cbor")]
+register_envelope!(Framed<CborCodec>);
+#[cfg(feature = "msgpack")]
+register_envelope!(Framed<MsgpackCodec>);
 
 /// A request of this service over the in-process transport: the request leaves the way the
 /// DEALER sends it, reaches the responder this service binds when there is one, and waits for
 /// the answer that echoes its correlation id.
-pub(crate) async fn request(
+pub(crate) async fn request<Env: Envelope>(
+    envelope: &Env,
     bus: &Bus,
     local: bool,
-    name: &str,
-    frames: WireMessage,
-    correlation: &str,
+    (name, frames): (&str, WireMessage),
+    correlation: Option<&str>,
     timeout: Duration,
-) -> Result<ZmqMessage, ZmqError> {
+) -> Result<ZmqMessage<Env>, ZmqError> {
     let identity = peer_identity();
     let mut inbox = bus.open_inbox(identity.clone());
     // Disconnects the DEALER however the request ends, a caller dropping it included.
@@ -477,12 +594,19 @@ pub(crate) async fn request(
         identity: &identity,
     };
     let pick = if local { Pick::All } else { Pick::Nobody };
-    let _ = bus.send(name, frames, Some(&identity), pick);
+    let _ = bus.send(
+        (envelope, Pattern::DealerRouter),
+        name,
+        frames,
+        Some(&identity),
+        pick,
+    );
     let exchange = async {
         while let Some(reply) = inbox.recv().await {
-            let (name, headers, payload) = wire::decode(reply)?;
-            if headers.correlation_id() == Some(correlation) {
-                return Ok(ZmqMessage::new(name, headers, payload));
+            let reply =
+                envelope::read(envelope, Pattern::DealerRouter, reply.into_vecdeque(), None)?;
+            if answers(&reply, correlation) {
+                return Ok(reply);
             }
         }
         Err(ZmqError::RequestTimeout)
@@ -532,15 +656,23 @@ mod tests {
     #[tokio::test]
     async fn a_request_dropped_while_it_waits_leaves_no_peer() {
         let bus = Bus::default();
-        let frames = wire::encode_to(
+        let frames = envelope::write(
+            &Frames,
+            Pattern::DealerRouter,
             "orders",
-            "orders",
-            &HeaderMap::new(),
-            Bytes::from_static(b"x"),
+            None,
+            ("orders", &HeaderMap::new(), Bytes::from_static(b"x")),
         )
         .expect("frames");
-        let pending =
-            request(&bus, false, "orders", frames, "c-1", Duration::from_mins(1)).now_or_never();
+        let pending = request(
+            &Frames,
+            &bus,
+            false,
+            ("orders", frames),
+            Some("c-1"),
+            Duration::from_mins(1),
+        )
+        .now_or_never();
         assert!(pending.is_none(), "the request was still waiting");
         assert_eq!(bus.peers(), 0);
     }

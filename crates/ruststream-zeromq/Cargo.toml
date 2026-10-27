@@ -24,7 +24,12 @@ default = []
 testing = ["ruststream/testing"]
 # The protocol bindings and the server coordinate this crate contributes to the generated
 # AsyncAPI document. Forwarded from the core, which gates the hooks on the same name.
-asyncapi = ["ruststream/asyncapi", "dep:serde"]
+asyncapi = ["ruststream/asyncapi"]
+# The core's codecs, forwarded so the in-process mode registers a `Framed` envelope over each one
+# a service enables. A service that enables a codec on `ruststream` alone builds the same API.
+json = ["ruststream/json"]
+cbor = ["ruststream/cbor"]
+msgpack = ["ruststream/msgpack"]
 
 [dependencies]
 ruststream = { workspace = true, default-features = false }
@@ -33,7 +38,7 @@ bytes.workspace = true
 futures.workspace = true
 aliasable.workspace = true
 selfie.workspace = true
-serde = { version = "1.0.196", features = ["derive"], optional = true }
+serde = { version = "1.0.196", features = ["derive"] }
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true

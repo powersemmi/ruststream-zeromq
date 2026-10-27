@@ -5,12 +5,12 @@
 mod bindings;
 mod common;
 mod endpoint;
+pub mod envelope;
 mod error;
 #[cfg(feature = "testing")]
 mod in_process;
 mod message;
 pub mod prelude;
-mod wire;
 
 // Public, not just re-export sources: each form carries its own prelude.
 pub mod fanout;

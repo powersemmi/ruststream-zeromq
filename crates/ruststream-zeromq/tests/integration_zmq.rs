@@ -742,10 +742,10 @@ async fn a_publish_with_no_peer_fails_once_the_retry_window_is_spent() {
     connected.shutdown().await.expect("shutdown succeeds");
 }
 
-/// A peer composing the frames by hand gets the malformed ones back as an error on the
-/// subscription, on the first message rather than as headers that quietly went missing.
+/// A peer composing the frames by hand may write a header frame that does not read. The message
+/// still arrives with its payload, and reads as one without headers when a handler asks for them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_malformed_header_frame_from_a_foreign_peer_surfaces_on_the_subscription() {
+async fn a_malformed_header_frame_from_a_foreign_peer_reads_as_no_headers() {
     let connected = ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"))
         .connect()
         .await
@@ -766,16 +766,13 @@ async fn a_malformed_header_frame_from_a_foreign_peer_surfaces_on_the_subscripti
     raw.send(frames).await.expect("raw send succeeds");
 
     let mut stream = pin!(subscriber.stream());
-    let err = tokio::time::timeout(RECV_TIMEOUT, stream.next())
+    let message = tokio::time::timeout(RECV_TIMEOUT, stream.next())
         .await
         .expect("the subscription answers")
         .expect("the stream is open")
-        .expect_err("a header line with no separator is not a message")
-        .to_string();
-    assert!(
-        err.contains("content-type application/json"),
-        "the error must quote the line it could not read, got: {err}",
-    );
+        .expect("the message arrives");
+    assert_eq!(message.payload(), b"{}");
+    assert_eq!(message.headers(), &HeaderMap::new());
 
     connected.shutdown().await.expect("shutdown succeeds");
 }

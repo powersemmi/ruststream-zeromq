@@ -205,6 +205,7 @@ mod tests {
                         "transport": "tcp",
                         "endpoint": "0.0.0.0:5557",
                         "role": "bind",
+                        "envelope": { "name": "frames" },
                     },
                 },
             })

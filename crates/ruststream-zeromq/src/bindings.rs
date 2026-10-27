@@ -5,10 +5,12 @@
 //! crate, because no community extension for `ZeroMQ` exists to align with: a reader who knows the
 //! name knows who wrote the body.
 //!
-//! Two levels carry one. The server says how to attach to the endpoint: which transport, which
-//! coordinate, and which side of it this service is. The channel says which socket pair the
-//! messages on it travel over and what their name frame holds, which is what a peer needs before
-//! it can open the other end and read from it.
+//! Three levels carry one. The server says how to attach to the endpoint: which transport, which
+//! coordinate, which side of it this service is, and the envelope its subscriptions read. The
+//! channel says which socket pair the messages on it travel over and what their name frame holds,
+//! which is what a peer needs before it can open the other end and read from it. The message of a
+//! publish position names the envelope it is written in, and the media type of the document
+//! [`Framed`](crate::envelope::Framed) writes.
 //!
 //! Nothing here reads a connection, and nothing here is a credential: the coordinate is the same
 //! one [`DescribeServer`](ruststream::DescribeServer) reports, with the scheme and any userinfo
@@ -18,6 +20,7 @@ use ruststream::asyncapi::{Binding, Bindings};
 use serde::Serialize;
 
 use crate::endpoint::{Endpoint, Side};
+use crate::envelope::Envelope;
 
 /// The extension key both levels sit under.
 const EXTENSION: &str = "x-ruststream-zeromq";
@@ -61,6 +64,30 @@ struct ServerBody {
     transport: &'static str,
     endpoint: String,
     role: &'static str,
+    envelope: EnvelopeBody,
+}
+
+/// The layout the frames of a message follow, and the media type of the frame it writes the
+/// headers and the payload into where it writes them into one.
+#[derive(Serialize)]
+struct EnvelopeBody {
+    name: &'static str,
+    #[serde(rename = "contentType", skip_serializing_if = "Option::is_none")]
+    content_type: Option<&'static str>,
+}
+
+impl EnvelopeBody {
+    const fn of<Env: Envelope>() -> Self {
+        Self {
+            name: Env::NAME,
+            content_type: Env::CONTENT_TYPE,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct MessageBody {
+    envelope: EnvelopeBody,
 }
 
 #[derive(Serialize)]
@@ -83,8 +110,9 @@ fn transport(endpoint: &Endpoint) -> &'static str {
     }
 }
 
-/// The server binding: the transport, the coordinate, and which side of it this service takes.
-pub(crate) fn server(endpoint: &Endpoint) -> Bindings {
+/// The server binding: the transport, the coordinate, which side of it this service takes, and
+/// the envelope `Env` the broker's subscriptions read.
+pub(crate) fn server<Env: Envelope>(endpoint: &Endpoint) -> Bindings {
     let body = ServerBody {
         transport: transport(endpoint),
         endpoint: endpoint.host(),
@@ -92,8 +120,16 @@ pub(crate) fn server(endpoint: &Endpoint) -> Bindings {
             Side::Bind => "bind",
             Side::Connect => "connect",
         },
+        envelope: EnvelopeBody::of::<Env>(),
     };
     wrap(&body)
+}
+
+/// The message binding of a publish position: the envelope `Env` its messages are written in.
+pub(crate) fn message<Env: Envelope>() -> Bindings {
+    wrap(&MessageBody {
+        envelope: EnvelopeBody::of::<Env>(),
+    })
 }
 
 /// The channel binding: the socket pair the messages on this channel travel over, and the name
@@ -123,10 +159,13 @@ mod tests {
 
     use super::*;
     use crate::ZmqEndpoint;
+    use ruststream::codec::JsonCodec;
+
+    use crate::envelope::{Framed, Frames, NoOp};
 
     #[test]
     fn the_server_binding_reports_the_transport_and_the_role() {
-        let json = serde_json::to_value(server(
+        let json = serde_json::to_value(server::<Frames>(
             &ZmqEndpoint::bind("tcp://0.0.0.0:5555").into_inner(),
         ))
         .expect("the binding serializes");
@@ -141,7 +180,8 @@ mod tests {
     #[test]
     fn the_server_binding_drops_userinfo_with_the_scheme() {
         let endpoint = ZmqEndpoint::connect("tcp://user:hunter2@broker:5555").into_inner();
-        let json = serde_json::to_string(&server(&endpoint)).expect("the binding serializes");
+        let json =
+            serde_json::to_string(&server::<Frames>(&endpoint)).expect("the binding serializes");
         assert!(
             !json.contains("hunter2"),
             "the binding carries a password: {json}"
@@ -154,13 +194,44 @@ mod tests {
 
     #[test]
     fn an_ipc_endpoint_reports_its_socket_path() {
-        let json = serde_json::to_value(server(
+        let json = serde_json::to_value(server::<Frames>(
             &ZmqEndpoint::connect("ipc:///tmp/orders").into_inner(),
         ))
         .expect("the binding serializes");
         assert_eq!(json[EXTENSION]["transport"], "ipc");
         assert_eq!(json[EXTENSION]["endpoint"], "/tmp/orders");
         assert_eq!(json[EXTENSION]["role"], "connect");
+    }
+
+    /// The server names the envelope its subscriptions read, and the media type of the document
+    /// where the envelope writes one.
+    #[test]
+    fn the_server_binding_names_the_envelope() {
+        let endpoint = ZmqEndpoint::bind("tcp://0.0.0.0:5555").into_inner();
+        let framed = serde_json::to_value(server::<Framed<JsonCodec>>(&endpoint))
+            .expect("the binding serializes");
+        assert_eq!(
+            framed[EXTENSION]["envelope"],
+            serde_json::json!({ "name": "framed", "contentType": "application/json" }),
+        );
+        let bare = serde_json::to_value(server::<NoOp>(&endpoint)).expect("the binding serializes");
+        assert_eq!(
+            bare[EXTENSION]["envelope"],
+            serde_json::json!({ "name": "none" })
+        );
+    }
+
+    /// A publish position names the envelope its messages are written in.
+    #[test]
+    fn the_message_binding_names_the_envelope() {
+        let json =
+            serde_json::to_value(message::<Framed<JsonCodec>>()).expect("the binding serializes");
+        assert_eq!(
+            json[EXTENSION],
+            serde_json::json!({
+                "envelope": { "name": "framed", "contentType": "application/json" },
+            }),
+        );
     }
 
     #[test]
