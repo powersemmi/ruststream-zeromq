@@ -1,6 +1,6 @@
 ---
 title: Wire format
-description: "Every message is three frames, name, headers, payload, so a peer in any language composes one with send_multipart."
+description: "In the default envelope every message is three frames, name, headers, payload, so a peer in any language composes one with send_multipart."
 ---
 
 import Tabs from '@theme/Tabs';
@@ -8,10 +8,11 @@ import TabItem from '@theme/TabItem';
 
 # Wire format
 
-Every message is three frames, name, headers, payload, so a peer in any language composes one with `send_multipart`.
+In the default envelope every message is three frames, name, headers, payload, so a peer in any language composes one with `send_multipart`.
 
 ZeroMQ carries messages made of frames and leaves their meaning to the application.
 This crate gives every message on PUSH/PULL and PUB/SUB the same three frames: the name, the headers and the payload.
+The layout is the [`Frames`](api:ruststream_zeromq::envelope::Frames) envelope, which every broker reads and writes unless it names another; [Envelopes](./envelopes.md) shows the others.
 
 The name frame is the subscription's name on the fan-out, matched as a [prefix](../subscriptions/prefixes.md); a queue takes every message whatever its name says.
 The [header frame](./headers.md) is text, and an empty frame means no headers.
@@ -23,7 +24,7 @@ The payload frame is what the service's codec wrote, so a peer agrees on the cod
 Bytes a service already holds encoded go out through a `#[derive(Outgoing, Serialized)]` newtype, and no codec runs on them.
 A name frame that is not UTF-8 surfaces on the subscription as [`ZmqError::Wire`](../broker/errors.md).
 
-On DEALER/ROUTER a request has the same three frames, and its answer travels behind the requester's identity, as [Envelope](./envelope.md) shows.
+On DEALER/ROUTER a request has the same three frames, and its answer travels behind the requester's identity, as [Identity frame](./identity.md) shows.
 
 [Peers in other languages](../../guides/interop.md) feeds, watches and asks a service from Python peers.
 

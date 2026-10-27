@@ -47,8 +47,12 @@ describe('redirects', () => {
     expect(moved.zeromq).toBe('https://docs.rs/ruststream-zeromq/0.8/ruststream_zeromq/index.html');
   });
 
+  it('sends the identity frame page to its new address', () => {
+    expect(moved['components/wire/envelope']).toBe('/components/wire/identity/');
+  });
+
   it('moves no other address of the old site', () => {
-    expect(Object.keys(moved).sort()).toEqual(['benchmarks', 'zeromq']);
+    expect(Object.keys(moved).sort()).toEqual(['benchmarks', 'components/wire/envelope', 'zeromq']);
   });
 
   it('points every docs.rs target at a page and a section the rustdoc of this checkout has', () => {

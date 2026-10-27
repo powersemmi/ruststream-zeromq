@@ -7,6 +7,7 @@ mod both_modes_zmq;
 mod cancel_safety;
 mod conformance_zmq;
 mod connect_runtime;
+mod envelopes;
 mod harness_zmq;
 mod header_values;
 mod in_process_zmq;

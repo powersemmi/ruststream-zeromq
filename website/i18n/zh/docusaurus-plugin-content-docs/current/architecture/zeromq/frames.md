@@ -63,6 +63,6 @@ ZMTP 是每个 ZeroMQ 套接字底下的协议。双方对端各自发送问候�
 
 回程的帧依次是身份、字面名称 `reply`、消息头和载荷。ROUTER 把它们发给身份所指的连接，并去掉身份。
 
-请求通过它自己的 DEALER 发出，带着自己的随机身份，因此一个回答只能到达提出它的那个请求。请求带有 `correlation-id` 消息头，调用方设置了它就保留原值。带有相同 id 的回复完成这个请求。[信封](../../components/wire/envelope.md)一页列出了这些消息头。
+请求通过它自己的 DEALER 发出，带着自己的随机身份，因此一个回答只能到达提出它的那个请求。请求带有 `correlation-id` 消息头，调用方设置了它就保留原值。带有相同 id 的回复完成这个请求。[身份帧](../../components/wire/identity.md)一页列出了这些消息头。
 
 协议是 [ZMTP 3.0](https://rfc.zeromq.org/spec/23/)，身份信封来自[请求-回复模式](https://rfc.zeromq.org/spec/28/)。

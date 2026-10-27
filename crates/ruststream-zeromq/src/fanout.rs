@@ -91,11 +91,11 @@ use crate::common::{
     Sender, SharedLifecycle, attach_to, delivery_channel, dials_the_sender, send_with_retry,
 };
 use crate::endpoint::{Bind, Connect, Endpoint, EndpointRole, ZmqEndpoint};
+use crate::envelope::{self, Envelope, Enveloped, Frames, Pattern};
 use crate::error::{ZmqError, box_err};
 #[cfg(feature = "testing")]
 use crate::in_process::Pick;
 use crate::queue::ZmqSubscriber;
-use crate::wire;
 
 // A production publisher holds the socket it attached and nothing beside it.
 #[cfg(not(feature = "testing"))]
@@ -140,9 +140,10 @@ const _: () = assert!(size_of::<Sender<PubSide>>() == size_of::<PubSide>());
 /// }
 /// ```
 #[must_use]
-pub struct ZmqFanout<Role = Bind> {
+pub struct ZmqFanout<Role = Bind, Env = Frames> {
     endpoint: Endpoint,
     read_ahead: NonZeroUsize,
+    envelope: Env,
     cell: Arc<OnceCell<SharedLifecycle>>,
     role: PhantomData<fn() -> Role>,
 }
@@ -189,13 +190,56 @@ impl<Role: EndpointRole> ZmqFanout<Role> {
         Self {
             endpoint: endpoint.into_inner(),
             read_ahead: DEFAULT_READ_AHEAD,
+            envelope: Frames,
             cell: Arc::new(OnceCell::new()),
             role: PhantomData,
         }
     }
 }
 
-impl<Role> ZmqFanout<Role> {
+impl<Role, Env: Envelope> ZmqFanout<Role, Env> {
+    /// The layout this fan-out's subscriptions read and its publishers write, [`Frames`] unless
+    /// set. A publish policy may name another for its own publishes.
+    ///
+    /// # Examples
+    ///
+    /// A recorder takes the ticks of a plain PUB peer that dials it and sends each tick as one
+    /// frame, which its subscriptions match their prefix against:
+    ///
+    /// ```
+    /// use ruststream_zeromq::envelope::NoOp;
+    /// use ruststream_zeromq::fanout::prelude::*;
+    /// use serde::Deserialize;
+    ///
+    /// #[derive(Deserialize)]
+    /// struct Tick {
+    ///     price: u64,
+    /// }
+    ///
+    /// #[subscriber("ticks")]
+    /// async fn record(tick: &Tick) -> HandlerOutcome {
+    ///     tracing::info!(tick.price, "recorded");
+    ///     HandlerOutcome::ack()
+    /// }
+    ///
+    /// #[ruststream::app]
+    /// fn app() -> impl App {
+    ///     let ticks = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")).envelope(NoOp);
+    ///     RustStream::new(AppInfo::new("recorder", "0.1.0")).with_broker(ticks, |b| {
+    ///         b.include(record);
+    ///     })
+    /// }
+    /// ```
+    pub fn envelope<Other: Envelope>(self, envelope: Other) -> ZmqFanout<Role, Other> {
+        ZmqFanout {
+            endpoint: self.endpoint,
+            read_ahead: self.read_ahead,
+            envelope,
+            cell: self.cell,
+            role: PhantomData,
+        }
+    }
+
     /// How many deliveries a subscription reads off its socket ahead of the handler; 1000 unless
     /// set, the receive high-water mark `ZeroMQ` itself gives a socket.
     ///
@@ -243,51 +287,50 @@ impl<Role> ZmqFanout<Role> {
 
     /// A publisher sharing this fan-out's state; buildable before `connect`.
     #[must_use]
-    pub fn publisher(&self) -> ZmqFanoutPublisher {
-        ZmqFanoutPublisher {
-            cell: Arc::clone(&self.cell),
-            socket: Arc::new(Mutex::new(None)),
-        }
+    pub fn publisher(&self) -> ZmqFanoutPublisher<Env> {
+        ZmqFanoutPublisher::new(&self.cell, self.envelope.clone())
     }
 }
 
 // Written out rather than derived: `Role` is a type-level tag, and a derive would demand of it
 // what is only asked of the fields.
-impl<Role> Clone for ZmqFanout<Role> {
+impl<Role, Env: Clone> Clone for ZmqFanout<Role, Env> {
     fn clone(&self) -> Self {
         Self {
             endpoint: self.endpoint.clone(),
             read_ahead: self.read_ahead,
+            envelope: self.envelope.clone(),
             cell: Arc::clone(&self.cell),
             role: PhantomData,
         }
     }
 }
 
-impl<Role> fmt::Debug for ZmqFanout<Role> {
+impl<Role, Env: Envelope> fmt::Debug for ZmqFanout<Role, Env> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ZmqFanout")
             .field("endpoint", &self.endpoint)
+            .field("envelope", &Env::NAME)
             .finish_non_exhaustive()
     }
 }
 
-impl<Role: EndpointRole> Broker for ZmqFanout<Role> {
+impl<Role: EndpointRole, Env: Envelope> Broker for ZmqFanout<Role, Env> {
     type Error = ZmqError;
-    type Connected = ConnectedZmqFanout<Role>;
+    type Connected = ConnectedZmqFanout<Role, Env>;
 
     async fn connect(self) -> Result<Self::Connected, Self::Error> {
         self.connect_with(Lifecycle::new).await
     }
 }
 
-impl<Role: EndpointRole> ZmqFanout<Role> {
+impl<Role: EndpointRole, Env: Envelope> ZmqFanout<Role, Env> {
     /// The connect transition over the transport `lifecycle` builds: the sockets, or the
     /// in-process transport the test harness connects instead.
     pub(crate) async fn connect_with(
         self,
         lifecycle: fn(Endpoint) -> Lifecycle,
-    ) -> Result<ConnectedZmqFanout<Role>, ZmqError> {
+    ) -> Result<ConnectedZmqFanout<Role, Env>, ZmqError> {
         let lifecycle = self
             .cell
             .get_or_try_init(async || {
@@ -299,28 +342,30 @@ impl<Role: EndpointRole> ZmqFanout<Role> {
         Ok(ConnectedZmqFanout {
             lifecycle,
             read_ahead: self.read_ahead,
+            envelope: self.envelope,
             cell: self.cell,
             role: PhantomData,
         })
     }
 }
 
-impl<Role: EndpointRole> DescribeServer for ZmqFanout<Role> {
+impl<Role: EndpointRole, Env: Envelope> DescribeServer for ZmqFanout<Role, Env> {
     fn describe_server(&self) -> ServerSpec {
-        self.endpoint.server_spec()
+        self.endpoint.server_spec::<Env>()
     }
 }
 
 /// The connected form of [`ZmqFanout`].
-pub struct ConnectedZmqFanout<Role = Bind> {
+pub struct ConnectedZmqFanout<Role = Bind, Env = Frames> {
     lifecycle: SharedLifecycle,
+    envelope: Env,
     /// How far this subscription reads ahead, from the broker this form was connected from.
     read_ahead: NonZeroUsize,
     cell: Arc<OnceCell<SharedLifecycle>>,
     role: PhantomData<fn() -> Role>,
 }
 
-impl<Role> fmt::Debug for ConnectedZmqFanout<Role> {
+impl<Role, Env> fmt::Debug for ConnectedZmqFanout<Role, Env> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ConnectedZmqFanout")
             .field("lifecycle", &self.lifecycle)
@@ -328,10 +373,15 @@ impl<Role> fmt::Debug for ConnectedZmqFanout<Role> {
     }
 }
 
-impl<Role> ConnectedZmqFanout<Role> {
+impl<Role, Env: Envelope> ConnectedZmqFanout<Role, Env> {
     #[cfg(feature = "testing")]
     pub(crate) fn lifecycle(&self) -> &Lifecycle {
         &self.lifecycle
+    }
+
+    #[cfg(feature = "testing")]
+    pub(crate) const fn envelope(&self) -> &Env {
+        &self.envelope
     }
 
     /// The address a local subscription resolved by binding (useful with an ephemeral
@@ -343,18 +393,18 @@ impl<Role> ConnectedZmqFanout<Role> {
 
     /// A publisher from the connected form.
     #[must_use]
-    pub fn publisher(&self) -> ZmqFanoutPublisher {
-        ZmqFanoutPublisher {
-            cell: Arc::clone(&self.cell),
-            socket: Arc::new(Mutex::new(None)),
-        }
+    pub fn publisher(&self) -> ZmqFanoutPublisher<Env> {
+        ZmqFanoutPublisher::new(&self.cell, self.envelope.clone())
     }
 
     /// The publisher a publish policy pairs: one whose side binds attaches its socket now, rather
     /// than on its first publish, so a peer that dials the endpoint connects before anything is
     /// sent. Startup work, once per pairing: the publish path itself is unchanged.
-    async fn paired(&self) -> Result<ZmqFanoutPublisher, PairError> {
-        let publisher = self.publisher();
+    async fn paired<Written: Envelope>(
+        &self,
+        envelope: Written,
+    ) -> Result<ZmqFanoutPublisher<Written>, PairError> {
+        let publisher = ZmqFanoutPublisher::new(&self.cell, envelope);
         if self.lifecycle.attaches_on_pairing() {
             publisher
                 .attach(&self.lifecycle)
@@ -366,14 +416,17 @@ impl<Role> ConnectedZmqFanout<Role> {
 
     /// Opens a SUB subscription on the endpoint, bound or dialed per the side, filtering on the
     /// name as a prefix.
-    async fn open(&self, name: &str) -> Result<ZmqSubscriber, ZmqError> {
+    async fn open(&self, name: &str) -> Result<ZmqSubscriber<Env>, ZmqError> {
         self.lifecycle.ensure_open()?;
         // The prefix filter is the transport's in process: it picks the subscriptions whose name
         // prefixes a message's name frame, as a SUB socket's filter does.
         #[cfg(feature = "testing")]
         if let Some(bus) = self.lifecycle.in_process_bus() {
             let slot = self.lifecycle.attach_in_process(name).await?;
-            let (rx, registration) = bus.subscribe(name, wire::read_delivery);
+            let envelope = self.envelope.clone();
+            let (rx, registration) = bus.subscribe(name, move |message| {
+                envelope::read(&envelope, Pattern::PubSub, message.into_vecdeque())
+            });
             return Ok(ZmqSubscriber::from_parts(
                 name.to_owned(),
                 DeliveryReceiver::InProcess(rx),
@@ -400,13 +453,13 @@ impl<Role> ConnectedZmqFanout<Role> {
             .await?;
 
         let (tx, rx) = delivery_channel(self.read_ahead);
+        let envelope = self.envelope.clone();
         let task = self.lifecycle.spawn(async move {
             loop {
                 match socket.recv().await {
                     Ok(message) => {
-                        let Some(item) = wire::read_delivery(message) else {
-                            continue;
-                        };
+                        let item =
+                            envelope::read(&envelope, Pattern::PubSub, message.into_vecdeque());
                         if tx.send(item).await.is_err() {
                             break;
                         }
@@ -431,7 +484,7 @@ impl<Role> ConnectedZmqFanout<Role> {
     }
 }
 
-impl<Role: EndpointRole> ConnectedBroker for ConnectedZmqFanout<Role> {
+impl<Role: EndpointRole, Env: Envelope> ConnectedBroker for ConnectedZmqFanout<Role, Env> {
     type Error = ZmqError;
     type Closed = ();
 
@@ -441,8 +494,8 @@ impl<Role: EndpointRole> ConnectedBroker for ConnectedZmqFanout<Role> {
     }
 }
 
-impl Subscribe for ConnectedZmqFanout<Bind> {
-    type Subscriber = ZmqSubscriber;
+impl<Env: Envelope> Subscribe for ConnectedZmqFanout<Bind, Env> {
+    type Subscriber = ZmqSubscriber<Env>;
 
     /// The subscribe name is the address, because the two ends of this pattern are the same
     /// broker: the subscription binds the endpoint, the PUB socket a registration publishes
@@ -459,8 +512,8 @@ impl Subscribe for ConnectedZmqFanout<Bind> {
     }
 }
 
-impl Subscribe for ConnectedZmqFanout<Connect> {
-    type Subscriber = ZmqSubscriber;
+impl<Env: Envelope> Subscribe for ConnectedZmqFanout<Connect, Env> {
+    type Subscriber = ZmqSubscriber<Env>;
 
     /// A subscription that dials reads from the PUB peer at the endpoint, which publishes and
     /// takes nothing, so a copy published back to it is refused by the handshake. The
@@ -490,8 +543,9 @@ impl Subscribe for ConnectedZmqFanout<Connect> {
 /// endpoint later, the publisher gives the endpoint up first, and its next publish dials that
 /// subscription.
 #[derive(Clone)]
-pub struct ZmqFanoutPublisher {
+pub struct ZmqFanoutPublisher<Env = Frames> {
     cell: Arc<OnceCell<SharedLifecycle>>,
+    envelope: Env,
     // The socket guard is the `futures` mutex rather than tokio's: the socket needs `&mut` per send,
     // so something must serialise, and this one's uncontended lock and unlock are a pair of atomics
     // where tokio's semaphore also takes its waiter list. It costs 1.8 of the 9 points a publish
@@ -509,7 +563,15 @@ pub(crate) enum PubSide {
     Loopback(XPubSocket),
 }
 
-impl ZmqFanoutPublisher {
+impl<Env: Envelope> ZmqFanoutPublisher<Env> {
+    fn new(cell: &Arc<OnceCell<SharedLifecycle>>, envelope: Env) -> Self {
+        Self {
+            cell: Arc::clone(cell),
+            envelope,
+            socket: Arc::new(Mutex::new(None)),
+        }
+    }
+
     /// Attaches the socket under the lifecycle's attach lock. One that listens on the endpoint
     /// itself is recorded there, for a subscription of this service that binds it later to make it
     /// give way.
@@ -544,13 +606,13 @@ const fn dials_a_subscription(sender: &Sender<PubSide>) -> bool {
     }
 }
 
-impl fmt::Debug for ZmqFanoutPublisher {
+impl<Env> fmt::Debug for ZmqFanoutPublisher<Env> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ZmqFanoutPublisher").finish_non_exhaustive()
     }
 }
 
-impl Publisher for ZmqFanoutPublisher {
+impl<Env: Envelope> Publisher for ZmqFanoutPublisher<Env> {
     /// A frame owns its bytes: the payload becomes the message's third frame and the socket
     /// keeps it until the send completes.
     type Payload = Take;
@@ -580,7 +642,13 @@ impl Publisher for ZmqFanoutPublisher {
         lifecycle.ensure_open()?;
         // Framed before the socket is touched: a message that cannot be written costs no attach.
         let (name, payload, headers) = msg.into_parts();
-        let frames = wire::encode_to(name, name, &headers, payload.freeze())?;
+        let frames = envelope::write(
+            &self.envelope,
+            Pattern::PubSub,
+            name,
+            None,
+            (name, &headers, payload.freeze()),
+        )?;
         // Checked here rather than by the type: whether one broker both subscribes and publishes is
         // decided by the scopes a service mounts, and the peer at the far end is the deployment's,
         // so the refusal comes before the handshake would give it. Checked on every publish, not
@@ -607,11 +675,11 @@ impl Publisher for ZmqFanoutPublisher {
             #[cfg(feature = "testing")]
             Sender::InProcess { bus, local } => {
                 let pick = if *local {
-                    Pick::Prefix(name)
+                    Pick::FirstFrame
                 } else {
                     Pick::Nobody
                 };
-                bus.send(name, frames, None, pick);
+                bus.send((&self.envelope, Pattern::PubSub), name, frames, None, pick);
                 Ok(())
             }
         }
@@ -752,8 +820,59 @@ async fn await_filter(socket: &mut XPubSocket, address: &str) -> Result<(), ZmqE
 #[must_use]
 pub struct ZmqFanoutPublish;
 
-impl<Role: EndpointRole> PublishPolicy<ConnectedZmqFanout<Role>> for ZmqFanoutPublish {
-    type Live = ZmqFanoutPublisher;
+impl ZmqFanoutPublish {
+    /// This policy writing through `envelope` rather than through its broker's.
+    ///
+    /// # Examples
+    ///
+    /// A service reads its orders in the default layout and broadcasts each one placed as a JSON
+    /// document to subscribers in other languages:
+    ///
+    /// ```
+    /// use ruststream::codec::JsonCodec;
+    /// use ruststream_zeromq::envelope::Framed;
+    /// use ruststream_zeromq::prelude::*;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Deserialize)]
+    /// struct Order {
+    ///     id: u64,
+    /// }
+    ///
+    /// #[derive(Serialize, Outgoing)]
+    /// #[outgoing(name = "orders.placed")]
+    /// struct Placed {
+    ///     id: u64,
+    /// }
+    ///
+    /// #[subscriber("orders", reply)]
+    /// async fn place(order: &Order) -> Placed {
+    ///     Placed { id: order.id }
+    /// }
+    ///
+    /// #[ruststream::app]
+    /// fn app() -> impl App {
+    ///     let events = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")).bindable();
+    ///     let to_events = events.bind(ZmqFanoutPublish.envelope(Framed::new(JsonCodec)));
+    ///     RustStream::new(AppInfo::new("orders", "0.1.0"))
+    ///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
+    ///             b.include(place).out_reply(to_events);
+    ///         })
+    ///         .with_broker(events, |_b| {})
+    /// }
+    /// ```
+    pub const fn envelope<Env: Envelope>(self, envelope: Env) -> Enveloped<Self, Env> {
+        Enveloped {
+            policy: self,
+            envelope,
+        }
+    }
+}
+
+impl<Role: EndpointRole, Env: Envelope> PublishPolicy<ConnectedZmqFanout<Role, Env>>
+    for ZmqFanoutPublish
+{
+    type Live = ZmqFanoutPublisher<Env>;
 
     /// On the bind side the publisher's socket attaches here, so it listens once the service has
     /// started; a dialing publisher attaches on its first publish.
@@ -763,9 +882,9 @@ impl<Role: EndpointRole> PublishPolicy<ConnectedZmqFanout<Role>> for ZmqFanoutPu
     /// Returns [`PairError`] when the socket of a binding publisher cannot take the endpoint.
     fn pair(
         self,
-        connected: &ConnectedZmqFanout<Role>,
+        connected: &ConnectedZmqFanout<Role, Env>,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
-        connected.paired()
+        connected.paired(connected.envelope.clone())
     }
 
     /// The destination reaches the binding, because on this pattern it is both frame 0 of every
@@ -774,8 +893,44 @@ impl<Role: EndpointRole> PublishPolicy<ConnectedZmqFanout<Role>> for ZmqFanoutPu
     fn channel_bindings(&self, channel: &str) -> Bindings {
         bindings::channel(SocketPair::PubSub, channel)
     }
+
+    #[cfg(feature = "asyncapi")]
+    fn message_bindings(&self, _channel: &str) -> Bindings {
+        bindings::message::<Env>()
+    }
 }
 
-impl<Role: EndpointRole> DefaultPublish for ConnectedZmqFanout<Role> {
+/// The fan-out's policy writing through an envelope of its own, whatever its broker reads.
+impl<Role, BrokerEnv, Env> PublishPolicy<ConnectedZmqFanout<Role, BrokerEnv>>
+    for Enveloped<ZmqFanoutPublish, Env>
+where
+    Role: EndpointRole,
+    BrokerEnv: Envelope,
+    Env: Envelope,
+{
+    type Live = ZmqFanoutPublisher<Env>;
+
+    /// # Errors
+    ///
+    /// Returns [`PairError`] when the socket of a binding publisher cannot take the endpoint.
+    fn pair(
+        self,
+        connected: &ConnectedZmqFanout<Role, BrokerEnv>,
+    ) -> impl Future<Output = Result<Self::Live, PairError>> {
+        connected.paired(self.envelope)
+    }
+
+    #[cfg(feature = "asyncapi")]
+    fn channel_bindings(&self, channel: &str) -> Bindings {
+        bindings::channel(SocketPair::PubSub, channel)
+    }
+
+    #[cfg(feature = "asyncapi")]
+    fn message_bindings(&self, _channel: &str) -> Bindings {
+        bindings::message::<Env>()
+    }
+}
+
+impl<Role: EndpointRole, Env: Envelope> DefaultPublish for ConnectedZmqFanout<Role, Env> {
     type Policy = ZmqFanoutPublish;
 }

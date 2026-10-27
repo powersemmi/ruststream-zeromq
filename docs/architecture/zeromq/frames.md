@@ -82,7 +82,7 @@ payload. The ROUTER sends them to the connection the identity names and takes th
 A request goes out on a DEALER of its own, with a random identity of its own, so an answer can
 reach only the request that asked. The request carries a `correlation-id` header, kept when the
 caller set one, and the reply that carries the same id resolves it. The
-[envelope](../../components/wire/envelope.md) page lists the headers.
+[identity frame](../../components/wire/identity.md) page lists the headers.
 
 The protocol is [ZMTP 3.0](https://rfc.zeromq.org/spec/23/), and the identity envelope is the
 [request-reply pattern](https://rfc.zeromq.org/spec/28/)'s.

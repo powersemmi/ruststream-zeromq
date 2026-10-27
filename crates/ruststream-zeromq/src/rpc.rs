@@ -118,9 +118,9 @@ use futures::lock::Mutex;
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::Bindings;
 use ruststream::{
-    Broker, BytesMut, ConnectedBroker, DefaultPublish, DescribeServer, NamedCopies,
-    OutgoingMessage, PairError, PublishPolicy, Publisher, RequestReply, ServerSpec, Str, Subscribe,
-    Subscriber, Take,
+    Broker, BytesMut, ConnectedBroker, DefaultPublish, DescribeServer, IncomingMessage,
+    NamedCopies, OutgoingMessage, PairError, PublishPolicy, Publisher, RequestReply, ServerSpec,
+    Str, Subscribe, Subscriber, Take,
 };
 use tokio::sync::OnceCell;
 use zeromq::prelude::*;
@@ -136,11 +136,11 @@ use crate::common::{
     send_with_retry,
 };
 use crate::endpoint::{Endpoint, EndpointRole, ZmqEndpoint};
+use crate::envelope::{self, Envelope, Enveloped, Frames, Pattern};
 use crate::error::ZmqError;
 #[cfg(feature = "testing")]
 use crate::in_process::{self, Bus};
-use crate::message::ZmqMessage;
-use crate::wire;
+use crate::message::{ZmqMessage, ZmqRequest};
 
 /// The prefix of reply destinations minted by the responder subscription.
 pub(crate) const REPLY_PREFIX: &str = "zmq-reply:";
@@ -244,12 +244,22 @@ fn hex_decode(text: &str) -> Option<Vec<u8>> {
 ///         .register_broker(model)
 /// }
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[must_use]
-pub struct ZmqRpc {
+pub struct ZmqRpc<Env = Frames> {
     endpoint: Endpoint,
     read_ahead: NonZeroUsize,
+    envelope: Env,
     cell: Arc<OnceCell<RpcShared>>,
+}
+
+impl<Env: Envelope> fmt::Debug for ZmqRpc<Env> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ZmqRpc")
+            .field("endpoint", &self.endpoint)
+            .field("envelope", &Env::NAME)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone)]
@@ -350,7 +360,79 @@ impl ZmqRpc {
         Self {
             endpoint: endpoint.into_inner(),
             read_ahead: DEFAULT_READ_AHEAD,
+            envelope: Frames,
             cell: Arc::new(OnceCell::new()),
+        }
+    }
+}
+
+impl<Env: Envelope> ZmqRpc<Env> {
+    /// The layout this exchange's requests and answers travel in, [`Frames`] unless set. A
+    /// publish policy may name another for the answers it writes.
+    ///
+    /// # Examples
+    ///
+    /// A responder answers plain DEALER peers that send each request as one frame and read the
+    /// answer the same way:
+    ///
+    /// ```
+    /// use ruststream_zeromq::envelope::NoOp;
+    /// use ruststream_zeromq::rpc::prelude::*;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Deserialize)]
+    /// struct Greeting {
+    ///     who: String,
+    /// }
+    ///
+    /// #[derive(Serialize, Outgoing)]
+    /// struct Answer {
+    ///     text: String,
+    /// }
+    ///
+    /// #[subscriber("greeter", reply("reply"))]
+    /// async fn greet(request: &Greeting) -> Answer {
+    ///     Answer {
+    ///         text: format!("hello {}", request.who),
+    ///     }
+    /// }
+    ///
+    /// // Answers at the `reply-to` address the ROUTER gives each request; the `ZmqRpcPublisher`
+    /// // documentation shows it in full.
+    /// # use ruststream::runtime::{Outgoing, PublishContext};
+    /// # struct ReplyToRequester;
+    /// # impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
+    /// #     type Destination = Names;
+    /// #     fn apply(
+    /// #         &self,
+    /// #         out: &mut Outgoing<'_>,
+    /// #         _options: &mut Option<Options>,
+    /// #         cx: &PublishContext<'_, C>,
+    /// #     ) {
+    /// #         if let Some(reply_to) = cx.headers().get_shared("reply-to")
+    /// #             && let Ok(reply_to) = Str::try_from(reply_to)
+    /// #         {
+    /// #             out.set_name(reply_to);
+    /// #         }
+    /// #     }
+    /// # }
+    ///
+    /// #[ruststream::app]
+    /// fn app() -> impl App {
+    ///     let greeter = ZmqRpc::new(ZmqEndpoint::bind("tcp://0.0.0.0:5557")).envelope(NoOp);
+    ///     RustStream::new(AppInfo::new("greeter", "0.1.0")).with_broker(greeter, |b| {
+    ///         b.include(greet)
+    ///             .out_reply(Publish)
+    ///             .transform(ReplyToRequester);
+    ///     })
+    /// }
+    /// ```
+    pub fn envelope<Other: Envelope>(self, envelope: Other) -> ZmqRpc<Other> {
+        ZmqRpc {
+            endpoint: self.endpoint,
+            read_ahead: self.read_ahead,
+            envelope,
+            cell: self.cell,
         }
     }
 
@@ -430,29 +512,30 @@ impl ZmqRpc {
 
     /// A publisher sharing this pattern's state; buildable before `connect`.
     #[must_use]
-    pub fn publisher(&self) -> ZmqRpcPublisher {
+    pub fn publisher(&self) -> ZmqRpcPublisher<Env> {
         ZmqRpcPublisher {
             cell: Arc::clone(&self.cell),
+            envelope: self.envelope.clone(),
         }
     }
 }
 
-impl Broker for ZmqRpc {
+impl<Env: Envelope> Broker for ZmqRpc<Env> {
     type Error = ZmqError;
-    type Connected = ConnectedZmqRpc;
+    type Connected = ConnectedZmqRpc<Env>;
 
     async fn connect(self) -> Result<Self::Connected, Self::Error> {
         self.connect_with(Lifecycle::new).await
     }
 }
 
-impl ZmqRpc {
+impl<Env: Envelope> ZmqRpc<Env> {
     /// The connect transition over the transport `lifecycle` builds: the sockets, or the
     /// in-process transport the test harness connects instead.
     pub(crate) async fn connect_with(
         self,
         lifecycle: fn(Endpoint) -> Lifecycle,
-    ) -> Result<ConnectedZmqRpc, ZmqError> {
+    ) -> Result<ConnectedZmqRpc<Env>, ZmqError> {
         let shared = self
             .cell
             .get_or_try_init(async || {
@@ -467,30 +550,44 @@ impl ZmqRpc {
         Ok(ConnectedZmqRpc {
             shared,
             read_ahead: self.read_ahead,
+            envelope: self.envelope,
             cell: self.cell,
         })
     }
 }
 
-impl DescribeServer for ZmqRpc {
+impl<Env: Envelope> DescribeServer for ZmqRpc<Env> {
     fn describe_server(&self) -> ServerSpec {
-        self.endpoint.server_spec()
+        self.endpoint.server_spec::<Env>()
     }
 }
 
 /// The connected form of [`ZmqRpc`].
-#[derive(Debug)]
-pub struct ConnectedZmqRpc {
+pub struct ConnectedZmqRpc<Env = Frames> {
     shared: RpcShared,
     /// How far this subscription reads ahead, from the broker this form was connected from.
     read_ahead: NonZeroUsize,
+    envelope: Env,
     cell: Arc<OnceCell<RpcShared>>,
 }
 
-impl ConnectedZmqRpc {
+impl<Env> fmt::Debug for ConnectedZmqRpc<Env> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConnectedZmqRpc")
+            .field("shared", &self.shared)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<Env: Envelope> ConnectedZmqRpc<Env> {
     #[cfg(feature = "testing")]
     pub(crate) fn lifecycle(&self) -> &Lifecycle {
         &self.shared.lifecycle
+    }
+
+    #[cfg(feature = "testing")]
+    pub(crate) const fn envelope(&self) -> &Env {
+        &self.envelope
     }
 
     /// The address the responder resolved by binding (useful with an ephemeral
@@ -502,14 +599,15 @@ impl ConnectedZmqRpc {
 
     /// A publisher from the connected form.
     #[must_use]
-    pub fn publisher(&self) -> ZmqRpcPublisher {
+    pub fn publisher(&self) -> ZmqRpcPublisher<Env> {
         ZmqRpcPublisher {
             cell: Arc::clone(&self.cell),
+            envelope: self.envelope.clone(),
         }
     }
 }
 
-impl ConnectedBroker for ConnectedZmqRpc {
+impl<Env: Envelope> ConnectedBroker for ConnectedZmqRpc<Env> {
     type Error = ZmqError;
     type Closed = ();
 
@@ -519,7 +617,7 @@ impl ConnectedBroker for ConnectedZmqRpc {
     }
 }
 
-/// A responder subscription on the ROUTER socket, yielding one request at a time.
+/// A responder subscription on the ROUTER socket, yielding one [`ZmqRequest`] at a time.
 ///
 /// It is the one subscriber of this crate that is no
 /// [`BatchSubscriber`](ruststream::BatchSubscriber), so `.batch(..)` on a `ZmqRpc` registration
@@ -529,12 +627,12 @@ impl ConnectedBroker for ConnectedZmqRpc {
 /// that asked. Keeping the capability off the type turns that into a compile error instead of a
 /// run of misrouted replies. Batch the one-way patterns ([`ZmqQueue`](crate::ZmqQueue),
 /// [`ZmqFanout`](crate::ZmqFanout)) instead, and answer requests one at a time.
-pub struct ZmqRpcSubscriber {
+pub struct ZmqRpcSubscriber<Env: Envelope = Frames> {
     name: String,
-    inner: WireSubscriber,
+    inner: WireSubscriber<ZmqRequest<Env>>,
 }
 
-impl fmt::Debug for ZmqRpcSubscriber {
+impl<Env: Envelope> fmt::Debug for ZmqRpcSubscriber<Env> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ZmqRpcSubscriber")
             .field("name", &self.name)
@@ -542,17 +640,17 @@ impl fmt::Debug for ZmqRpcSubscriber {
     }
 }
 
-impl Subscriber for ZmqRpcSubscriber {
-    type Message = ZmqMessage;
+impl<Env: Envelope> Subscriber for ZmqRpcSubscriber<Env> {
+    type Message = ZmqRequest<Env>;
     type Error = ZmqError;
 
-    fn stream(&mut self) -> impl Stream<Item = Result<ZmqMessage, ZmqError>> + Send + '_ {
+    fn stream(&mut self) -> impl Stream<Item = Result<ZmqRequest<Env>, ZmqError>> + Send + '_ {
         self.inner.stream()
     }
 }
 
-impl Subscribe for ConnectedZmqRpc {
-    type Subscriber = ZmqRpcSubscriber;
+impl<Env: Envelope> Subscribe for ConnectedZmqRpc<Env> {
+    type Subscriber = ZmqRpcSubscriber<Env>;
 
     /// A copy of a request has no address of its own, so the mount site names where one goes.
     ///
@@ -570,7 +668,9 @@ impl Subscribe for ConnectedZmqRpc {
         #[cfg(feature = "testing")]
         if let Some(bus) = self.shared.lifecycle.in_process_bus() {
             let slot = self.shared.lifecycle.attach_in_process(name).await?;
-            let (rx, registration) = bus.subscribe(name, read_request);
+            let envelope = self.envelope.clone();
+            let (rx, registration) =
+                bus.subscribe(name, move |message| read_request(&envelope, message));
             let _ = self
                 .shared
                 .router_tx
@@ -613,11 +713,12 @@ impl Subscribe for ConnectedZmqRpc {
         }
 
         let (tx, rx) = delivery_channel(self.read_ahead);
+        let envelope = self.envelope.clone();
         let task = self.shared.lifecycle.spawn(async move {
             loop {
                 match recv_half.recv().await {
                     Ok(message) => {
-                        let Some(item) = read_request(message) else {
+                        let Some(item) = read_request(&envelope, message) else {
                             continue;
                         };
                         if tx.send(item).await.is_err() {
@@ -649,19 +750,21 @@ impl Subscribe for ConnectedZmqRpc {
 /// A request as the ROUTER's driver reads it: the identity frame the ROUTER put in front becomes
 /// the `reply-to` address the answer goes to, and the rest is the documented layout. A message
 /// with no identity frame is skipped.
-pub(crate) fn read_request(message: zeromq::ZmqMessage) -> Option<Result<ZmqMessage, ZmqError>> {
+pub(crate) fn read_request<Env: Envelope>(
+    envelope: &Env,
+    message: zeromq::ZmqMessage,
+) -> Option<Result<ZmqRequest<Env>, ZmqError>> {
     let mut frames = message.into_vecdeque();
     let identity = frames.pop_front()?;
-    let rest: Result<zeromq::ZmqMessage, _> = frames.try_into();
-    let Ok(rest) = rest else {
+    if frames.is_empty() {
         return Some(Err(ZmqError::Wire(
-            "a request needs name and payload frames".into(),
+            "a request needs a frame behind the peer identity".into(),
         )));
-    };
-    Some(wire::decode(rest).map(|(name, mut headers, payload)| {
-        headers.insert(Str::from_static(REPLY_TO_HEADER), reply_address(&identity));
-        ZmqMessage::new(name, headers, payload)
-    }))
+    }
+    Some(
+        envelope::read(envelope, Pattern::DealerRouter, frames)
+            .map(|message| ZmqRequest::new(message, identity)),
+    )
 }
 
 /// Publishes replies back through the responder's ROUTER, and issues requests via
@@ -775,17 +878,18 @@ pub(crate) fn read_request(message: zeromq::ZmqMessage) -> Option<Result<ZmqMess
 /// }
 /// ```
 #[derive(Clone)]
-pub struct ZmqRpcPublisher {
+pub struct ZmqRpcPublisher<Env = Frames> {
     cell: Arc<OnceCell<RpcShared>>,
+    envelope: Env,
 }
 
-impl fmt::Debug for ZmqRpcPublisher {
+impl<Env> fmt::Debug for ZmqRpcPublisher<Env> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ZmqRpcPublisher").finish_non_exhaustive()
     }
 }
 
-impl ZmqRpcPublisher {
+impl<Env> ZmqRpcPublisher<Env> {
     fn shared(&self) -> Result<&RpcShared, ZmqError> {
         let shared = self.cell.get().ok_or(ZmqError::NotConnected)?;
         shared.lifecycle.ensure_open()?;
@@ -793,7 +897,7 @@ impl ZmqRpcPublisher {
     }
 }
 
-impl Publisher for ZmqRpcPublisher {
+impl<Env: Envelope> Publisher for ZmqRpcPublisher<Env> {
     /// A frame owns its bytes: the payload becomes the message's third frame and the ROUTER
     /// keeps it until the send completes.
     type Payload = Take;
@@ -838,12 +942,12 @@ impl Publisher for ZmqRpcPublisher {
         // Frame 0 of a reply is the literal "reply". The ROUTER identity frame pushed in front of
         // it is what addresses the requester, so the name position carries nothing to route on.
         let (name, payload, headers) = msg.into_parts();
-        let message = wire::encode_addressed_to(
+        let message = envelope::write(
+            &self.envelope,
+            Pattern::DealerRouter,
             name,
-            Bytes::from(identity),
-            "reply",
-            &headers,
-            payload.freeze(),
+            Some(Bytes::from(identity)),
+            ("reply", &headers, payload.freeze()),
         )?;
         match router {
             ReplyRoute::Router(router) => {
@@ -862,13 +966,13 @@ impl Publisher for ZmqRpcPublisher {
                 })
             }
             #[cfg(feature = "testing")]
-            ReplyRoute::InProcess(bus) => bus.reply(name, message),
+            ReplyRoute::InProcess(bus) => bus.reply(&self.envelope, name, message),
         }
     }
 }
 
-impl RequestReply for ZmqRpcPublisher {
-    type Reply = ZmqMessage;
+impl<Env: Envelope> RequestReply for ZmqRpcPublisher<Env> {
+    type Reply = ZmqMessage<Env>;
 
     /// # Cancel safety
     ///
@@ -883,7 +987,7 @@ impl RequestReply for ZmqRpcPublisher {
         let shared = self.shared()?;
         #[cfg(feature = "testing")]
         if let Some(bus) = shared.lifecycle.in_process_bus() {
-            return request_in_process(bus, &shared.lifecycle, msg, timeout).await;
+            return request_in_process(&self.envelope, bus, &shared.lifecycle, msg, timeout).await;
         }
         let address = shared.lifecycle.send_target().address().to_owned();
 
@@ -901,14 +1005,7 @@ impl RequestReply for ZmqRpcPublisher {
                 source: crate::error::box_err(e),
             })?;
 
-        // Respect a caller-supplied correlation id (an upper layer may match on it too).
-        let correlation = msg
-            .headers()
-            .correlation_id()
-            .map_or_else(new_correlation_id, str::to_owned);
-        let (name, payload, mut headers) = msg.into_parts();
-        headers.insert(Str::from_static(CORRELATION_ID_HEADER), correlation.clone());
-        let request = wire::encode_to(name, name, &headers, payload.freeze())?;
+        let (name, request, correlation) = stamped(&self.envelope, msg)?;
         send_with_retry(&mut dealer, name, request).await?;
 
         let exchange = async {
@@ -917,9 +1014,10 @@ impl RequestReply for ZmqRpcPublisher {
                     .recv()
                     .await
                     .map_err(|e| ZmqError::Receive(e.to_string()))?;
-                let (name, reply_headers, payload) = wire::decode(reply)?;
-                if reply_headers.correlation_id() == Some(correlation.as_str()) {
-                    return Ok(ZmqMessage::new(name, reply_headers, payload));
+                let reply =
+                    envelope::read(&self.envelope, Pattern::DealerRouter, reply.into_vecdeque())?;
+                if answers(&reply, correlation.as_deref()) {
+                    return Ok(reply);
                 }
             }
         };
@@ -932,22 +1030,56 @@ impl RequestReply for ZmqRpcPublisher {
 /// A request over the in-process transport, framed and correlated the way the DEALER does it: it
 /// reaches the responder this service binds, when the DEALER would dial one, and a peer outside
 /// this service otherwise.
+/// Frames a request through `envelope`, stamped with a `correlation-id` where the envelope
+/// carries headers: the caller's own when it set one, since an upper layer may match on it too.
+fn stamped<'a, Env: Envelope>(
+    envelope: &Env,
+    msg: OutgoingMessage<'a, BytesMut>,
+) -> Result<(&'a str, zeromq::ZmqMessage, Option<String>), ZmqError> {
+    let correlation = Env::CARRIES_HEADERS.then(|| {
+        msg.headers()
+            .correlation_id()
+            .map_or_else(new_correlation_id, str::to_owned)
+    });
+    let (name, payload, mut headers) = msg.into_parts();
+    if let Some(correlation) = &correlation {
+        headers.insert(Str::from_static(CORRELATION_ID_HEADER), correlation.clone());
+    }
+    let request = envelope::write(
+        envelope,
+        Pattern::DealerRouter,
+        name,
+        None,
+        (name, &headers, payload.freeze()),
+    )?;
+    Ok((name, request, correlation))
+}
+
+/// Whether `reply` answers the request stamped with `correlation`. A request through an envelope
+/// without headers carries none, and its DEALER is its own, so the first answer on it is the one.
+pub(crate) fn answers<Env: Envelope>(reply: &ZmqMessage<Env>, correlation: Option<&str>) -> bool {
+    correlation.is_none_or(|correlation| reply.headers().correlation_id() == Some(correlation))
+}
+
 #[cfg(feature = "testing")]
-async fn request_in_process(
+async fn request_in_process<Env: Envelope>(
+    envelope: &Env,
     bus: &Bus,
     lifecycle: &Lifecycle,
     msg: OutgoingMessage<'_, BytesMut>,
     timeout: Duration,
-) -> Result<ZmqMessage, ZmqError> {
-    let correlation = msg
-        .headers()
-        .correlation_id()
-        .map_or_else(new_correlation_id, str::to_owned);
-    let (name, payload, mut headers) = msg.into_parts();
-    headers.insert(Str::from_static(CORRELATION_ID_HEADER), correlation.clone());
-    let request = wire::encode_to(name, name, &headers, payload.freeze())?;
+) -> Result<ZmqMessage<Env>, ZmqError> {
+    let (name, request, correlation) = stamped(envelope, msg)?;
     let local = lifecycle.local_listener().is_some();
-    in_process::request(bus, local, name, request, &correlation, timeout).await
+    in_process::request(
+        envelope,
+        bus,
+        local,
+        (name, request),
+        correlation.as_deref(),
+        timeout,
+    )
+    .await
 }
 
 /// A peer identity no other peer of this process carries, standing in for the random identity a
@@ -1002,12 +1134,81 @@ fn rand_suffix() -> [u8; 8] {
 #[must_use]
 pub struct ZmqRpcPublish;
 
-impl PublishPolicy<ConnectedZmqRpc> for ZmqRpcPublish {
-    type Live = ZmqRpcPublisher;
+impl ZmqRpcPublish {
+    /// This policy writing through `envelope` rather than through its broker's.
+    ///
+    /// # Examples
+    ///
+    /// A responder reads requests in the default layout and answers each one as a bare payload:
+    ///
+    /// ```
+    /// use ruststream_zeromq::envelope::NoOp;
+    /// use ruststream_zeromq::rpc::prelude::*;
+    /// use serde::{Deserialize, Serialize};
+    ///
+    /// #[derive(Deserialize)]
+    /// struct Greeting {
+    ///     who: String,
+    /// }
+    ///
+    /// #[derive(Serialize, Outgoing)]
+    /// struct Answer {
+    ///     text: String,
+    /// }
+    ///
+    /// #[subscriber("greeter", reply("reply"))]
+    /// async fn greet(request: &Greeting) -> Answer {
+    ///     Answer {
+    ///         text: format!("hello {}", request.who),
+    ///     }
+    /// }
+    ///
+    /// // Answers at the `reply-to` address the ROUTER gives each request; the `ZmqRpcPublisher`
+    /// // documentation shows it in full.
+    /// # use ruststream::runtime::{Outgoing, PublishContext};
+    /// # struct ReplyToRequester;
+    /// # impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
+    /// #     type Destination = Names;
+    /// #     fn apply(
+    /// #         &self,
+    /// #         out: &mut Outgoing<'_>,
+    /// #         _options: &mut Option<Options>,
+    /// #         cx: &PublishContext<'_, C>,
+    /// #     ) {
+    /// #         if let Some(reply_to) = cx.headers().get_shared("reply-to")
+    /// #             && let Ok(reply_to) = Str::try_from(reply_to)
+    /// #         {
+    /// #             out.set_name(reply_to);
+    /// #         }
+    /// #     }
+    /// # }
+    ///
+    /// #[ruststream::app]
+    /// fn app() -> impl App {
+    ///     RustStream::new(AppInfo::new("greeter", "0.1.0")).with_broker(
+    ///         ZmqRpc::new(ZmqEndpoint::bind("tcp://0.0.0.0:5557")),
+    ///         |b| {
+    ///             b.include(greet)
+    ///                 .out_reply(Publish.envelope(NoOp))
+    ///                 .transform(ReplyToRequester);
+    ///         },
+    ///     )
+    /// }
+    /// ```
+    pub const fn envelope<Env: Envelope>(self, envelope: Env) -> Enveloped<Self, Env> {
+        Enveloped {
+            policy: self,
+            envelope,
+        }
+    }
+}
+
+impl<Env: Envelope> PublishPolicy<ConnectedZmqRpc<Env>> for ZmqRpcPublish {
+    type Live = ZmqRpcPublisher<Env>;
 
     fn pair(
         self,
-        connected: &ConnectedZmqRpc,
+        connected: &ConnectedZmqRpc<Env>,
     ) -> impl Future<Output = Result<Self::Live, PairError>> {
         ready(Ok(connected.publisher()))
     }
@@ -1020,12 +1221,52 @@ impl PublishPolicy<ConnectedZmqRpc> for ZmqRpcPublish {
     }
 
     #[cfg(feature = "asyncapi")]
+    fn message_bindings(&self, _channel: &str) -> Bindings {
+        bindings::message::<Env>()
+    }
+
+    #[cfg(feature = "asyncapi")]
     fn reply_address_location(&self) -> Option<&'static str> {
         Some(REPLY_ADDRESS_LOCATION)
     }
 }
 
-impl DefaultPublish for ConnectedZmqRpc {
+/// The exchange's policy writing its answers through an envelope of its own, whatever its broker
+/// reads.
+impl<BrokerEnv, Env> PublishPolicy<ConnectedZmqRpc<BrokerEnv>> for Enveloped<ZmqRpcPublish, Env>
+where
+    BrokerEnv: Envelope,
+    Env: Envelope,
+{
+    type Live = ZmqRpcPublisher<Env>;
+
+    fn pair(
+        self,
+        connected: &ConnectedZmqRpc<BrokerEnv>,
+    ) -> impl Future<Output = Result<Self::Live, PairError>> {
+        ready(Ok(ZmqRpcPublisher {
+            cell: Arc::clone(&connected.cell),
+            envelope: self.envelope,
+        }))
+    }
+
+    #[cfg(feature = "asyncapi")]
+    fn channel_bindings(&self, channel: &str) -> Bindings {
+        bindings::channel(SocketPair::DealerRouter, channel)
+    }
+
+    #[cfg(feature = "asyncapi")]
+    fn message_bindings(&self, _channel: &str) -> Bindings {
+        bindings::message::<Env>()
+    }
+
+    #[cfg(feature = "asyncapi")]
+    fn reply_address_location(&self) -> Option<&'static str> {
+        Some(REPLY_ADDRESS_LOCATION)
+    }
+}
+
+impl<Env: Envelope> DefaultPublish for ConnectedZmqRpc<Env> {
     type Policy = ZmqRpcPublish;
 }
 

@@ -15,7 +15,7 @@ A handler bounds its slot `Out<impl RequestReply>`, and the mount site binds `Zm
 [`request(message, timeout)`](api:ruststream::RequestReply::request) takes an [`OutgoingMessage`](api:ruststream::OutgoingMessage) of bytes the handler encoded, and its name is the name frame of the request.
 The request goes to the broker directly, past the slot's transforms and the app's publish layers.
 
-Each request opens a DEALER socket of its own and dials the broker's endpoint, with the frames [Envelope](../wire/envelope.md) shows.
+Each request opens a DEALER socket of its own and dials the broker's endpoint, with the frames [Identity frame](../wire/identity.md) shows.
 The dial waits as long as the timeout allows, ten seconds at most, and a failed dial returns [`ZmqError::Endpoint`](../broker/errors.md).
 The request carries a `correlation-id` header: the one the caller set, or a fresh one.
 The DEALER keeps reading until an answer carries the same id, and the call returns that answer as a [`ZmqMessage`](api:ruststream_zeromq::ZmqMessage), which the handler decodes.

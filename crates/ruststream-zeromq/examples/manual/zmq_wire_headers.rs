@@ -150,11 +150,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_header_frame_that_is_not_text_never_reaches_the_handler()
-    -> Result<(), Box<dyn Error>> {
+    async fn a_header_frame_that_is_not_text_reads_as_no_headers() -> Result<(), Box<dyn Error>> {
         let tb = TestApp::start(app()).await?;
-        // A peer that writes raw bytes into the header frame: the subscription refuses the
-        // message as a wire error instead of guessing what the bytes meant.
+        // A peer that writes raw bytes into the header frame: the delivery reads as one without
+        // headers instead of guessing what the bytes meant, so the tenant the handler requires
+        // is missing and no result leaves.
         let mut headers = HeaderMap::new();
         headers.insert("x-tenant", [0xff, 0xfe].as_slice());
         tb.broker::<ZmqQueue>()
@@ -165,7 +165,8 @@ mod tests {
 
         tb.broker::<ZmqQueue>()
             .subscriber("jobs")
-            .assert_not_called();
+            .assert_called_once()
+            .settled(HandlerOutcome::drop());
         tb.broker::<ZmqQueue<Connect>>()
             .published::<Done>("results")
             .assert_not_called();

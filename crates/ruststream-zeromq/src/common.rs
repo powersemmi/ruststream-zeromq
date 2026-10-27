@@ -14,7 +14,7 @@ use std::time::Duration;
 use aliasable::boxed::AliasableBox;
 use futures::Stream;
 use futures::lock::Mutex;
-use ruststream::{Subscriber, nonzero};
+use ruststream::{IncomingMessage, Subscriber, nonzero};
 use selfie::SelfieMut;
 use selfie::refs::RefType;
 use tokio::runtime::Handle;
@@ -24,10 +24,13 @@ use zeromq::prelude::*;
 use zeromq::{Socket, ZmqError as WireError, ZmqResult};
 
 use crate::endpoint::{Endpoint, Side};
+#[cfg(not(feature = "testing"))]
+use crate::envelope::Frames;
 use crate::error::{ZmqError, box_err};
 use crate::fanout::PubSide;
 #[cfg(feature = "testing")]
 use crate::in_process::{Bus, Deliveries, Registration};
+#[cfg(not(feature = "testing"))]
 use crate::message::ZmqMessage;
 use crate::queue::Attached as QueueAttached;
 
@@ -54,7 +57,9 @@ pub(crate) const DEFAULT_READ_AHEAD: NonZeroUsize = nonzero!(1000_usize);
 /// socket holds the sender back: a handler slower than the wire slows the wire down instead of
 /// accumulating the difference in memory. The bound is the connected form's own, taken from the
 /// broker it was connected from, so clones sharing one lifecycle keep their own bounds.
-pub(crate) fn delivery_channel(read_ahead: NonZeroUsize) -> (DeliverySender, DeliveryReceiver) {
+pub(crate) fn delivery_channel<Message>(
+    read_ahead: NonZeroUsize,
+) -> (DeliverySender<Message>, DeliveryReceiver<Message>) {
     let (tx, rx) = mpsc::channel(read_ahead.get());
     (tx, DeliveryReceiver::Driver(rx))
 }
@@ -810,27 +815,28 @@ impl Drop for DriverHandle {
 }
 
 /// The driver task's end of a subscription's delivery channel.
-pub(crate) type DeliverySender = mpsc::Sender<Result<ZmqMessage, ZmqError>>;
+pub(crate) type DeliverySender<Message> = mpsc::Sender<Result<Message, ZmqError>>;
 
 /// The handler's end of a subscription's delivery channel: the driver task's bounded channel, or,
 /// in process, the channel the transport hands deliveries to.
 ///
 /// Without the `testing` feature it is the driver's receiver itself: one variant, no tag, no
 /// branch.
-pub(crate) enum DeliveryReceiver {
-    Driver(mpsc::Receiver<Result<ZmqMessage, ZmqError>>),
+pub(crate) enum DeliveryReceiver<Message> {
+    Driver(mpsc::Receiver<Result<Message, ZmqError>>),
     #[cfg(feature = "testing")]
-    InProcess(Deliveries),
+    InProcess(Deliveries<Message>),
 }
 
 // A production subscription reads its driver's channel and nothing beside it.
 #[cfg(not(feature = "testing"))]
 const _: () = assert!(
-    size_of::<DeliveryReceiver>() == size_of::<mpsc::Receiver<Result<ZmqMessage, ZmqError>>>()
+    size_of::<DeliveryReceiver<ZmqMessage<Frames>>>()
+        == size_of::<mpsc::Receiver<Result<ZmqMessage, ZmqError>>>()
 );
 
-impl DeliveryReceiver {
-    fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<ZmqMessage, ZmqError>>> {
+impl<Message> DeliveryReceiver<Message> {
+    fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<Message, ZmqError>>> {
         match self {
             Self::Driver(rx) => rx.poll_recv(cx),
             #[cfg(feature = "testing")]
@@ -858,16 +864,16 @@ pub(crate) enum Sender<S> {
 ///
 /// The public subscribers wrap it - the batching patterns through the framework's client-side
 /// buffer, the request-reply one directly.
-pub(crate) struct WireSubscriber {
-    pub(crate) rx: DeliveryReceiver,
+pub(crate) struct WireSubscriber<Message> {
+    pub(crate) rx: DeliveryReceiver<Message>,
     pub(crate) _driver: DriverHandle,
 }
 
-impl Subscriber for WireSubscriber {
-    type Message = ZmqMessage;
+impl<Message: IncomingMessage> Subscriber for WireSubscriber<Message> {
+    type Message = Message;
     type Error = ZmqError;
 
-    fn stream(&mut self) -> impl Stream<Item = Result<ZmqMessage, ZmqError>> + Send + '_ {
+    fn stream(&mut self) -> impl Stream<Item = Result<Message, ZmqError>> + Send + '_ {
         // Poll the channel in place rather than wrapping it in an owning stream, so `stream`
         // can be called again after the returned stream is dropped (the runtime and the
         // conformance helpers re-enter it per call).

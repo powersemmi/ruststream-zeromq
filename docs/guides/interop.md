@@ -37,7 +37,7 @@ Each worked job is announced as `jobs.done` on the [`ZmqFanout`](../components/b
 
 ## The three frames
 
-Every message is three frames ([Wire format](../components/wire/index.md)):
+Every message is three frames in the default [envelope](../components/wire/envelopes.md) ([Wire format](../components/wire/index.md)):
 
 ```text
 frame 0: name      UTF-8; on PUB/SUB also what a subscriber's prefix is matched against
@@ -48,8 +48,10 @@ frame 2: payload   what the codec wrote; JSON by default
 A peer that sends two frames, the name and the payload, sends a message with no headers.
 A peer that sends one frame, as a plain ZeroMQ application does, sends that frame as the payload, with an empty name; on PUB/SUB the prefix is matched against it.
 A message of more than three frames fails the delivery with `ZmqError::Wire`.
+A peer that reads a single frame, or one JSON document per message, is served by another [envelope](../components/wire/envelopes.md) on the broker.
 A blank line in the header frame is skipped, so a line that ends with a newline is fine.
-A header frame or a name that is not UTF-8, or a header line with no `:`, fails the delivery with [`ZmqError::Wire`](../components/wire/headers.md) on the subscription.
+A name that is not UTF-8 fails the delivery with `ZmqError::Wire`.
+A header frame that is not UTF-8, or a header line with no `:`, is logged, and the message reaches the handler with no [headers](../components/wire/headers.md).
 The service checks the headers it publishes, so that each reads back unchanged: a header that is not text, holds a line break, has a `:` in its name, or starts or ends with whitespace fails the publish with `ZmqError::Send`, naming the header and the destination.
 
 ## A PUSH that feeds the service
@@ -107,7 +109,7 @@ print(name, headers, json.loads(payload))
 
 A requester on the other side of `ZmqRpc` is a DEALER, and it sends the three frames.
 The ROUTER adds the DEALER's identity in front of them and the `reply-to` header to the request.
-The answer comes back as three frames, and frame 0 is the literal `reply` ([Envelope](../components/wire/envelope.md)).
+The answer comes back as three frames, and frame 0 is the literal `reply` ([Identity frame](../components/wire/identity.md)).
 The headers carry the request's `correlation-id`, so a DEALER with several requests in flight matches each answer to its request:
 
 ```text

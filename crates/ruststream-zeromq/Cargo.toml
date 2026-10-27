@@ -24,7 +24,12 @@ default = []
 testing = ["ruststream/testing"]
 # The protocol bindings and the server coordinate this crate contributes to the generated
 # AsyncAPI document. Forwarded from the core, which gates the hooks on the same name.
-asyncapi = ["ruststream/asyncapi", "dep:serde"]
+asyncapi = ["ruststream/asyncapi"]
+# The core's codecs, each with the `Framed` document it writes, and the in-process mode's
+# registration of a `Framed` envelope over it.
+json = ["ruststream/json", "dep:serde_json", "dep:base64"]
+cbor = ["ruststream/cbor"]
+msgpack = ["ruststream/msgpack"]
 
 [dependencies]
 ruststream = { workspace = true, default-features = false }
@@ -33,7 +38,11 @@ bytes.workspace = true
 futures.workspace = true
 aliasable.workspace = true
 selfie.workspace = true
-serde = { version = "1.0.196", features = ["derive"], optional = true }
+serde = { version = "1.0.196", features = ["derive"] }
+# `Framed<JsonCodec>` embeds a JSON payload as it is written (`RawValue`) and carries other bytes
+# as base64, the way CloudEvents' JSON format does.
+serde_json = { version = "1.0.113", features = ["raw_value"], optional = true }
+base64 = { version = "0.22.1", optional = true }
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
@@ -297,8 +306,12 @@ name = "zmq_wire_headers"
 required-features = ["testing"]
 
 [[example]]
-name = "zmq_wire_envelope"
+name = "zmq_wire_identity"
 required-features = ["testing"]
+
+[[example]]
+name = "zmq_wire_envelopes"
+required-features = ["testing", "json"]
 
 [[example]]
 name = "zmq_asyncapi"
@@ -335,9 +348,14 @@ path = "examples/manual/zmq_wire_headers.rs"
 required-features = ["testing"]
 
 [[example]]
-name = "manual_zmq_wire_envelope"
-path = "examples/manual/zmq_wire_envelope.rs"
+name = "manual_zmq_wire_identity"
+path = "examples/manual/zmq_wire_identity.rs"
 required-features = ["testing"]
+
+[[example]]
+name = "manual_zmq_wire_envelopes"
+path = "examples/manual/zmq_wire_envelopes.rs"
+required-features = ["testing", "json"]
 
 [[example]]
 name = "manual_zmq_asyncapi"

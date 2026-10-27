@@ -27,6 +27,7 @@
     "Answer on `ZmqRpc` with a reply handler whose type names no destination, a `reply(\"..\")` fallback, and a transform of your own declaring `Destination = Names` that reads `reply-to` (Responders page).",
     "Ask a `ZmqRpc` service from a handler bounded `Out<impl RequestReply>`, and give up through the request's timeout rather than a `select!` arm (Request-reply page).",
     "Batch a `ZmqQueue` or `ZmqFanout` subscription with `.batch(n)`, which closes a batch at `n` deliveries or 20 ms after its first, and answer `ZmqRpc` requests one at a time (Batches page).",
+    "Name the frame layout with `.envelope(..)` on the broker, or on a publish policy for its own publishes: `Frames` (the default three frames), `Framed::new(codec)` for one codec document, `NoOp` for the payload alone, which refuses a publish that carries a header (Envelopes page).",
     "Test by handing the app `main` runs to `TestApp::start` with the `testing` feature in dev-dependencies, address a broker as `tb.broker::<ZmqQueue>()`, and run the same body over sockets with `TestApp::start_live` (Testing page)."
   ]
 }

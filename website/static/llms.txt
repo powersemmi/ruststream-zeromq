@@ -48,7 +48,8 @@ This site holds the guides, one page per component and the architecture of the c
 - [Responders](https://powersemmi.github.io/ruststream-zeromq/latest/components/request-reply/responders/): an answer at the `reply-to` address, set by a transform that names the destination
 - [Wire format](https://powersemmi.github.io/ruststream-zeromq/latest/components/wire/): name, headers and payload, the three frames a peer in any language sends
 - [Headers](https://powersemmi.github.io/ruststream-zeromq/latest/components/wire/headers/): the `name: value` lines of the header frame, and the headers refused on publish
-- [Envelope](https://powersemmi.github.io/ruststream-zeromq/latest/components/wire/envelope/): the identity frame of DEALER/ROUTER, and `reply` in frame 0 of an answer
+- [Envelopes](https://powersemmi.github.io/ruststream-zeromq/latest/components/wire/envelopes/): the frame layout a broker or a publish policy names with `.envelope(..)`: `Frames` (default), `Framed<Codec>`, `NoOp`, or a layout of your own
+- [Identity frame](https://powersemmi.github.io/ruststream-zeromq/latest/components/wire/identity/): the identity frame of DEALER/ROUTER, and `reply` in frame 0 of an answer
 - [AsyncAPI](https://powersemmi.github.io/ruststream-zeromq/latest/components/asyncapi/): the `x-ruststream-zeromq` extension of the document behind the `asyncapi` feature
 - [Server](https://powersemmi.github.io/ruststream-zeromq/latest/components/asyncapi/server/): the coordinate without credentials, the transport, the side and ZMTP 3.0
 - [Channels](https://powersemmi.github.io/ruststream-zeromq/latest/components/asyncapi/channels/): the socket pair and the `nameFrame` a peer sends or subscribes with

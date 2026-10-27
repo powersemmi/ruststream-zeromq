@@ -11,6 +11,7 @@ use ruststream::ServerSpec;
 
 #[cfg(feature = "asyncapi")]
 use crate::bindings;
+use crate::envelope::Envelope;
 use crate::error::ZmqError;
 
 /// The ZMTP version the underlying implementation greets a peer with.
@@ -454,14 +455,17 @@ impl Endpoint {
     }
 
     /// How every pattern of this crate describes itself: the coordinate a client connects to, the
-    /// protocol, the ZMTP version the implementation greets with, and this crate's own binding.
+    /// protocol, the ZMTP version the implementation greets with, and this crate's own binding,
+    /// which names the envelope `Env` its subscriptions read.
     ///
     /// One place rather than three, because the answer does not depend on the socket pair: what a
     /// pattern adds of its own goes on its channels, through its publish policy.
-    pub(crate) fn server_spec(&self) -> ServerSpec {
+    // The envelope reaches only the binding, which the `asyncapi` feature adds.
+    #[cfg_attr(not(feature = "asyncapi"), allow(clippy::extra_unused_type_parameters))]
+    pub(crate) fn server_spec<Env: Envelope>(&self) -> ServerSpec {
         let spec = ServerSpec::new(self.host(), "zeromq").protocol_version(ZMTP_VERSION);
         #[cfg(feature = "asyncapi")]
-        let spec = spec.bindings(bindings::server(self));
+        let spec = spec.bindings(bindings::server::<Env>(self));
         spec
     }
 

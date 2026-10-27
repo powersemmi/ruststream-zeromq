@@ -80,7 +80,7 @@ item's own documentation keeps the detail.
 ## Subscriptions
 
 - [Subscriptions][c-subscriptions]: a name in `#[subscriber("jobs")]`, delivered as a
-  [`ZmqMessage`].
+  [`ZmqMessage`], and to a responder as a [`ZmqRequest`].
 - [Prefixes][c-prefixes]: the name as a prefix filter on [`ZmqFanout`].
 - [Batches][c-batches]: slice handlers over [`ZmqSubscriber`] batches, assembled on the client;
   [`ZmqRpcSubscriber`] takes none.
@@ -112,7 +112,11 @@ item's own documentation keeps the detail.
 
 - [Wire format][c-wire]: the three frames, name, headers and payload.
 - [Headers][c-headers]: the `name: value` lines of the header frame.
-- [Envelope][c-envelope]: the identity frame a ROUTER puts in front of a request and its answer.
+- [Envelopes][c-envelopes]: [`Envelope`](envelope::Envelope), the frame layout a broker and a
+  publish policy choose: [`Frames`](envelope::Frames), [`Framed`](envelope::Framed),
+  [`NoOp`](envelope::NoOp), or a layout of a service's own.
+- [Identity frame][c-identity]: the identity frame a ROUTER puts in front of a request and its
+  answer.
 
 ## The generated document
 
@@ -134,7 +138,8 @@ item's own documentation keeps the detail.
 `default` is empty. `testing` adds the in-process mode `TestApp::start` connects the brokers
 through, and a service enables it in its `[dev-dependencies]`. `asyncapi` contributes the server
 and channel facts of the generated document. The codecs are the core's: a service enables `json`,
-`msgpack` or `cbor` on `ruststream` itself.
+`msgpack` or `cbor` on `ruststream` itself; the same names on this crate also register a
+[`Framed`](envelope::Framed) envelope over that codec with the in-process mode.
 
 [guides]: https://powersemmi.github.io/ruststream-zeromq/latest/
 [g-start]: https://powersemmi.github.io/ruststream-zeromq/latest/guides/getting-started/
@@ -174,7 +179,8 @@ and channel facts of the generated document. The codecs are the core's: a servic
 [c-responders]: https://powersemmi.github.io/ruststream-zeromq/latest/components/request-reply/responders/
 [c-wire]: https://powersemmi.github.io/ruststream-zeromq/latest/components/wire/
 [c-headers]: https://powersemmi.github.io/ruststream-zeromq/latest/components/wire/headers/
-[c-envelope]: https://powersemmi.github.io/ruststream-zeromq/latest/components/wire/envelope/
+[c-envelopes]: https://powersemmi.github.io/ruststream-zeromq/latest/components/wire/envelopes/
+[c-identity]: https://powersemmi.github.io/ruststream-zeromq/latest/components/wire/identity/
 [c-asyncapi]: https://powersemmi.github.io/ruststream-zeromq/latest/components/asyncapi/
 [c-server]: https://powersemmi.github.io/ruststream-zeromq/latest/components/asyncapi/server/
 [c-channels]: https://powersemmi.github.io/ruststream-zeromq/latest/components/asyncapi/channels/

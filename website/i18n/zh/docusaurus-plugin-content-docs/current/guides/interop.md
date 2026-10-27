@@ -38,7 +38,7 @@ import TabItem from '@theme/TabItem';
 
 ## 三个帧 {/* #the-three-frames */}
 
-每条消息由三帧组成（[线上格式](../components/wire/index.md)）：
+在默认的[信封](../components/wire/envelopes.md)中，每条消息由三帧组成（[线上格式](../components/wire/index.md)）：
 
 ```text
 frame 0: name      UTF-8; on PUB/SUB also what a subscriber's prefix is matched against
@@ -49,8 +49,10 @@ frame 2: payload   what the codec wrote; JSON by default
 只发送名称和载荷两帧的对端，发送的是不带消息头的消息。
 像普通 ZeroMQ 应用那样只发送一帧的对端，这一帧就是载荷，名称为空；在 PUB/SUB 上，前缀与这一帧匹配。
 超过三帧的消息会以 `ZmqError::Wire` 使这次投递失败。
+对于每条消息只读一帧或一个 JSON 文档的对端，在 broker 上换用另一种[信封](../components/wire/envelopes.md)即可。
 消息头帧中的空行会被跳过，因此行尾多一个换行符也没有关系。
-如果消息头帧或名称不是 UTF-8，或者某个消息头行没有 `:`，这次投递就在订阅上以 [`ZmqError::Wire`](../components/wire/headers.md) 失败。
+如果名称不是 UTF-8，这次投递就在订阅上以 `ZmqError::Wire` 失败。
+如果消息头帧不是 UTF-8，或者某个消息头行没有 `:`，错误会写入日志，消息不带[消息头](../components/wire/headers.md)到达处理器。
 服务会检查它发布的消息头，保证每个消息头都能原样读回。
 如果消息头不是文本、含有换行、名称中带有 `:`，或者以空白开头或结尾，发布就以 `ZmqError::Send` 失败，错误中写明该消息头和目的地。
 
@@ -109,7 +111,7 @@ print(name, headers, json.loads(payload))
 
 `ZmqRpc` 另一侧的请求方是一个 DEALER，它发送这三帧。
 ROUTER 在它们前面加上 DEALER 的身份，并给请求加上 `reply-to` 消息头。
-答案以三帧返回，第 0 帧是字面值 `reply`（[信封](../components/wire/envelope.md)）。
+答案以三帧返回，第 0 帧是字面值 `reply`（[身份帧](../components/wire/identity.md)）。
 消息头带着请求的 `correlation-id`，因此同时有多个请求在途的 DEALER，能把每个答案与对应的请求匹配起来：
 
 ```text

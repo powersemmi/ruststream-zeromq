@@ -10,6 +10,9 @@ const guides: Record<string, string> = {
 const pages: Record<string, string> = {
   // The benchmarks explain what the architecture costs.
   benchmarks: '/architecture/benchmarks/',
+  // The identity frame of DEALER/ROUTER, once named after ZeroMQ's routing envelope; an envelope
+  // is now the frame layout a broker chooses.
+  'components/wire/envelope': '/components/wire/identity/',
 };
 
 /**
