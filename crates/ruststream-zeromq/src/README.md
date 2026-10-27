@@ -80,7 +80,7 @@ item's own documentation keeps the detail.
 ## Subscriptions
 
 - [Subscriptions][c-subscriptions]: a name in `#[subscriber("jobs")]`, delivered as a
-  [`ZmqMessage`].
+  [`ZmqMessage`], and to a responder as a [`ZmqRequest`].
 - [Prefixes][c-prefixes]: the name as a prefix filter on [`ZmqFanout`].
 - [Batches][c-batches]: slice handlers over [`ZmqSubscriber`] batches, assembled on the client;
   [`ZmqRpcSubscriber`] takes none.

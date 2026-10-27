@@ -464,7 +464,7 @@ impl<Role, Env: Envelope> ConnectedZmqQueue<Role, Env> {
             let slot = self.lifecycle.attach_in_process(name).await?;
             let envelope = self.envelope.clone();
             let (rx, registration) = bus.subscribe(name, move |message| {
-                envelope::read(&envelope, Pattern::PushPull, message.into_vecdeque(), None)
+                envelope::read(&envelope, Pattern::PushPull, message.into_vecdeque())
             });
             return Ok(ZmqSubscriber::from_parts(
                 name.to_owned(),
@@ -491,12 +491,8 @@ impl<Role, Env: Envelope> ConnectedZmqQueue<Role, Env> {
             loop {
                 match socket.recv().await {
                     Ok(message) => {
-                        let item = envelope::read(
-                            &envelope,
-                            Pattern::PushPull,
-                            message.into_vecdeque(),
-                            None,
-                        );
+                        let item =
+                            envelope::read(&envelope, Pattern::PushPull, message.into_vecdeque());
                         if tx.send(item).await.is_err() {
                             break;
                         }
@@ -603,7 +599,7 @@ impl<Env: Envelope> Subscribe for ConnectedZmqQueue<Connect, Env> {
 /// ```
 pub struct ZmqSubscriber<Env: Envelope = Frames> {
     name: String,
-    inner: BufferedSubscriber<WireSubscriber<Env>>,
+    inner: BufferedSubscriber<WireSubscriber<ZmqMessage<Env>>>,
 }
 
 impl<Env: Envelope> fmt::Debug for ZmqSubscriber<Env> {
@@ -617,7 +613,7 @@ impl<Env: Envelope> fmt::Debug for ZmqSubscriber<Env> {
 impl<Env: Envelope> ZmqSubscriber<Env> {
     pub(crate) fn from_parts(
         name: String,
-        rx: DeliveryReceiver<Env>,
+        rx: DeliveryReceiver<ZmqMessage<Env>>,
         driver: DriverHandle,
     ) -> Self {
         Self {

@@ -26,8 +26,6 @@ pub struct ZmqMessage<Env: Envelope = Frames> {
     name: String,
     payload: Bytes,
     head: Env::Head,
-    /// The identity of the DEALER that sent a request, which its `reply-to` header addresses.
-    peer: Option<Bytes>,
     headers: OnceLock<HeaderMap>,
     /// What the in-process transport hands the test harness back once this delivery is gone.
     #[cfg(feature = "testing")]
@@ -35,12 +33,11 @@ pub struct ZmqMessage<Env: Envelope = Frames> {
 }
 
 // The in-process mode adds nothing to a production delivery: without the `testing` feature the
-// message is its frames, its peer and the headers read from them, and nothing else.
+// message is its frames and the headers read from them, and nothing else. It moves through the
+// delivery channel and the batch buffer by value, so a field more is a copy more per message.
 #[cfg(not(feature = "testing"))]
-const _: () = assert!(
-    size_of::<ZmqMessage>()
-        == size_of::<(String, Bytes, Bytes, Option<Bytes>, OnceLock<HeaderMap>)>()
-);
+const _: () =
+    assert!(size_of::<ZmqMessage>() == size_of::<(String, Bytes, Bytes, OnceLock<HeaderMap>)>());
 
 impl<Env: Envelope> fmt::Debug for ZmqMessage<Env> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -52,14 +49,12 @@ impl<Env: Envelope> fmt::Debug for ZmqMessage<Env> {
 }
 
 impl<Env: Envelope> ZmqMessage<Env> {
-    /// A delivery made of what the envelope read off the frames a socket received, sent by
-    /// `peer` when a ROUTER received them.
-    pub(crate) fn new(opened: Opened<Env::Head>, peer: Option<Bytes>) -> Self {
+    /// A delivery made of what the envelope read off the frames a socket received.
+    pub(crate) fn new(opened: Opened<Env::Head>) -> Self {
         Self {
             name: opened.name,
             payload: opened.payload,
             head: opened.head,
-            peer,
             headers: OnceLock::new(),
             #[cfg(feature = "testing")]
             release: Release::default(),
@@ -81,10 +76,20 @@ impl<Env: Envelope> ZmqMessage<Env> {
         &self.name
     }
 
-    /// Reads the headers out of the envelope, with the `reply-to` address of the peer that sent
-    /// a request. Headers that do not read are logged against the message, and it has none.
+    /// The headers, read out of the envelope on the first call and kept; `stamp` adds what the
+    /// transport knows of the message beside them.
+    fn headers_stamped(&self, stamp: impl FnOnce(&mut HeaderMap)) -> &HeaderMap {
+        self.headers.get_or_init(|| {
+            let mut headers = self.read_headers();
+            stamp(&mut headers);
+            headers
+        })
+    }
+
+    /// Reads the headers out of the envelope. Headers that do not read are logged against the
+    /// message, and it has none.
     fn read_headers(&self) -> HeaderMap {
-        let mut headers = Env::headers(&self.head).unwrap_or_else(|err| {
+        Env::headers(&self.head).unwrap_or_else(|err| {
             tracing::warn!(
                 message = %self.name,
                 envelope = Env::NAME,
@@ -92,11 +97,7 @@ impl<Env: Envelope> ZmqMessage<Env> {
                 "the headers of a delivery do not read; it is handled without them",
             );
             HeaderMap::new()
-        });
-        if let Some(peer) = &self.peer {
-            headers.insert(Str::from_static(REPLY_TO_HEADER), reply_address(peer));
-        }
-        headers
+        })
     }
 }
 
@@ -118,6 +119,71 @@ impl<Env: Envelope> IncomingMessage for ZmqMessage<Env> {
     }
 }
 
+/// A request a [`ZmqRpc`](crate::ZmqRpc) responder received: the message read through the
+/// envelope `Env`, and the identity of the DEALER that sent it.
+///
+/// Its headers carry a `reply-to` address for that DEALER beside the ones the envelope carries,
+/// [`NoOp`](crate::envelope::NoOp) included, so a reply finds the peer that asked. They are read
+/// on the first call to [`headers`](IncomingMessage::headers), as a
+/// [`ZmqMessage`]'s are.
+///
+/// Delivery is at most once, so acknowledgement is reported as [`AckError::Unsupported`].
+pub struct ZmqRequest<Env: Envelope = Frames> {
+    message: ZmqMessage<Env>,
+    peer: Bytes,
+}
+
+impl<Env: Envelope> fmt::Debug for ZmqRequest<Env> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ZmqRequest")
+            .field("name", &self.message.name)
+            .field("payload_len", &self.message.payload.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<Env: Envelope> ZmqRequest<Env> {
+    /// The request in `message`, sent by the DEALER whose identity is `peer`.
+    pub(crate) const fn new(message: ZmqMessage<Env>, peer: Bytes) -> Self {
+        Self { message, peer }
+    }
+
+    /// Hands the harness's count of this delivery to the request itself.
+    #[cfg(feature = "testing")]
+    pub(crate) fn counted(self, release: Release) -> Self {
+        Self {
+            message: self.message.counted(release),
+            peer: self.peer,
+        }
+    }
+
+    /// The name frame this request carried, empty for a request of one frame.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        self.message.name()
+    }
+}
+
+impl<Env: Envelope> IncomingMessage for ZmqRequest<Env> {
+    fn payload(&self) -> &[u8] {
+        self.message.payload()
+    }
+
+    fn headers(&self) -> &HeaderMap {
+        self.message.headers_stamped(|headers| {
+            headers.insert(Str::from_static(REPLY_TO_HEADER), reply_address(&self.peer));
+        })
+    }
+
+    fn ack(self) -> impl Future<Output = Result<(), AckError>> {
+        ready(Err(AckError::Unsupported))
+    }
+
+    fn nack(self, _requeue: bool) -> impl Future<Output = Result<(), AckError>> {
+        ready(Err(AckError::Unsupported))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
@@ -128,7 +194,7 @@ mod tests {
 
     fn delivery(frames: &[&'static [u8]]) -> ZmqMessage {
         let frames: VecDeque<Bytes> = frames.iter().copied().map(Bytes::from_static).collect();
-        ZmqMessage::new(Frames.open(Pattern::PushPull, frames).expect("opens"), None)
+        ZmqMessage::new(Frames.open(Pattern::PushPull, frames).expect("opens"))
     }
 
     /// The payload is the frame it arrived in, located without reading the header frame: a
@@ -160,17 +226,25 @@ mod tests {
         assert_eq!(message.headers(), &HeaderMap::new());
     }
 
-    /// A request carries the address of the peer that sent it, whatever its envelope carries.
+    /// A request carries the address of the peer that sent it, beside the headers its envelope
+    /// carries, and is read as lazily as any delivery.
     #[test]
     fn a_request_reads_with_the_address_of_its_peer() {
         let peer = Bytes::from_static(&[0xde, 0xad]);
-        let message = ZmqMessage::<Frames>::new(
-            Opened::new("greeter", Bytes::new(), Bytes::from_static(b"{}")),
-            Some(peer.clone()),
+        let request = ZmqRequest::new(
+            ZmqMessage::<Frames>::new(Opened::new(
+                "greeter",
+                Bytes::from_static(b"x-tenant: acme"),
+                Bytes::from_static(b"{}"),
+            )),
+            peer.clone(),
         );
+        assert_eq!(request.payload(), b"{}");
+        assert!(request.message.headers.get().is_none(), "parsed unread");
         assert_eq!(
-            message.headers().get_str(REPLY_TO_HEADER),
+            request.headers().get_str(REPLY_TO_HEADER),
             Some(reply_address(&peer).as_str())
         );
+        assert_eq!(request.headers().get_str("x-tenant"), Some("acme"));
     }
 }

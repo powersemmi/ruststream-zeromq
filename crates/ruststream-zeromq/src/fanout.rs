@@ -425,7 +425,7 @@ impl<Role, Env: Envelope> ConnectedZmqFanout<Role, Env> {
             let slot = self.lifecycle.attach_in_process(name).await?;
             let envelope = self.envelope.clone();
             let (rx, registration) = bus.subscribe(name, move |message| {
-                envelope::read(&envelope, Pattern::PubSub, message.into_vecdeque(), None)
+                envelope::read(&envelope, Pattern::PubSub, message.into_vecdeque())
             });
             return Ok(ZmqSubscriber::from_parts(
                 name.to_owned(),
@@ -458,12 +458,8 @@ impl<Role, Env: Envelope> ConnectedZmqFanout<Role, Env> {
             loop {
                 match socket.recv().await {
                     Ok(message) => {
-                        let item = envelope::read(
-                            &envelope,
-                            Pattern::PubSub,
-                            message.into_vecdeque(),
-                            None,
-                        );
+                        let item =
+                            envelope::read(&envelope, Pattern::PubSub, message.into_vecdeque());
                         if tx.send(item).await.is_err() {
                             break;
                         }

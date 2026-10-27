@@ -20,6 +20,6 @@ pub mod rpc;
 pub use endpoint::{Bind, Connect, EndpointRole, ZmqEndpoint};
 pub use error::ZmqError;
 pub use fanout::{ConnectedZmqFanout, ZmqFanout, ZmqFanoutPublish, ZmqFanoutPublisher};
-pub use message::ZmqMessage;
+pub use message::{ZmqMessage, ZmqRequest};
 pub use queue::{ConnectedZmqQueue, ZmqQueue, ZmqQueuePublish, ZmqQueuePublisher, ZmqSubscriber};
 pub use rpc::{ConnectedZmqRpc, ZmqRpc, ZmqRpcPublish, ZmqRpcPublisher, ZmqRpcSubscriber};

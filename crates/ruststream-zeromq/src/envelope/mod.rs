@@ -604,17 +604,13 @@ pub(crate) fn decode_name(frame: &[u8]) -> Result<String, ZmqError> {
         .map_err(|_| ZmqError::Wire("the name frame must be UTF-8".into()))
 }
 
-/// Reads a message a socket received through `envelope`, behind the identity of the `peer` that
-/// sent it when a ROUTER received it.
+/// Reads a message a socket received through `envelope`.
 pub(crate) fn read<Env: Envelope>(
     envelope: &Env,
     pattern: Pattern,
     frames: VecDeque<Bytes>,
-    peer: Option<Bytes>,
 ) -> Result<ZmqMessage<Env>, ZmqError> {
-    envelope
-        .open(pattern, frames)
-        .map(|opened| ZmqMessage::new(opened, peer))
+    envelope.open(pattern, frames).map(ZmqMessage::new)
 }
 
 /// Frames a message for `destination` through `envelope`, behind `front` where a pattern

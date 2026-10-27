@@ -140,7 +140,7 @@ use crate::envelope::{self, Envelope, Enveloped, Frames, Pattern};
 use crate::error::ZmqError;
 #[cfg(feature = "testing")]
 use crate::in_process::{self, Bus};
-use crate::message::ZmqMessage;
+use crate::message::{ZmqMessage, ZmqRequest};
 
 /// The prefix of reply destinations minted by the responder subscription.
 pub(crate) const REPLY_PREFIX: &str = "zmq-reply:";
@@ -617,7 +617,7 @@ impl<Env: Envelope> ConnectedBroker for ConnectedZmqRpc<Env> {
     }
 }
 
-/// A responder subscription on the ROUTER socket, yielding one request at a time.
+/// A responder subscription on the ROUTER socket, yielding one [`ZmqRequest`] at a time.
 ///
 /// It is the one subscriber of this crate that is no
 /// [`BatchSubscriber`](ruststream::BatchSubscriber), so `.batch(..)` on a `ZmqRpc` registration
@@ -629,7 +629,7 @@ impl<Env: Envelope> ConnectedBroker for ConnectedZmqRpc<Env> {
 /// [`ZmqFanout`](crate::ZmqFanout)) instead, and answer requests one at a time.
 pub struct ZmqRpcSubscriber<Env: Envelope = Frames> {
     name: String,
-    inner: WireSubscriber<Env>,
+    inner: WireSubscriber<ZmqRequest<Env>>,
 }
 
 impl<Env: Envelope> fmt::Debug for ZmqRpcSubscriber<Env> {
@@ -641,10 +641,10 @@ impl<Env: Envelope> fmt::Debug for ZmqRpcSubscriber<Env> {
 }
 
 impl<Env: Envelope> Subscriber for ZmqRpcSubscriber<Env> {
-    type Message = ZmqMessage<Env>;
+    type Message = ZmqRequest<Env>;
     type Error = ZmqError;
 
-    fn stream(&mut self) -> impl Stream<Item = Result<ZmqMessage<Env>, ZmqError>> + Send + '_ {
+    fn stream(&mut self) -> impl Stream<Item = Result<ZmqRequest<Env>, ZmqError>> + Send + '_ {
         self.inner.stream()
     }
 }
@@ -753,7 +753,7 @@ impl<Env: Envelope> Subscribe for ConnectedZmqRpc<Env> {
 pub(crate) fn read_request<Env: Envelope>(
     envelope: &Env,
     message: zeromq::ZmqMessage,
-) -> Option<Result<ZmqMessage<Env>, ZmqError>> {
+) -> Option<Result<ZmqRequest<Env>, ZmqError>> {
     let mut frames = message.into_vecdeque();
     let identity = frames.pop_front()?;
     if frames.is_empty() {
@@ -761,12 +761,10 @@ pub(crate) fn read_request<Env: Envelope>(
             "a request needs a frame behind the peer identity".into(),
         )));
     }
-    Some(envelope::read(
-        envelope,
-        Pattern::DealerRouter,
-        frames,
-        Some(identity),
-    ))
+    Some(
+        envelope::read(envelope, Pattern::DealerRouter, frames)
+            .map(|message| ZmqRequest::new(message, identity)),
+    )
 }
 
 /// Publishes replies back through the responder's ROUTER, and issues requests via
@@ -1016,12 +1014,8 @@ impl<Env: Envelope> RequestReply for ZmqRpcPublisher<Env> {
                     .recv()
                     .await
                     .map_err(|e| ZmqError::Receive(e.to_string()))?;
-                let reply = envelope::read(
-                    &self.envelope,
-                    Pattern::DealerRouter,
-                    reply.into_vecdeque(),
-                    None,
-                )?;
+                let reply =
+                    envelope::read(&self.envelope, Pattern::DealerRouter, reply.into_vecdeque())?;
                 if answers(&reply, correlation.as_deref()) {
                     return Ok(reply);
                 }

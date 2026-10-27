@@ -38,12 +38,30 @@ use crate::envelope::Framed;
 use crate::envelope::{self, Envelope, Frames, NoOp, Pattern, frames};
 use crate::error::ZmqError;
 use crate::fanout::{ConnectedZmqFanout, ZmqFanout};
-use crate::message::ZmqMessage;
+use crate::message::{ZmqMessage, ZmqRequest};
 use crate::queue::{ConnectedZmqQueue, ZmqQueue};
 use crate::rpc::{ConnectedZmqRpc, REPLY_PREFIX, ZmqRpc, answers, peer_identity};
 
 /// The channel a subscription reads its deliveries from, the same one a socket driver feeds.
-pub(crate) type Deliveries<Env> = mpsc::UnboundedReceiver<Result<ZmqMessage<Env>, ZmqError>>;
+pub(crate) type Deliveries<Message> = mpsc::UnboundedReceiver<Result<Message, ZmqError>>;
+
+/// A delivery the harness counts while it is in flight.
+pub(crate) trait Counted: Send + 'static {
+    /// The delivery, handing `release` back once it is settled or dropped.
+    fn counted(self, release: Release) -> Self;
+}
+
+impl<Env: Envelope> Counted for ZmqMessage<Env> {
+    fn counted(self, release: Release) -> Self {
+        Self::counted(self, release)
+    }
+}
+
+impl<Env: Envelope> Counted for ZmqRequest<Env> {
+    fn counted(self, release: Release) -> Self {
+        Self::counted(self, release)
+    }
+}
 
 /// Hands a subscription the frames it receives: read the way its socket's driver reads them,
 /// counted with the harness's coordinator, and sent to the subscription's channel. Erased, since
@@ -153,15 +171,15 @@ impl Bus {
 
     /// Opens a subscription named `name`, whose deliveries are read with `read`; `None` is a
     /// message its socket's driver skips.
-    pub(crate) fn subscribe<Env, Read, Item>(
+    pub(crate) fn subscribe<Message, Read, Item>(
         self: &Arc<Self>,
         name: &str,
         read: Read,
-    ) -> (Deliveries<Env>, Registration)
+    ) -> (Deliveries<Message>, Registration)
     where
-        Env: Envelope,
+        Message: Counted,
         Read: Fn(WireMessage) -> Item + Send + Sync + 'static,
-        Item: Into<Option<Result<ZmqMessage<Env>, ZmqError>>>,
+        Item: Into<Option<Result<Message, ZmqError>>>,
     {
         let (tx, rx) = mpsc::unbounded_channel();
         let deliver: Deliver = Arc::new(move |frames, coordinator| {
@@ -603,8 +621,7 @@ pub(crate) async fn request<Env: Envelope>(
     );
     let exchange = async {
         while let Some(reply) = inbox.recv().await {
-            let reply =
-                envelope::read(envelope, Pattern::DealerRouter, reply.into_vecdeque(), None)?;
+            let reply = envelope::read(envelope, Pattern::DealerRouter, reply.into_vecdeque())?;
             if answers(&reply, correlation) {
                 return Ok(reply);
             }
