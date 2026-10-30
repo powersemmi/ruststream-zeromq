@@ -18,7 +18,7 @@ ruststream-zeromq = { path = "crates/ruststream-zeromq" }
 ruststream = { version = "0.7", default-features = false }
 
 # Floors, not majors: a major-only bound resolves below the APIs used here under minimal-versions.
-zeromq = { version = "0.6", default-features = false, features = ["tokio-runtime", "all-transport"] }
+zeromq = { version = "0.7", default-features = false, features = ["tokio-runtime", "all-transport"] }
 bytes = "1.5"
 futures = "0.3.30"
 thiserror = "2.0.3"
