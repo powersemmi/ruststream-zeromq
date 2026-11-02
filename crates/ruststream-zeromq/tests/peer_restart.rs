@@ -36,7 +36,7 @@ fn payload(frames: &zeromq::ZmqMessage) -> Option<Bytes> {
 }
 
 /// A queue publisher that dials a sink keeps working after the sink restarts. The first send
-/// into the dead connection is lost inside TCP and the next one fails, as on any socket; the
+/// into the dead connection is lost inside TCP and a later one fails, as on any socket; the
 /// publish after that dials the new sink and reaches it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_dialing_queue_publisher_reaches_a_restarted_sink() {
@@ -58,14 +58,19 @@ async fn a_dialing_queue_publisher_reaches_a_restarted_sink() {
         .expect("the sink reads it");
     assert_eq!(payload(&first).as_deref(), Some(&b"before"[..]));
 
-    // Closed rather than dropped: a drop stops the listener in the background, and binding the
-    // address again before that is refused.
+    // A pull socket keeps its accepted connections open after it is closed or dropped, which is
+    // not how a peer that stops behaves; shutting its backend down closes them as a process exit
+    // does. Closed rather than dropped: a drop stops the listener in the background, and binding
+    // the address again before that is refused.
+    sink.backend().shutdown();
     let errors = sink.close().await;
     assert!(errors.is_empty(), "the sink closes: {errors:?}");
     let mut sink = zeromq::PullSocket::new();
     sink.bind(&address).await.expect("the sink binds again");
 
-    // Publishes into the connection the old sink left behind, until the socket reports it dead.
+    // Publishes into the connection the old sink left behind, until the socket reports it dead. A
+    // send is accepted once it is queued, so the failure shows after the socket's writer has met
+    // the closed connection, and each attempt leaves it a moment to do so.
     let mut failed = false;
     for _ in 0..ATTEMPTS {
         if publisher
@@ -76,6 +81,7 @@ async fn a_dialing_queue_publisher_reaches_a_restarted_sink() {
             failed = true;
             break;
         }
+        tokio::time::sleep(Duration::from_millis(5)).await;
     }
     assert!(
         failed,
