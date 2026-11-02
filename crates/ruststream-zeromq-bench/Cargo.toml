@@ -55,3 +55,7 @@ harness = false
 [[bench]]
 name = "batch"
 harness = false
+
+[[bench]]
+name = "publish"
+harness = false

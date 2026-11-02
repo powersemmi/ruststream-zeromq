@@ -55,17 +55,19 @@ use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use gungraun::{Callgrind, Dhat, DhatMetric, EntryPoint, LibraryBenchmarkConfig};
 use ruststream::runtime::{AppInfo, BrokerScope, Identity, RunningApp, RustStream};
-use ruststream_zeromq::{ZmqEndpoint, ZmqQueue, ZmqRpc};
+use ruststream::{Broker, ConnectedBroker, OutgoingMessage, Publisher};
+use ruststream_zeromq::{Connect, ConnectedZmqQueue};
+use ruststream_zeromq::{ZmqEndpoint, ZmqQueue, ZmqQueuePublisher, ZmqRpc};
 use serde::Deserialize;
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::{Notify, oneshot};
 use tokio::time::timeout;
 use zeromq::prelude::*;
 use zeromq::util::PeerIdentity;
-use zeromq::{DealerSocket, PushSocket, SocketOptions, ZmqMessage as WireMessage};
+use zeromq::{DealerSocket, PullSocket, PushSocket, SocketOptions, ZmqMessage as WireMessage};
 
 // A benchmark measures what ships. The framework's harness feature compiles test hooks into the
 // dispatch path, so a number taken with it on is not the service a user deploys.
@@ -539,4 +541,94 @@ pub fn start_and_drain(pending: Pending) {
     }
     black_box(read);
     drop(running);
+}
+
+/// A queue publisher that dials a PULL peer on the loopback, and the peer's thread reading what it
+/// publishes.
+pub struct Publishing {
+    runtime: Runtime,
+    connected: ConnectedZmqQueue<Connect>,
+    publisher: ZmqQueuePublisher,
+    peer: JoinHandle<()>,
+    read: oneshot::Receiver<()>,
+    messages: usize,
+}
+
+/// A publisher attached to its peer, which reads `messages` publishes after the one that attaches.
+/// The attach is the setup's, so the region is the publish path alone.
+pub fn publishing(messages: usize) -> Publishing {
+    let address = loopback();
+    let (bound_tx, bound) = sync_channel(1);
+    let (read_tx, read) = oneshot::channel();
+    let bind = address.clone();
+    let peer = thread::spawn(move || {
+        runtime().block_on(async move {
+            let mut socket = PullSocket::new();
+            socket.bind(&bind).await.expect("the peer binds");
+            bound_tx.send(()).expect("the benchmark waits for the bind");
+            for _ in 0..=messages {
+                timeout(PEER_WAIT, socket.recv())
+                    .await
+                    .expect("the publisher sends every message")
+                    .expect("a message arrives whole");
+            }
+            let _ = read_tx.send(());
+        });
+    });
+    bound
+        .recv_timeout(PEER_WAIT)
+        .expect("the peer binds its endpoint");
+    let runtime = runtime();
+    let (connected, publisher) = runtime.block_on(async {
+        let connected = ZmqQueue::new(ZmqEndpoint::connect(address))
+            .connect()
+            .await
+            .expect("the queue connects");
+        let publisher = connected.publisher();
+        publisher
+            .publish(order(&json_body()), None)
+            .await
+            .expect("the first publish attaches and leaves");
+        (connected, publisher)
+    });
+    Publishing {
+        runtime,
+        connected,
+        publisher,
+        peer,
+        read,
+        messages,
+    }
+}
+
+fn order(body: &[u8]) -> OutgoingMessage<'static, BytesMut> {
+    OutgoingMessage::produced(INPUT, BytesMut::from(body))
+}
+
+/// Publishes every message, and waits for the peer to read them all.
+pub fn publish_and_drain(run: Publishing) {
+    let Publishing {
+        runtime,
+        connected,
+        publisher,
+        peer,
+        read,
+        messages,
+    } = run;
+    let body = json_body();
+    measure(|| {
+        runtime.block_on(async {
+            for _ in 0..messages {
+                publisher
+                    .publish(order(&body), None)
+                    .await
+                    .expect("the peer takes the message");
+            }
+            read.await.expect("the peer reads every message");
+        });
+    });
+    peer.join().expect("the peer reads every message");
+    runtime
+        .block_on(connected.shutdown())
+        .expect("the queue shuts down");
 }

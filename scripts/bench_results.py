@@ -205,6 +205,7 @@ CODE_SCENARIOS = [
     ),
     ("DEALER/ROUTER on the loopback, answered to the requesting peer", "reply/service", True),
     ("PUSH/PULL on the loopback, in batches of 64 assembled on the client", "batch/service", True),
+    ("PUSH to a PULL peer on the loopback, publishing a small JSON body", "publish/publish", True),
 ]
 
 
