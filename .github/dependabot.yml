@@ -12,6 +12,12 @@ updates:
         update-types:
           - minor
           - patch
+    # zeromq 0.7 bounds the per-peer send queue by a fixed 100,000 messages, so an unread
+    # subscription no longer holds a publisher back; the crate moves to 0.7 once that bound
+    # is a socket setting (branch sweep/zeromq-0.7 holds the rest of the move).
+    ignore:
+      - dependency-name: zeromq
+        versions: ["0.7.*"]
     open-pull-requests-limit: 10
 
   - package-ecosystem: github-actions
