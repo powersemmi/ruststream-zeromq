@@ -13,15 +13,19 @@
 //! anchor is the first small frame of the message (the name, in the default layout) and is kept
 //! from window to window while that frame stays the same, so a mark allocates and copies nothing.
 //! A message without a small frame is marked by its last frame, which costs the one allocation
-//! that sharing a buffer for the first time takes.
+//! that sharing a buffer for the first time takes. A message of nothing but static or owned
+//! frames, which no count can tell released, is marked by wrapping its last frame in an owner
+//! that gives a signal when the client drops it: one allocation a window, on that path alone.
 //!
 //! The reference count has no wake-up, so the wait checks it. It checks without pause for the
 //! first millisecond, which is what a peer that keeps up needs, and then every millisecond, so a
 //! peer that holds the mark for longer costs a timer tick of latency and no spinning.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
+use tokio::sync::Notify;
 use zeromq::ZmqMessage;
 
 /// Messages in a window.
@@ -41,15 +45,49 @@ const SPIN_FOR: Duration = Duration::from_millis(1);
 /// The sleep between checks once the peer has held the mark for longer than [`SPIN_FOR`].
 const NAP: Duration = Duration::from_millis(1);
 
-/// What a sending socket has sent since its last mark, and the anchor of that mark.
+/// The last frame of a message marked by its drop: the frame itself, and the signal to give when
+/// the client is done with it.
+struct Mark {
+    frame: Bytes,
+    left: Arc<Notify>,
+}
+
+impl AsRef<[u8]> for Mark {
+    fn as_ref(&self) -> &[u8] {
+        &self.frame
+    }
+}
+
+impl Drop for Mark {
+    fn drop(&mut self) {
+        self.left.notify_one();
+    }
+}
+
+/// What the last window's mark is waited for by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum Held {
+    /// No mark is in the client's queue.
+    #[default]
+    Nothing,
+    /// The anchor is the only holder of its buffer once the client has dropped the message.
+    Anchor,
+    /// The signal is given when the client drops the message's last frame.
+    Signal,
+}
+
+/// What a sending socket has sent since its last mark, and how that mark is waited for.
 #[derive(Default)]
 pub(crate) struct SendWindow {
     messages: u32,
     bytes: usize,
     /// A handle to a frame of the last marked message; the message's own handle is the other.
     anchor: Option<Bytes>,
-    /// Whether the last mark is still to be waited for.
-    outstanding: bool,
+    /// Given by a [`Mark`]; one is in the queue at a time, so one signal serves them all. Made
+    /// with the first mark that needs it.
+    left: Option<Arc<Notify>>,
+    /// How the last mark is still to be waited for.
+    held: Held,
 }
 
 impl SendWindow {
@@ -66,52 +104,70 @@ impl SendWindow {
             self.bytes = bytes;
             return frames;
         }
-        if self.outstanding {
-            if let Some(anchor) = &self.anchor {
-                released(anchor).await;
-                // A large frame is not kept: the publisher would hold its buffer until the next mark.
-                if anchor.len() > KEPT_FRAME {
-                    self.anchor = None;
+        match self.held {
+            Held::Nothing => {}
+            Held::Anchor => {
+                if let Some(anchor) = &self.anchor {
+                    released(anchor).await;
+                    // A large frame is not kept: the publisher would hold its buffer until the
+                    // next mark.
+                    if anchor.len() > KEPT_FRAME {
+                        self.anchor = None;
+                    }
                 }
             }
-            self.outstanding = false;
+            Held::Signal => {
+                if let Some(left) = &self.left {
+                    left.notified().await;
+                }
+            }
         }
         self.messages = 0;
         self.bytes = 0;
-        let (frames, marked) = self.mark(frames);
-        self.outstanding = marked;
+        let (frames, held) = self.mark(frames);
+        self.held = held;
         frames
     }
 
-    /// Makes one frame of `frames` the anchor, and says whether there was one to make.
-    fn mark(&mut self, frames: ZmqMessage) -> (ZmqMessage, bool) {
+    /// Marks `frames`, in the cheapest way the message allows, and says how the mark is waited
+    /// for.
+    ///
+    /// The anchor of the last window is reused when the message still has its frame. Otherwise
+    /// any frame the publisher holds alone becomes the anchor, since a static or owned frame
+    /// never reads as released. A message of nothing but such frames is marked by its last frame,
+    /// which costs an allocation.
+    fn mark(&mut self, frames: ZmqMessage) -> (ZmqMessage, Held) {
         let mut frames = frames.into_vec();
         let small = frames
             .iter()
             .position(|frame| !frame.is_empty() && frame.len() <= KEPT_FRAME);
-        let last = frames.len() - 1;
-        let index = small.unwrap_or(last);
-        let marked = match &self.anchor {
+        let held = match (&self.anchor, small) {
             // The same frame as the last window's: its handle goes into the message, and the
             // frame this message made is dropped.
-            Some(anchor) if small.is_some() && *anchor == frames[index] => {
+            (Some(anchor), Some(index)) if *anchor == frames[index] => {
                 frames[index] = anchor.clone();
-                true
-            }
-            // Only a frame this publisher holds alone can be told from its count: a static or
-            // owned one never reads as released.
-            _ if frames[index].is_unique() => {
-                self.anchor = Some(frames[index].clone());
-                true
+                Held::Anchor
             }
             _ => {
-                self.anchor = None;
-                false
+                let index = small
+                    .filter(|&index| frames[index].is_unique())
+                    .or_else(|| frames.iter().rposition(Bytes::is_unique));
+                if let Some(index) = index {
+                    self.anchor = Some(frames[index].clone());
+                    Held::Anchor
+                } else {
+                    self.anchor = None;
+                    let left = Arc::clone(self.left.get_or_insert_with(|| Arc::new(Notify::new())));
+                    // A message always has a frame: `ZmqMessage` cannot be empty.
+                    let frame = frames.pop().unwrap_or_default();
+                    frames.push(Bytes::from_owner(Mark { frame, left }));
+                    Held::Signal
+                }
             }
         };
         (
             ZmqMessage::try_from(frames).expect("a message with a frame still has one"),
-            marked,
+            held,
         )
     }
 }
@@ -198,12 +254,38 @@ mod tests {
         let _ = admit.await;
     }
 
+    /// A message of static frames cannot be told released by a count, and the window holds back
+    /// all the same.
+    #[tokio::test]
+    async fn a_message_of_static_frames_is_waited_for() {
+        let fixed = || {
+            ZmqMessage::try_from(vec![Bytes::from_static(b"jobs"), Bytes::from_static(b"{}")])
+                .expect("a message with frames")
+        };
+        let mut window = SendWindow::default();
+        for _ in 1..WINDOW_MESSAGES {
+            window.admit(fixed(), 8).await;
+        }
+        let held = window.admit(fixed(), 8).await;
+        for _ in 1..WINDOW_MESSAGES {
+            window.admit(fixed(), 8).await;
+        }
+        let mut admit = Box::pin(window.admit(fixed(), 8));
+        assert!(poll!(admit.as_mut()).is_pending(), "the mark is still held");
+        drop(held);
+        let _ = admit.await;
+    }
+
     /// One message of a window's worth of bytes closes the window on its own.
     #[tokio::test]
     async fn a_large_message_closes_a_window_by_its_size() {
         let mut window = SendWindow::default();
         let marked = window.admit(message(b"jobs"), WINDOW_BYTES).await;
-        assert!(window.outstanding, "one large message is a whole window");
+        assert_eq!(
+            window.held,
+            Held::Anchor,
+            "one large message is a whole window"
+        );
         drop(marked);
     }
 }
