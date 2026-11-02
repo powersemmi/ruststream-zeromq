@@ -11,7 +11,6 @@ use std::time::Duration;
 use bytes::Bytes;
 use ruststream::{Broker, BytesMut, OutgoingMessage, Publisher};
 use ruststream_zeromq::{ZmqEndpoint, ZmqFanout, ZmqQueue};
-use zeromq::SocketBackend;
 use zeromq::prelude::*;
 
 /// Long enough that a slow machine does not fail a message that is already on its way.
