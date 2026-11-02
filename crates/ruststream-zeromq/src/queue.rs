@@ -859,10 +859,11 @@ impl<Env: Envelope> Publisher for ZmqQueuePublisher<Env> {
 
     /// # Cancel safety
     ///
-    /// Cancel-safe. A publish dropped before the socket takes its message sends nothing. One
-    /// dropped mid-send, while the peer applies back-pressure, leaves its message with the
-    /// publisher: the next publish through it or a clone completes that send before its own, and
-    /// a failure of it is logged against its name.
+    /// Cancel-safe. A publish dropped before the socket takes its message sends nothing, and
+    /// that includes one waiting for a peer that does not keep up. One dropped mid-send, while
+    /// the client's own queue for the peer is full, leaves its message with the publisher: the
+    /// next publish through it or a clone completes that send before its own, and a failure of it
+    /// is logged against its name.
     // The socket guard intentionally spans the lazy attach and the send: the socket takes
     // &mut for every operation.
     #[allow(clippy::significant_drop_tightening)]

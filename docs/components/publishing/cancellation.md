@@ -13,7 +13,7 @@ A queue publish is cancel-safe; a fan-out publish, a reply and a request are not
 
 A publish waits while the peer applies [back-pressure](../../architecture/backpressure.md), so a caller may drop it before it completes.
 On [`ZmqQueue`](../broker/zmq-queue.md) that is safe.
-A publish dropped before the socket took its message sends nothing.
+A publish dropped before the socket took its message sends nothing, and that includes one waiting for a slow peer to catch up.
 One dropped in the middle of the send leaves its message with the publisher, and the next publish through it completes that send before its own.
 
 A fan-out publish and a reply are not cancel-safe.

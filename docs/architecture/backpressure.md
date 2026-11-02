@@ -48,6 +48,9 @@ messages carry no key, so `workers(n, by_key)` has nothing to hash, and the mess
 the lanes. A [batch](../components/subscriptions/batches.md) closes at the size the mount site
 names, or 20 milliseconds after its first message.
 
-A publish waits the same way when the peer reads slowly. A queue publish can be cancelled while
-it waits, and the next publish completes its send. A fan-out publish, a reply and a request
+A publish waits the same way when the peer reads slowly. The client takes a queue message as soon
+as it is queued for the peer, so a queue publisher counts what it has sent. After 256 messages or
+1 MiB of payload, whichever comes first, it waits until the last message of the window before has
+left the client, and a slow peer therefore holds about two windows in the sender. A queue publish
+can be cancelled while it waits, and it sends nothing. A fan-out publish, a reply and a request
 cannot, so [give them up through a timeout](../components/publishing/cancellation.md).
