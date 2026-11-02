@@ -2,8 +2,7 @@
 //!
 //! A send waits while the peer applies back-pressure, and a caller may give up on it (a
 //! `select!` arm that loses, a timeout). The publisher has to stay usable afterwards: the next
-//! publish reaches the peer once the peer reads again, after the message whose publish was
-//! dropped.
+//! publish reaches the peer once the peer reads again. The dropped publish sent nothing.
 
 use std::pin::pin;
 use std::task::Poll;
@@ -97,7 +96,8 @@ async fn a_publish_dropped_under_back_pressure_leaves_the_publisher_usable() {
     .expect("the publish after a dropped one does not hang")
     .expect("the publish after a dropped one leaves");
 
-    // Every bulk message arrives, the dropped one included, and then the last one.
+    // Every bulk message that was sent arrives, and then the last one. The dropped publish was
+    // still waiting for the window, so its message was never sent.
     let bulk_before_last = tokio::time::timeout(GUARD, async {
         let mut bulk = 0;
         while let Some(payload) = received.recv().await {
@@ -112,8 +112,8 @@ async fn a_publish_dropped_under_back_pressure_leaves_the_publisher_usable() {
     .expect("the peer drains what was sent");
     assert_eq!(
         bulk_before_last,
-        Some(attempted),
-        "the message published after the dropped one reaches the peer, after every bulk message",
+        Some(attempted - 1),
+        "the message published after the dropped one reaches the peer, after every bulk message that was sent",
     );
     reader.abort();
 }
