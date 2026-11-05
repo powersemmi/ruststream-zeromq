@@ -141,7 +141,7 @@ async fn publishing_after_shutdown_errors() {
         ),
     ] {
         assert!(
-            matches!(error, ZmqError::NotConnected),
+            matches!(error.error(), ZmqError::NotConnected),
             "{label} through a closed transport must report NotConnected, got: {error}",
         );
     }
@@ -188,11 +188,12 @@ async fn answering_after_shutdown_errors() {
             publisher
                 .request(OutgoingMessage::new("echo", b"late".as_slice()), NOTHING)
                 .await
-                .expect_err("a request after shutdown must fail"),
+                .expect_err("a request after shutdown must fail")
+                .into(),
         ),
     ] {
         assert!(
-            matches!(error, ZmqError::NotConnected),
+            matches!(error.error(), ZmqError::NotConnected),
             "{label} through a closed transport must report NotConnected, got: {error}",
         );
     }
@@ -366,7 +367,7 @@ async fn the_reply_publisher_refuses_what_it_cannot_route() {
         .await
         .expect_err("a literal destination is not a reply address");
     assert!(
-        matches!(&plain, ZmqError::Send { name, .. } if name == "reply"),
+        matches!(plain.error(), ZmqError::Send { name, .. } if name == "reply"),
         "the error must name the destination it refused, got: {plain}",
     );
 
