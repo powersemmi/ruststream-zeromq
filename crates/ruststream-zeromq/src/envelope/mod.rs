@@ -105,9 +105,7 @@ pub use self::noop::NoOp;
 /// #[ruststream::app]
 /// fn app() -> impl App {
 ///     let jobs = ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")).envelope(Bare);
-///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(jobs, |b| {
-///         b.include(work);
-///     })
+///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(jobs, |b| b.include(work))
 /// }
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -192,7 +190,7 @@ pub enum Pattern {
 /// # fn app() -> impl App {
 /// #     let ticks = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")).envelope(Spaced);
 /// #     RustStream::new(AppInfo::new("recorder", "0.1.0")).with_broker(ticks, |b| {
-/// #         b.include(record);
+/// #         b.include(record)
 /// #     })
 /// # }
 /// ```
@@ -274,7 +272,7 @@ impl<Head> Opened<Head> {
     /// # fn app() -> impl App {
     /// #     let ticks = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")).envelope(Spaced);
     /// #     RustStream::new(AppInfo::new("recorder", "0.1.0")).with_broker(ticks, |b| {
-    /// #         b.include(record);
+    /// #         b.include(record)
     /// #     })
     /// # }
     /// ```
@@ -360,7 +358,7 @@ impl<Head> Opened<Head> {
 /// # fn app() -> impl App {
 /// #     let ticks = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")).envelope(Spaced);
 /// #     RustStream::new(AppInfo::new("recorder", "0.1.0")).with_broker(ticks, |b| {
-/// #         b.include(record);
+/// #         b.include(record)
 /// #     })
 /// # }
 /// ```
@@ -437,7 +435,7 @@ impl SealError {
     /// # fn app() -> impl App {
     /// #     let ticks = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")).envelope(Spaced);
     /// #     RustStream::new(AppInfo::new("recorder", "0.1.0")).with_broker(ticks, |b| {
-    /// #         b.include(record);
+    /// #         b.include(record)
     /// #     })
     /// # }
     /// ```
@@ -536,9 +534,7 @@ impl SealError {
 /// #[ruststream::app]
 /// fn app() -> impl App {
 ///     let ticks = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")).envelope(Spaced);
-///     RustStream::new(AppInfo::new("recorder", "0.1.0")).with_broker(ticks, |b| {
-///         b.include(record);
-///     })
+///     RustStream::new(AppInfo::new("recorder", "0.1.0")).with_broker(ticks, |b| b.include(record))
 /// }
 /// ```
 pub trait Envelope: Clone + Send + Sync + 'static {
@@ -703,9 +699,9 @@ pub(crate) fn hand_back<'msg, Env: Envelope>(
 ///     let to_results = results.bind(Publish.envelope(NoOp));
 ///     RustStream::new(AppInfo::new("worker", "0.1.0"))
 ///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
-///             b.include(work).out_reply(to_results);
+///             b.include(work).out_reply(to_results)
 ///         })
-///         .with_broker(results, |_b| {})
+///         .with_broker(results, |b| b)
 /// }
 /// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]

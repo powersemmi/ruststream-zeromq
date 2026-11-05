@@ -44,9 +44,7 @@ pub use self::ZmqFanoutPublish as Publish;
 ///     // The watcher binds and the publishers dial it, so a retry copy returns to its listener.
 ///     RustStream::new(AppInfo::new("watcher", "0.1.0")).with_broker(
 ///         ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")),
-///         |b| {
-///             b.include(handle);
-///         },
+///         |b| b.include(handle),
 ///     )
 /// }
 /// ```
@@ -134,9 +132,7 @@ const _: () = assert!(size_of::<Sender<PubSide>>() == size_of::<PubSide>());
 /// fn app() -> impl App {
 ///     RustStream::new(AppInfo::new("watcher", "0.1.0")).with_broker(
 ///         ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")),
-///         |b| {
-///             b.include(watch);
-///         },
+///         |b| b.include(watch),
 ///     )
 /// }
 /// ```
@@ -182,7 +178,7 @@ impl<Role: EndpointRole> ZmqFanout<Role> {
     ///     let to_prices = prices.bind(ZmqFanoutPublish);
     ///     RustStream::new(AppInfo::new("prices", "0.1.0"))
     ///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
-    ///             b.include(tick).out_reply(to_prices);
+    ///             b.include(tick).out_reply(to_prices)
     ///         })
     ///         .register_broker(prices)
     /// }
@@ -227,7 +223,7 @@ impl<Role, Env: Envelope> ZmqFanout<Role, Env> {
     /// fn app() -> impl App {
     ///     let ticks = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")).envelope(NoOp);
     ///     RustStream::new(AppInfo::new("recorder", "0.1.0")).with_broker(ticks, |b| {
-    ///         b.include(record);
+    ///         b.include(record)
     ///     })
     /// }
     /// ```
@@ -277,7 +273,7 @@ impl<Role, Env: Envelope> ZmqFanout<Role, Env> {
     ///     let events = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556"))
     ///         .read_ahead(nonzero!(64_usize));
     ///     RustStream::new(AppInfo::new("archiver", "0.1.0")).with_broker(events, |b| {
-    ///         b.include(archive);
+    ///         b.include(archive)
     ///     })
     /// }
     /// ```
@@ -520,8 +516,8 @@ impl<Env: Envelope> Subscribe for ConnectedZmqFanout<Connect, Env> {
     /// takes nothing, so a copy published back to it is refused by the handshake. The
     /// subscription therefore addresses no copy, and every registration names where its copies
     /// go: `.out_retry(policy).to("name")` over a broker that reaches a consumer, or a transform
-    /// that names one per delivery. A registration that names neither is refused before the
-    /// subscription opens, and a `.build()` chain that names neither does not compile.
+    /// that names one per delivery. A registration that names neither does not compile, on a
+    /// `with_broker` scope and on a router alike.
     type Copies = NamedCopies;
 
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
@@ -829,7 +825,7 @@ async fn await_filter(socket: &mut XPubSocket, address: &str) -> Result<(), ZmqE
 ///     let to_records = records.bind(ZmqFanoutPublish);
 ///     RustStream::new(AppInfo::new("auditor", "0.1.0"))
 ///         .with_broker(ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")), |b| {
-///             b.include(audit).out_reply(to_records);
+///             b.include(audit).out_reply(to_records)
 ///         })
 ///         .register_broker(records)
 /// }
@@ -874,9 +870,9 @@ impl ZmqFanoutPublish {
     ///     let to_events = events.bind(ZmqFanoutPublish.envelope(Framed::new(JsonCodec)));
     ///     RustStream::new(AppInfo::new("orders", "0.1.0"))
     ///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
-    ///             b.include(place).out_reply(to_events);
+    ///             b.include(place).out_reply(to_events)
     ///         })
-    ///         .with_broker(events, |_b| {})
+    ///         .with_broker(events, |b| b)
     /// }
     /// ```
     pub const fn envelope<Env: Envelope>(self, envelope: Env) -> Enveloped<Self, Env> {

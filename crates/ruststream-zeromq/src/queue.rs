@@ -52,9 +52,9 @@ pub use self::ZmqQueuePublish as Publish;
 ///     let to_results = results.bind(Publish);
 ///     RustStream::new(AppInfo::new("worker", "0.1.0"))
 ///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
-///             b.include(handle).out_reply(to_results);
+///             b.include(handle).out_reply(to_results)
 ///         })
-///         .with_broker(results, |_b| {})
+///         .with_broker(results, |b| b)
 /// }
 /// ```
 pub mod prelude {
@@ -146,7 +146,7 @@ const _: () = assert!(size_of::<Sender<Outbox<PushSocket>>>() == size_of::<Outbo
 ///         |b| {
 ///             b.include(handle)
 ///                 .max_attempts(nonzero!(5u32))
-///                 .out_retry(Publish);
+///                 .out_retry(Publish)
 ///         },
 ///     )
 /// }
@@ -185,11 +185,9 @@ const _: () = assert!(size_of::<Sender<Outbox<PushSocket>>>() == size_of::<Outbo
 ///             b.include(work)
 ///                 .max_attempts(nonzero!(5u32))
 ///                 .out_retry(copies)
-///                 .to("jobs");
+///                 .to("jobs")
 ///         })
-///         .with_broker(retries, |b| {
-///             b.include(work).max_attempts(nonzero!(5u32));
-///         })
+///         .with_broker(retries, |b| b.include(work).max_attempts(nonzero!(5u32)))
 /// }
 /// ```
 #[must_use]
@@ -227,9 +225,7 @@ impl<Role: EndpointRole> ZmqQueue<Role> {
     /// fn app() -> impl App {
     ///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
     ///         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
-    ///         |b| {
-    ///             b.include(work);
-    ///         },
+    ///         |b| b.include(work),
     ///     )
     /// }
     /// ```
@@ -271,9 +267,7 @@ impl<Role, Env: Envelope> ZmqQueue<Role, Env> {
     /// #[ruststream::app]
     /// fn app() -> impl App {
     ///     let jobs = ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")).envelope(NoOp);
-    ///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(jobs, |b| {
-    ///         b.include(work);
-    ///     })
+    ///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(jobs, |b| b.include(work))
     /// }
     /// ```
     pub fn envelope<Other: Envelope>(self, envelope: Other) -> ZmqQueue<Role, Other> {
@@ -318,7 +312,7 @@ impl<Role, Env: Envelope> ZmqQueue<Role, Env> {
     ///     let renders = ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555"))
     ///         .read_ahead(nonzero!(64_usize));
     ///     RustStream::new(AppInfo::new("renderer", "0.1.0")).with_broker(renders, |b| {
-    ///         b.include(render);
+    ///         b.include(render)
     ///     })
     /// }
     /// ```
@@ -553,8 +547,8 @@ impl<Env: Envelope> Subscribe for ConnectedZmqQueue<Connect, Env> {
     /// sends and takes nothing, so a copy published back to it is refused by the handshake. The
     /// subscription therefore addresses no copy, and every registration names where its copies
     /// go: `.out_retry(policy).to("name")` over a broker that reaches a consumer, or a transform
-    /// that names one per delivery. A registration that names neither is refused before the
-    /// subscription opens, and a `.build()` chain that names neither does not compile.
+    /// that names one per delivery. A registration that names neither does not compile, on a
+    /// `with_broker` scope and on a router alike.
     type Copies = NamedCopies;
 
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
@@ -592,9 +586,7 @@ impl<Env: Envelope> Subscribe for ConnectedZmqQueue<Connect, Env> {
 /// fn app() -> impl App {
 ///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
 ///         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
-///         |b| {
-///             b.include(drain.batch(nonzero!(32)));
-///         },
+///         |b| b.include(drain.batch(nonzero!(32))),
 ///     )
 /// }
 /// ```
@@ -702,9 +694,9 @@ impl<Env: Envelope> BatchSubscriber for ZmqSubscriber<Env> {
 ///     let to_results = results.bind(Publish);
 ///     RustStream::new(AppInfo::new("worker", "0.1.0"))
 ///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
-///             b.include(work).out_reply(to_results);
+///             b.include(work).out_reply(to_results)
 ///         })
-///         .with_broker(results, |_b| {})
+///         .with_broker(results, |b| b)
 /// }
 /// ```
 #[derive(Clone)]
@@ -970,7 +962,7 @@ impl<Env: Envelope> Publisher for ZmqQueuePublisher<Env> {
 ///     let to_pickers = pickers.bind(ZmqQueuePublish);
 ///     RustStream::new(AppInfo::new("splitter", "0.1.0"))
 ///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
-///             b.include(split).out(DefaultSlot, to_pickers).build();
+///             b.include(split).out(DefaultSlot, to_pickers)
 ///         })
 ///         .register_broker(pickers)
 /// }
@@ -1014,9 +1006,9 @@ impl ZmqQueuePublish {
     ///     let to_results = results.bind(Publish.envelope(NoOp));
     ///     RustStream::new(AppInfo::new("worker", "0.1.0"))
     ///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
-    ///             b.include(work).out_reply(to_results);
+    ///             b.include(work).out_reply(to_results)
     ///         })
-    ///         .with_broker(results, |_b| {})
+    ///         .with_broker(results, |b| b)
     /// }
     /// ```
     pub const fn envelope<Env: Envelope>(self, envelope: Env) -> Enveloped<Self, Env> {

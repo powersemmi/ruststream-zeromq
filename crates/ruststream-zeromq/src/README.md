@@ -6,7 +6,7 @@ other side may be written in any language. A service picks one broker per socket
 [`ZmqQueue`] (PUSH/PULL), [`ZmqFanout`] (PUB/SUB) or [`ZmqRpc`] (DEALER/ROUTER), each on a
 [`ZmqEndpoint`] that says whether this process binds or connects. A subscription is a name, and
 the name is frame 0 of every message. Delivery is at most once:
-[`ack`](ruststream::IncomingMessage::ack) reports
+[`ack`](ruststream::Settle::ack) reports
 [`AckError::Unsupported`](ruststream::AckError::Unsupported), and a retry is a copy the service
 publishes.
 
@@ -33,9 +33,7 @@ async fn handle(job: &Job) -> HandlerOutcome {
 fn app() -> impl App {
     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
-        |b| {
-            b.include(handle);
-        },
+        |b| b.include(handle),
     )
 }
 ```

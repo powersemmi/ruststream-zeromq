@@ -155,9 +155,7 @@ impl<Env: Envelope> Settle for ZmqMessage<Env> {
 /// fn app() -> impl App {
 ///     RustStream::new(AppInfo::new("greeter", "0.1.0")).with_broker(
 ///         ZmqRpc::new(ZmqEndpoint::bind("tcp://0.0.0.0:5557")),
-///         |b| {
-///             b.include(listen).out_retry(Publish).to("greeter.retry");
-///         },
+///         |b| b.include(listen).out_retry(Publish).to("greeter.retry"),
 ///     )
 /// }
 /// ```
