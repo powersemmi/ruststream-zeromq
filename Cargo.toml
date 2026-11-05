@@ -3,9 +3,9 @@ resolver = "3"
 members = ["crates/ruststream-zeromq", "crates/ruststream-zeromq-bench"]
 
 [workspace.package]
-version = "0.7.2"
+version = "0.8.0-rc.1"
 edition = "2024"
-# Follows the core's floor, which ruststream 0.7 raised to 1.95.
+# Follows the core's floor, 1.95 since ruststream 0.7.
 rust-version = "1.95"
 license = "Apache-2.0"
 repository = "https://github.com/powersemmi/ruststream-zeromq"
@@ -15,7 +15,11 @@ authors = ["RustStream contributors"]
 [workspace.dependencies]
 ruststream-zeromq = { path = "crates/ruststream-zeromq" }
 
-ruststream = { version = "0.7", default-features = false }
+# Names the pre-release explicitly: cargo excludes pre-releases from a range that does not, so a
+# bound starting at `0.8.0` would not match the `0.8.0-rc.1` candidate. The upper bound keeps the
+# final `0.8.0` and every later 0.8 patch admissible without a second edit. The client runs on
+# tokio, so the library needs the core's tokio runner in every build.
+ruststream = { version = ">=0.8.0-rc.1, <0.9.0", default-features = false, features = ["tokio"] }
 
 # Floors, not majors: a major-only bound resolves below the APIs used here under minimal-versions.
 zeromq = { version = "0.6", default-features = false, features = ["tokio-runtime", "all-transport"] }
