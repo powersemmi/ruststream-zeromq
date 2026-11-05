@@ -71,10 +71,9 @@ fn app() -> impl App {
                 b.include(check)
                     .max_attempts(nonzero!(3u32))
                     .out(DefaultSlot, ask)
-                    .build();
             },
         )
-        .with_broker(scoring, |_b| {})
+        .with_broker(scoring, |b| b)
 }
 // --8<-- [end:requester]
 

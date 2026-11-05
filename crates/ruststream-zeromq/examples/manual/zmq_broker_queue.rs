@@ -41,15 +41,13 @@ fn app() -> impl App {
                 // Two workers dial the ventilator, and each job it pushes reaches one of them.
                 b.include(subscriber("jobs", Work).build())
                     .out_retry(first)
-                    .to("jobs");
-                b.include(subscriber("jobs", Work).build())
+                    .to("jobs")
+                    .include(subscriber("jobs", Work).build())
                     .out_retry(second)
-                    .to("jobs");
+                    .to("jobs")
             },
         )
-        .with_broker(retries, |b| {
-            b.include(subscriber("jobs", Work).build());
-        })
+        .with_broker(retries, |b| b.include(subscriber("jobs", Work).build()))
 }
 // --8<-- [end:app]
 

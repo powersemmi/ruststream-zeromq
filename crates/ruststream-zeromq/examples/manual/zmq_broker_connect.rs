@@ -43,10 +43,10 @@ fn app() -> impl App {
                 b.include(subscriber("jobs", Work).reply().build())
                     .out_reply(results)
                     .out_retry(failed)
-                    .to("jobs.failed");
+                    .to("jobs.failed")
             },
         )
-        .with_broker_labeled("sink", sink, |_b| {})
+        .with_broker_labeled("sink", sink, |b| b)
 }
 // --8<-- [end:app]
 

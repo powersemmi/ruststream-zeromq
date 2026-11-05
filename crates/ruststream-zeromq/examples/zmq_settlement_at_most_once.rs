@@ -42,9 +42,7 @@ async fn charge(payment: &Payment) -> HandlerOutcome {
 fn app() -> impl App {
     RustStream::new(AppInfo::new("payments", "0.1.0")).with_broker(
         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
-        |b| {
-            b.include(charge);
-        },
+        |b| b.include(charge),
     )
 }
 // --8<-- [end:settle]

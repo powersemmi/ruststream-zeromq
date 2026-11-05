@@ -71,7 +71,7 @@ fn service(jobs: ZmqEndpoint, sink: ZmqEndpoint<Connect>) -> impl App {
     RustStream::new(AppInfo::new("worker", "0.1.0"))
         .with_broker(ZmqQueue::new(jobs), |b| {
             b.include(subscriber("jobs", Work).reply().build())
-                .out_reply(to_results);
+                .out_reply(to_results)
         })
         .register_broker(results)
 }

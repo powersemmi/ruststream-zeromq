@@ -30,9 +30,7 @@ async fn take_job(job: &Job) -> HandlerOutcome {
 fn app() -> impl App {
     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
         ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:5555")),
-        |b| {
-            b.include(take_job);
-        },
+        |b| b.include(take_job),
     )
 }
 // --8<-- [end:service]

@@ -47,12 +47,10 @@ fn app() -> impl App {
             |b| {
                 b.include(subscriber("jobs.", Watch).build())
                     .out_retry(copies)
-                    .to("jobs.");
+                    .to("jobs.")
             },
         )
-        .with_broker(retries, |b| {
-            b.include(subscriber("jobs.", Watch).build());
-        })
+        .with_broker(retries, |b| b.include(subscriber("jobs.", Watch).build()))
 }
 
 fn main() -> ExitCode {

@@ -86,10 +86,9 @@ fn app() -> impl App {
                 b.include(subscriber("orders", Check).build())
                     .max_attempts(nonzero!(3u32))
                     .out(DefaultSlot, ask)
-                    .build();
             },
         )
-        .with_broker(scoring, |_b| {})
+        .with_broker(scoring, |b| b)
 }
 
 fn main() -> ExitCode {

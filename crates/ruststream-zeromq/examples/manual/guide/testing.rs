@@ -75,9 +75,9 @@ fn service(jobs: &str, events: &str) -> RustStream {
         .with_broker(ZmqQueue::new(ZmqEndpoint::bind(jobs)), |b| {
             b.include(subscriber("jobs", Work).reply().build())
                 .max_attempts(nonzero!(3u32))
-                .out_reply(announce);
+                .out_reply(announce)
         })
-        .with_broker(events, |_b| {})
+        .with_broker(events, |b| b)
 }
 
 fn app() -> RustStream {

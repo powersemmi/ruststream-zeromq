@@ -31,12 +31,10 @@ impl Handle<Job> for Work {
 // --8<-- [start:app]
 /// The worker on the address `jobs` names; nothing is opened until the runtime starts it.
 fn service(jobs: &str) -> RustStream {
-    RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
-        ZmqQueue::new(ZmqEndpoint::bind(jobs)),
-        |b| {
-            b.include(subscriber("jobs", Work).build());
-        },
-    )
+    RustStream::new(AppInfo::new("worker", "0.1.0"))
+        .with_broker(ZmqQueue::new(ZmqEndpoint::bind(jobs)), |b| {
+            b.include(subscriber("jobs", Work).build())
+        })
 }
 
 fn app() -> impl App {
