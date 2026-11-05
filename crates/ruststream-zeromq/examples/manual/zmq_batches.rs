@@ -35,7 +35,7 @@ fn app() -> impl App {
         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
         |b| {
             // At most 32 jobs per call.
-            b.include(subscriber("jobs", Drain).batch(nonzero!(32)).build());
+            b.include(subscriber("jobs", Drain).batch(nonzero!(32)).build())
         },
     )
 }

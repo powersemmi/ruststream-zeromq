@@ -99,7 +99,7 @@ fn app() -> impl App {
                 // Five deliveries at most, the first one included; the copies return to this queue.
                 b.include(subscriber("jobs", Work).build())
                     .max_attempts(nonzero!(5u32))
-                    .out_retry(Publish);
+                    .out_retry(Publish)
             },
         )
         .with_broker_labeled(
@@ -109,11 +109,11 @@ fn app() -> impl App {
                 // A failed invoice leaves for the second queue, under the name it is read by.
                 b.include(subscriber("invoices", SendInvoice).build())
                     .dead_letter("invoices.dead")
-                    .out_retry(parked);
+                    .out_retry(parked)
             },
         )
         .with_broker_labeled("dead", dead, |b| {
-            b.include(subscriber("invoices.dead", Park).build());
+            b.include(subscriber("invoices.dead", Park).build())
         })
 }
 

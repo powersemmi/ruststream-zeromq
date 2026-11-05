@@ -93,6 +93,7 @@ impl Handle<Greeting, Answer> for Greet {
 
 /// Answers at the `reply-to` address the ROUTER stamped on the request, under the request's
 /// `correlation-id`.
+#[derive(Clone)]
 struct ReplyToRequester;
 
 impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
@@ -135,14 +136,14 @@ fn app() -> impl App {
     RustStream::new(AppInfo::new("worker", "0.1.0"))
         .with_broker_labeled("jobs", jobs(), |b| {
             b.include(subscriber("jobs", Work).reply().to("results").build())
-                .out_reply(ZmqQueuePublish);
+                .out_reply(ZmqQueuePublish)
         })
         .with_broker_labeled("rpc", greeter(), |b| {
             b.include(subscriber("greeter", Greet).reply().to("reply").build())
                 .out_reply(ZmqRpcPublish)
                 .transform(ReplyToRequester)
                 .out_retry(ZmqRpcPublish)
-                .to("greeter.retry");
+                .to("greeter.retry")
         })
 }
 // --8<-- [end:app]

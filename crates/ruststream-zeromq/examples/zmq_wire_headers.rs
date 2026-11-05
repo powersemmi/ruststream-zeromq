@@ -63,9 +63,7 @@ fn app() -> impl App {
     RustStream::new(AppInfo::new("worker", "0.1.0"))
         .with_broker(
             ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
-            |b| {
-                b.include(work).out(Results, results).build();
-            },
+            |b| b.include(work).out(Results, results),
         )
         .register_broker(sink)
 }

@@ -65,15 +65,15 @@ fn service(jobs: &str, events: &str, scoring: &str) -> RustStream {
     let announce = events.bind(ZmqFanoutPublish);
     RustStream::new(AppInfo::new("worker", "0.1.0"))
         .with_broker(ZmqQueue::new(ZmqEndpoint::bind(jobs)), |b| {
-            b.include(work).out_reply(announce);
+            b.include(work).out_reply(announce)
         })
-        .with_broker(events, |_b| {})
+        .with_broker(events, |b| b)
         .with_broker(ZmqRpc::new(ZmqEndpoint::bind(scoring)), |b| {
             b.include(score)
                 .out_reply(ZmqRpcPublish)
                 .transform(ReplyToRequester)
                 .out_retry(ZmqRpcPublish)
-                .to("score.retry");
+                .to("score.retry")
         })
 }
 
@@ -89,6 +89,7 @@ fn app() -> impl App<State = ()> {
 
 /// Answers at the `reply-to` address the ROUTER stamped on the request, under the request's
 /// `correlation-id`, as the Request and reply guide shows.
+#[derive(Clone)]
 struct ReplyToRequester;
 
 impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {

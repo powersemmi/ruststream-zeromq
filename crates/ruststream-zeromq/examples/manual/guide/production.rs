@@ -95,9 +95,9 @@ fn service(settings: Settings) -> RustStream {
     RustStream::new(AppInfo::new("worker", "0.1.0"))
         .with_broker(jobs, |b| {
             b.include(subscriber("jobs", Work).reply().build())
-                .out_reply(results);
+                .out_reply(results)
         })
-        .with_broker(sink, |_b| {})
+        .with_broker(sink, |b| b)
 }
 
 fn app() -> RustStream {

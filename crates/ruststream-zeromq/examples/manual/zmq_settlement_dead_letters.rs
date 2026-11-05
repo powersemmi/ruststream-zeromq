@@ -67,11 +67,11 @@ fn app() -> impl App {
                 // Every failed job leaves for the second queue, under the name it is read by.
                 b.include(subscriber("jobs", Work).build())
                     .dead_letter("jobs.dead")
-                    .out_retry(parked);
+                    .out_retry(parked)
             },
         )
         .with_broker_labeled("dead", dead, |b| {
-            b.include(subscriber("jobs.dead", Park).build());
+            b.include(subscriber("jobs.dead", Park).build())
         })
 }
 // --8<-- [end:app]

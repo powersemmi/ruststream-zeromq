@@ -30,13 +30,9 @@ fn app() -> impl App {
     RustStream::new(AppInfo::new("watcher", "0.1.0"))
         .with_broker(
             ZmqFanout::new(ZmqEndpoint::connect("tcp://worker:5556")),
-            |b| {
-                b.include(watch).out_retry(copies).to("jobs.");
-            },
+            |b| b.include(watch).out_retry(copies).to("jobs."),
         )
-        .with_broker(retries, |b| {
-            b.include(watch);
-        })
+        .with_broker(retries, |b| b.include(watch))
 }
 // --8<-- [end:watcher]
 

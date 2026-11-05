@@ -175,18 +175,18 @@ fn app() -> impl App {
     RustStream::new(AppInfo::new("bridge", "0.1.0"))
         .with_broker(feed, |b| {
             b.include(subscriber("ticks", Relay).reply().build())
-                .out_reply(to_prices);
+                .out_reply(to_prices)
         })
-        .with_broker(prices, |_b| {})
+        .with_broker(prices, |b| b)
         // The orders arrive in the default three frames.
         .with_broker(
             ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
             |b| {
                 b.include(subscriber("orders", Audit).reply().build())
-                    .out_reply(to_sink);
+                    .out_reply(to_sink)
             },
         )
-        .with_broker(sink, |_b| {})
+        .with_broker(sink, |b| b)
 }
 // --8<-- [end:app]
 

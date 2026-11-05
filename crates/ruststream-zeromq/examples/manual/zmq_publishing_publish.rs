@@ -91,7 +91,6 @@ fn app() -> impl App {
             |b| {
                 b.include(subscriber("orders", Ship).build())
                     .out(Events, announce)
-                    .build();
             },
         )
         .register_broker(events)

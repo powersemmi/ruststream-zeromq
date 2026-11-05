@@ -73,7 +73,7 @@ fn app() -> impl App {
             ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
             |b| {
                 b.include(subscriber("jobs", Work).reply().build())
-                    .out_reply(to_results);
+                    .out_reply(to_results)
             },
         )
         .register_broker(results)
@@ -123,7 +123,7 @@ mod tests {
             ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
             |b| {
                 b.include(subscriber("jobs", Work).reply().build())
-                    .out_reply(Publish);
+                    .out_reply(Publish)
             },
         );
 

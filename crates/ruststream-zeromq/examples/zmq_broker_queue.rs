@@ -27,13 +27,15 @@ fn app() -> impl App {
             ZmqQueue::new(ZmqEndpoint::connect("tcp://ventilator:5555")),
             |b| {
                 // Two workers dial the ventilator, and each job it pushes reaches one of them.
-                b.include(work).out_retry(first).to("jobs");
-                b.include(work).out_retry(second).to("jobs");
+                b.include(work)
+                    .out_retry(first)
+                    .to("jobs")
+                    .include(work)
+                    .out_retry(second)
+                    .to("jobs")
             },
         )
-        .with_broker(retries, |b| {
-            b.include(work);
-        })
+        .with_broker(retries, |b| b.include(work))
 }
 // --8<-- [end:app]
 
