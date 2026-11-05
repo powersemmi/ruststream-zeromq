@@ -5,6 +5,9 @@
 //! cargo test --example zmq_wire --features testing
 //! ```
 
+// A test drives the app on its own task; the app's cold path carries no Send.
+#![allow(clippy::future_not_send)]
+
 use serde::{Deserialize, Serialize};
 
 use ruststream_zeromq::Connect;

@@ -5,6 +5,9 @@
 //! cargo test --example manual_zmq_broker_bind --features testing
 //! ```
 
+// A test drives the app on its own task; the app's cold path carries no Send.
+#![allow(clippy::future_not_send)]
+
 use std::future::{Future, ready};
 use std::process::ExitCode;
 
