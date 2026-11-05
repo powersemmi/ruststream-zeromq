@@ -343,3 +343,9 @@ async fn the_fan_out_declares_the_backlog_the_sockets_keep() {
     )
     .await;
 }
+
+// The queue's backlog is held to the sockets by `run_suite` alone. Over sockets a queue publish
+// before any subscription opens waits for a peer outside the service and fails with no connected
+// peer; in process that peer is the deployment's, outside what the service declares, so the
+// transport takes the publish as the peer would. The check reads the absent peer as a refusal the
+// transport must copy, and the in-process transport does not model peers it was not given.

@@ -1121,7 +1121,7 @@ mod tests {
         );
         let unsent = refused.into_message().expect("the message comes back");
         assert_eq!(unsent.name(), "jobs");
-        assert_eq!(&unsent.payload()[..], b"{\"id\":7}");
+        assert_eq!(*unsent.payload(), b"{\"id\":7}"[..]);
         assert_eq!(unsent.headers(), &headers);
     }
 
