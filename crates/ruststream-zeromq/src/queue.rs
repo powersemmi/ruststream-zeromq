@@ -93,8 +93,8 @@ use zeromq::{PullSocket, PushSocket};
 use crate::bindings::{self, SocketPair};
 use crate::common::{
     BATCH_MAX_WAIT, DEFAULT_READ_AHEAD, DeliveryReceiver, DriverHandle, Lifecycle, Outbox,
-    OwnListener, Sender, SharedLifecycle, WireSubscriber, delivery_channel, dials_the_sender,
-    release, returns_to_subscription,
+    OwnListener, Sender, SharedLifecycle, Unsent, WireSubscriber, delivery_channel,
+    dials_the_sender, release, returns_to_subscription,
 };
 use crate::endpoint::{Bind, Connect, Endpoint, EndpointRole, ZmqEndpoint};
 use crate::envelope::{self, Envelope, Enveloped, Frames, Pattern};
@@ -787,7 +787,7 @@ impl Attached {
         envelope: &Env,
         name: &str,
         frames: zeromq::ZmqMessage,
-    ) -> Result<(), ZmqError> {
+    ) -> Result<(), Unsent> {
         match &mut self.socket {
             Sender::Socket(outbox) => outbox.send(name, frames).await,
             // The subscription that bound the endpoint takes whatever is pushed into it.
@@ -921,7 +921,9 @@ impl<Env: Envelope> Publisher for ZmqQueuePublisher<Env> {
         if sent.is_err() && dials {
             *push = None;
         }
-        Ok(sent?)
+        sent.map_err(|unsent| {
+            envelope::hand_back(&self.envelope, Pattern::PushPull, name, headers, unsent)
+        })
     }
 }
 
@@ -1093,9 +1095,42 @@ impl<Role: EndpointRole, Env: Envelope> DefaultPublish for ConnectedZmqQueue<Rol
 
 #[cfg(test)]
 mod tests {
-    use ruststream::nonzero;
+    use ruststream::{HeaderMap, nonzero};
 
     use super::*;
+
+    /// A PUSH socket with no peer hands the message back, and once the retry window is spent the
+    /// refusal hands it on to the caller whole: the destination, the payload and the headers it
+    /// was published with.
+    #[tokio::test(start_paused = true)]
+    async fn a_publish_no_peer_took_comes_back_whole() {
+        let connected = ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"))
+            .connect()
+            .await
+            .expect("connects");
+        let mut headers = HeaderMap::new();
+        headers.insert("trace", "7");
+
+        let refused = connected
+            .publisher()
+            .publish(
+                OutgoingMessage::produced("jobs", BytesMut::from(&b"{\"id\":7}"[..]))
+                    .with_headers(headers.clone()),
+                None,
+            )
+            .await
+            .expect_err("no peer ever attaches");
+
+        assert!(
+            refused.error().to_string().contains("no connected peer"),
+            "{}",
+            refused.error()
+        );
+        let unsent = refused.into_message().expect("the message comes back");
+        assert_eq!(unsent.name(), "jobs");
+        assert_eq!(&unsent.payload()[..], b"{\"id\":7}");
+        assert_eq!(unsent.headers(), &headers);
+    }
 
     #[tokio::test]
     async fn clones_sharing_a_lifecycle_keep_their_own_read_ahead() {
