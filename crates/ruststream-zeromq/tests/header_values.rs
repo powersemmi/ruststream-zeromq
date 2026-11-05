@@ -62,15 +62,11 @@ fn notes_app() -> RustStream {
     let notes = ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")).bindable();
     let to_notes = notes.bind(ZmqQueuePublish);
     RustStream::new(AppInfo::new("zmq-header-values", "0.0.0"))
-        .with_broker_labeled("notes", notes, |b| {
-            b.include(take_note);
-        })
+        .with_broker_labeled("notes", notes, |b| b.include(take_note))
         .with_broker_labeled(
             "relay",
             ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")),
-            |b| {
-                b.include(pass_on).out(Notes, to_notes).build();
-            },
+            |b| b.include(pass_on).out(Notes, to_notes),
         )
 }
 

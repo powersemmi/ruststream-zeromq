@@ -65,7 +65,7 @@ fn deferring_app() -> RustStream {
         |b| {
             b.include(defer_once)
                 .out_retry(ZmqQueuePublish)
-                .transform(StampRetry);
+                .transform(StampRetry)
         },
     )
 }

@@ -118,15 +118,11 @@ macro_rules! relay_app {
             .bindable();
         let to_notes = notes.bind($policy);
         RustStream::new(AppInfo::new("zmq-envelopes", "0.0.0"))
-            .with_broker_labeled("notes", notes, |b| {
-                b.include(take_note);
-            })
+            .with_broker_labeled("notes", notes, |b| b.include(take_note))
             .with_broker_labeled(
                 "relay",
                 $broker::new(ZmqEndpoint::bind(LOOPBACK)).envelope($envelope),
-                |b| {
-                    b.include(pass_on).out(Notes, to_notes).build();
-                },
+                |b| b.include(pass_on).out(Notes, to_notes),
             )
     }};
 }
@@ -200,6 +196,7 @@ struct Heard {
 
 /// The reply goes to the address the request carried, under the id it was asked with when it
 /// carried one.
+#[derive(Clone)]
 struct ReplyToRequester;
 
 impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
@@ -274,17 +271,14 @@ macro_rules! exchange_app {
                     .out_reply(ZmqRpcPublish)
                     .transform(ReplyToRequester)
                     .out_retry(ZmqRpcPublish)
-                    .to("greeter.retry");
+                    .to("greeter.retry")
             })
             .with_broker_labeled("asks", ZmqQueue::new(ZmqEndpoint::bind(LOOPBACK)), |b| {
                 b.include(ask)
                     .out_reply(to_heard)
                     .out(DefaultSlot, requests)
-                    .build();
             })
-            .with_broker_labeled("heard", heard, |b| {
-                b.include(take_heard);
-            })
+            .with_broker_labeled("heard", heard, |b| b.include(take_heard))
     }};
 }
 
@@ -370,11 +364,9 @@ fn stamping_app() -> RustStream {
     let notes = ZmqQueue::new(ZmqEndpoint::bind(LOOPBACK)).bindable();
     let to_notes = notes.bind(ZmqQueuePublish.envelope(NoOp));
     RustStream::new(AppInfo::new("zmq-envelopes", "0.0.0"))
-        .with_broker_labeled("notes", notes, |b| {
-            b.include(take_note);
-        })
+        .with_broker_labeled("notes", notes, |b| b.include(take_note))
         .with_broker_labeled("relay", ZmqQueue::new(ZmqEndpoint::bind(LOOPBACK)), |b| {
-            b.include(stamp).out(Notes, to_notes).build();
+            b.include(stamp).out(Notes, to_notes)
         })
 }
 
