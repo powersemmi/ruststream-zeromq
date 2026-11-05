@@ -13,7 +13,8 @@ use futures::StreamExt;
 use ruststream::prelude::*;
 use ruststream::testing::{InProcess, TestApp, TestableBroker};
 use ruststream::{
-    AckError, ConnectedBroker, IncomingMessage, OutgoingMessage, Publisher, Subscribe, Subscriber,
+    AckError, ConnectedBroker, IncomingMessage, OutgoingMessage, Publisher, Settle, Subscribe,
+    Subscriber,
 };
 use ruststream_zeromq::{ZmqEndpoint, ZmqFanout, ZmqQueue, ZmqRpc};
 use serde::{Deserialize, Serialize};
@@ -30,12 +31,10 @@ async fn always_retry(_job: &Job) -> HandlerOutcome {
 }
 
 fn worker() -> RustStream {
-    RustStream::new(AppInfo::new("zmq-settlement", "0.0.0")).with_broker(
-        ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")),
-        |b| {
-            b.include(always_retry);
-        },
-    )
+    RustStream::new(AppInfo::new("zmq-settlement", "0.0.0"))
+        .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")), |b| {
+            b.include(always_retry)
+        })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

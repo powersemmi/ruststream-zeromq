@@ -57,6 +57,7 @@ pub use self::ZmqRpcPublish as Publish;
 /// // Answers at the `reply-to` address each request carries, under its `correlation-id`; the
 /// // `ZmqRpcPublisher` documentation shows it in full.
 /// # use ruststream::runtime::{Outgoing, PublishContext};
+/// # #[derive(Clone)]
 /// # struct ReplyToRequester;
 /// # impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
 /// #     type Destination = Names;
@@ -86,7 +87,7 @@ pub use self::ZmqRpcPublish as Publish;
 ///                 .out_reply(Publish)
 ///                 .transform(ReplyToRequester)
 ///                 .out_retry(Publish)
-///                 .to("greeter.retry");
+///                 .to("greeter.retry")
 ///         },
 ///     )
 /// }
@@ -119,8 +120,8 @@ use futures::lock::Mutex;
 use ruststream::asyncapi::Bindings;
 use ruststream::{
     Broker, BytesMut, ConnectedBroker, DefaultPublish, DescribeServer, IncomingMessage,
-    NamedCopies, OutgoingMessage, PairError, PublishPolicy, Publisher, RequestReply, ServerSpec,
-    Str, Subscribe, Subscriber, Take,
+    NamedCopies, OutgoingMessage, PairError, PublishMessageError, PublishOutcome, PublishPolicy,
+    Publisher, RequestReply, ServerSpec, Str, Subscribe, Subscriber, Take,
 };
 use tokio::sync::OnceCell;
 use zeromq::prelude::*;
@@ -239,7 +240,7 @@ fn hex_decode(text: &str) -> Option<Vec<u8>> {
 ///     let ask = model.bind(ZmqRpcPublish);
 ///     RustStream::new(AppInfo::new("scorer", "0.1.0"))
 ///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
-///             b.include(rate).out(DefaultSlot, ask).build();
+///             b.include(rate).out(DefaultSlot, ask)
 ///         })
 ///         .register_broker(model)
 /// }
@@ -322,6 +323,7 @@ impl ZmqRpc {
     /// // Answers at the request's `reply-to` address; the `ZmqRpcPublisher` documentation shows it
     /// // in full.
     /// # use ruststream::runtime::{Outgoing, PublishContext};
+    /// # #[derive(Clone)]
     /// # struct ReplyToRequester;
     /// # impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
     /// #     type Destination = Names;
@@ -351,7 +353,7 @@ impl ZmqRpc {
     ///                 .out_reply(Publish)
     ///                 .transform(ReplyToRequester)
     ///                 .out_retry(Publish)
-    ///                 .to("score.retry");
+    ///                 .to("score.retry")
     ///         },
     ///     )
     /// }
@@ -400,6 +402,7 @@ impl<Env: Envelope> ZmqRpc<Env> {
     /// // Answers at the `reply-to` address the ROUTER gives each request; the `ZmqRpcPublisher`
     /// // documentation shows it in full.
     /// # use ruststream::runtime::{Outgoing, PublishContext};
+    /// # #[derive(Clone)]
     /// # struct ReplyToRequester;
     /// # impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
     /// #     type Destination = Names;
@@ -423,7 +426,7 @@ impl<Env: Envelope> ZmqRpc<Env> {
     ///     RustStream::new(AppInfo::new("greeter", "0.1.0")).with_broker(greeter, |b| {
     ///         b.include(greet)
     ///             .out_reply(Publish)
-    ///             .transform(ReplyToRequester);
+    ///             .transform(ReplyToRequester)
     ///     })
     /// }
     /// ```
@@ -472,6 +475,7 @@ impl<Env: Envelope> ZmqRpc<Env> {
     /// // Answers at the request's `reply-to` address; the `ZmqRpcPublisher` documentation shows it
     /// // in full.
     /// # use ruststream::runtime::{Outgoing, PublishContext};
+    /// # #[derive(Clone)]
     /// # struct ReplyToRequester;
     /// # impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
     /// #     type Destination = Names;
@@ -501,7 +505,7 @@ impl<Env: Envelope> ZmqRpc<Env> {
     ///             .out_reply(Publish)
     ///             .transform(ReplyToRequester)
     ///             .out_retry(Publish)
-    ///             .to("customers.retry");
+    ///             .to("customers.retry")
     ///     })
     /// }
     /// ```
@@ -811,6 +815,7 @@ pub(crate) fn read_request<Env: Envelope>(
 ///     text: String,
 /// }
 ///
+/// #[derive(Clone)]
 /// struct ReplyToRequester;
 ///
 /// impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
@@ -847,13 +852,6 @@ pub(crate) fn read_request<Env: Envelope>(
 ///     RustStream::new(AppInfo::new("greeter", "0.1.0")).with_broker(
 ///         ZmqRpc::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")),
 ///         |b| {
-///             // A responder addresses no retry copies, so the mount says where they go.
-///             b.include(greet)
-///                 .out_reply(Publish)
-///                 .transform(ReplyToRequester)
-///                 .out_retry(Publish)
-///                 .to("greeter.retry");
-///
 ///             b.after_startup(Publish, async move |publisher| -> io::Result<()> {
 ///                 let request = JsonCodec
 ///                     .encode(&Greeting {
@@ -872,7 +870,13 @@ pub(crate) fn read_request<Env: Envelope>(
 ///                     .map_err(io::Error::other)?;
 ///                 tracing::info!(text = %answer.text, "reply");
 ///                 Ok(())
-///             });
+///             })
+///             // A responder addresses no retry copies, so the mount says where they go.
+///             .include(greet)
+///             .out_reply(Publish)
+///             .transform(ReplyToRequester)
+///             .out_retry(Publish)
+///             .to("greeter.retry")
 ///         },
 ///     )
 /// }
@@ -916,28 +920,38 @@ impl<Env: Envelope> Publisher for ZmqRpcPublisher<Env> {
     /// Not cancel-safe. Dropping the future can leave the reply half-handed to the ROUTER, and the
     /// requester then waits out its timeout. Answer from a task of its own rather than inside a
     /// `select!` arm.
-    async fn publish(
+    async fn publish<'msg>(
         &self,
-        msg: OutgoingMessage<'_, BytesMut>,
+        msg: OutgoingMessage<'msg, BytesMut>,
         _options: Option<&Self::Options>,
-    ) -> Result<(), Self::Error> {
-        let shared = self.shared()?;
+    ) -> PublishOutcome<'msg, ZmqError, Take> {
+        let shared = match self.shared() {
+            Ok(shared) => shared,
+            Err(refused) => return Err(PublishMessageError::with_message(refused, msg)),
+        };
         let Some(identity_hex) = msg.name().strip_prefix(REPLY_PREFIX) else {
-            return Err(ZmqError::Send {
+            let refused = ZmqError::Send {
                 name: msg.name().to_owned(),
                 reason: format!(
                     "the rpc publisher routes '{REPLY_PREFIX}...' replies; use request() for outbound requests"
                 ),
-            });
+            };
+            return Err(PublishMessageError::with_message(refused, msg));
         };
-        let identity = hex_decode(identity_hex).ok_or_else(|| ZmqError::Send {
-            name: msg.name().to_owned(),
-            reason: "malformed reply address".to_owned(),
-        })?;
-        let router = shared.router_tx.get().ok_or_else(|| ZmqError::Send {
-            name: msg.name().to_owned(),
-            reason: "no responder subscription is attached".to_owned(),
-        })?;
+        let Some(identity) = hex_decode(identity_hex) else {
+            let refused = ZmqError::Send {
+                name: msg.name().to_owned(),
+                reason: "malformed reply address".to_owned(),
+            };
+            return Err(PublishMessageError::with_message(refused, msg));
+        };
+        let Some(router) = shared.router_tx.get() else {
+            let refused = ZmqError::Send {
+                name: msg.name().to_owned(),
+                reason: "no responder subscription is attached".to_owned(),
+            };
+            return Err(PublishMessageError::with_message(refused, msg));
+        };
 
         // Frame 0 of a reply is the literal "reply". The ROUTER identity frame pushed in front of
         // it is what addresses the requester, so the name position carries nothing to route on.
@@ -953,20 +967,22 @@ impl<Env: Envelope> Publisher for ZmqRpcPublisher<Env> {
             ReplyRoute::Router(router) => {
                 let mut guard = router.lock().await;
                 let Some(half) = guard.as_mut() else {
-                    return Err(ZmqError::Send {
+                    return Err(PublishMessageError::new(ZmqError::Send {
                         name: name.to_owned(),
                         reason: "no responder subscription is attached".to_owned(),
-                    });
+                    }));
                 };
                 let sent = half.send(message).await;
                 drop(guard);
-                sent.map_err(|e| ZmqError::Send {
-                    name: name.to_owned(),
-                    reason: e.to_string(),
+                sent.map_err(|e| {
+                    PublishMessageError::new(ZmqError::Send {
+                        name: name.to_owned(),
+                        reason: e.to_string(),
+                    })
                 })
             }
             #[cfg(feature = "testing")]
-            ReplyRoute::InProcess(bus) => bus.reply(&self.envelope, name, message),
+            ReplyRoute::InProcess(bus) => Ok(bus.reply(&self.envelope, name, message)?),
         }
     }
 }
@@ -1125,7 +1141,7 @@ fn rand_suffix() -> [u8; 8] {
 ///                     .await
 ///                     .map_err(io::Error::other)?;
 ///                 Ok(())
-///             });
+///             })
 ///         },
 ///     )
 /// }
@@ -1166,6 +1182,7 @@ impl ZmqRpcPublish {
     /// // Answers at the `reply-to` address the ROUTER gives each request; the `ZmqRpcPublisher`
     /// // documentation shows it in full.
     /// # use ruststream::runtime::{Outgoing, PublishContext};
+    /// # #[derive(Clone)]
     /// # struct ReplyToRequester;
     /// # impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
     /// #     type Destination = Names;
@@ -1190,7 +1207,7 @@ impl ZmqRpcPublish {
     ///         |b| {
     ///             b.include(greet)
     ///                 .out_reply(Publish.envelope(NoOp))
-    ///                 .transform(ReplyToRequester);
+    ///                 .transform(ReplyToRequester)
     ///         },
     ///     )
     /// }

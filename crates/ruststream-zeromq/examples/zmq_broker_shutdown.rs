@@ -22,7 +22,7 @@ fn app() -> impl App {
                     service: "worker".to_owned(),
                 };
                 publisher.message(&started).publish().await
-            });
+            })
         },
     )
 }

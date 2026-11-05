@@ -5,6 +5,9 @@
 //! cargo test --example manual_zmq_broker_bind --features testing
 //! ```
 
+// A test drives the app on its own task; the app's cold path carries no Send.
+#![allow(clippy::future_not_send)]
+
 use std::future::{Future, ready};
 use std::process::ExitCode;
 
@@ -47,10 +50,10 @@ impl Handle<Report> for FileReport {
 fn service(jobs: &str, reports: &str) -> RustStream {
     RustStream::new(AppInfo::new("worker", "0.1.0"))
         .with_broker_labeled("jobs", ZmqQueue::new(ZmqEndpoint::bind(jobs)), |b| {
-            b.include(subscriber("jobs", Work).build());
+            b.include(subscriber("jobs", Work).build())
         })
         .with_broker_labeled("reports", ZmqQueue::new(ZmqEndpoint::bind(reports)), |b| {
-            b.include(subscriber("reports", FileReport).build());
+            b.include(subscriber("reports", FileReport).build())
         })
 }
 
@@ -147,8 +150,8 @@ mod tests {
         let app = RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
             ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
             |b| {
-                b.include(subscriber("jobs", Work).build());
-                b.include(subscriber("reports", FileReport).build());
+                b.include(subscriber("jobs", Work).build())
+                    .include(subscriber("reports", FileReport).build())
             },
         );
 

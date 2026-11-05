@@ -16,10 +16,11 @@ mod noop;
 use std::collections::VecDeque;
 
 use bytes::Bytes;
-use ruststream::HeaderMap;
+use ruststream::{BytesMut, HeaderMap, OutgoingMessage, PublishMessageError};
 
 use zeromq::ZmqMessage as WireMessage;
 
+use crate::common::Unsent;
 use crate::error::ZmqError;
 use crate::message::ZmqMessage;
 
@@ -104,9 +105,7 @@ pub use self::noop::NoOp;
 /// #[ruststream::app]
 /// fn app() -> impl App {
 ///     let jobs = ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")).envelope(Bare);
-///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(jobs, |b| {
-///         b.include(work);
-///     })
+///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(jobs, |b| b.include(work))
 /// }
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -191,7 +190,7 @@ pub enum Pattern {
 /// # fn app() -> impl App {
 /// #     let ticks = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")).envelope(Spaced);
 /// #     RustStream::new(AppInfo::new("recorder", "0.1.0")).with_broker(ticks, |b| {
-/// #         b.include(record);
+/// #         b.include(record)
 /// #     })
 /// # }
 /// ```
@@ -273,7 +272,7 @@ impl<Head> Opened<Head> {
     /// # fn app() -> impl App {
     /// #     let ticks = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")).envelope(Spaced);
     /// #     RustStream::new(AppInfo::new("recorder", "0.1.0")).with_broker(ticks, |b| {
-    /// #         b.include(record);
+    /// #         b.include(record)
     /// #     })
     /// # }
     /// ```
@@ -359,7 +358,7 @@ impl<Head> Opened<Head> {
 /// # fn app() -> impl App {
 /// #     let ticks = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")).envelope(Spaced);
 /// #     RustStream::new(AppInfo::new("recorder", "0.1.0")).with_broker(ticks, |b| {
-/// #         b.include(record);
+/// #         b.include(record)
 /// #     })
 /// # }
 /// ```
@@ -436,7 +435,7 @@ impl SealError {
     /// # fn app() -> impl App {
     /// #     let ticks = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")).envelope(Spaced);
     /// #     RustStream::new(AppInfo::new("recorder", "0.1.0")).with_broker(ticks, |b| {
-    /// #         b.include(record);
+    /// #         b.include(record)
     /// #     })
     /// # }
     /// ```
@@ -535,9 +534,7 @@ impl SealError {
 /// #[ruststream::app]
 /// fn app() -> impl App {
 ///     let ticks = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")).envelope(Spaced);
-///     RustStream::new(AppInfo::new("recorder", "0.1.0")).with_broker(ticks, |b| {
-///         b.include(record);
-///     })
+///     RustStream::new(AppInfo::new("recorder", "0.1.0")).with_broker(ticks, |b| b.include(record))
 /// }
 /// ```
 pub trait Envelope: Clone + Send + Sync + 'static {
@@ -642,6 +639,29 @@ pub(crate) fn write<Env: Envelope>(
 /// The frames of [`Frames`], the largest built-in layout.
 const LARGEST_LAYOUT: usize = 3;
 
+/// The refusal of a send the socket did not take, with the message it was written from when the
+/// client handed the frames back: they open through the envelope that sealed them, and the
+/// payload is copied out of them, on this failure path only.
+pub(crate) fn hand_back<'msg, Env: Envelope>(
+    envelope: &Env,
+    pattern: Pattern,
+    name: &'msg str,
+    headers: HeaderMap,
+    unsent: Unsent,
+) -> PublishMessageError<ZmqError, OutgoingMessage<'msg, BytesMut>> {
+    let opened = unsent
+        .frames
+        .and_then(|frames| envelope.open(pattern, frames.into_vecdeque()).ok());
+    match opened {
+        Some(opened) => {
+            let payload = BytesMut::from(&opened.payload[..]);
+            let message = OutgoingMessage::produced(name, payload).with_headers(headers);
+            PublishMessageError::with_message(unsent.error, message)
+        }
+        None => PublishMessageError::new(unsent.error),
+    }
+}
+
 /// A publish policy that writes through the envelope `Env` rather than its broker's: what
 /// `.envelope(..)` on [`ZmqQueuePublish`](crate::ZmqQueuePublish),
 /// [`ZmqFanoutPublish`](crate::ZmqFanoutPublish) or [`ZmqRpcPublish`](crate::ZmqRpcPublish)
@@ -679,9 +699,9 @@ const LARGEST_LAYOUT: usize = 3;
 ///     let to_results = results.bind(Publish.envelope(NoOp));
 ///     RustStream::new(AppInfo::new("worker", "0.1.0"))
 ///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
-///             b.include(work).out_reply(to_results);
+///             b.include(work).out_reply(to_results)
 ///         })
-///         .with_broker(results, |_b| {})
+///         .with_broker(results, |b| b)
 /// }
 /// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]

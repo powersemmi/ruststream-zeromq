@@ -39,9 +39,7 @@ fn app() -> impl App {
     RustStream::new(AppInfo::new("worker", "0.1.0"))
         .with_broker(
             ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
-            |b| {
-                b.include(work).out_reply(to_results);
-            },
+            |b| b.include(work).out_reply(to_results),
         )
         .register_broker(results)
 }
@@ -83,9 +81,7 @@ mod tests {
         // `work` as its next job: the publisher refuses it.
         let app = RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
             ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
-            |b| {
-                b.include(work).out_reply(Publish);
-            },
+            |b| b.include(work).out_reply(Publish),
         );
 
         let tb = TestApp::start(app).await?;

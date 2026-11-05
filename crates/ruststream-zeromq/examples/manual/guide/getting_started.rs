@@ -45,9 +45,7 @@ impl Handle<Job> for TakeJob {
 fn app() -> impl App {
     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
         ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:5555")),
-        |b| {
-            b.include(subscriber("jobs", TakeJob).build());
-        },
+        |b| b.include(subscriber("jobs", TakeJob).build()),
     )
 }
 

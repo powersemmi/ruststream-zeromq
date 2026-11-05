@@ -56,11 +56,11 @@ fn app() -> impl App {
     let copies = retries.bind(Publish);
     RustStream::new(AppInfo::new("worker", "0.1.0"))
         .with_broker(queue(ZmqEndpoint::connect("tcp://ventilator:5555")), |b| {
-            b.include_router(routes(copies));
+            b.include_router(routes(copies))
         })
         .with_broker(retries, |b| {
             b.include(subscriber("jobs", Work).build())
-                .max_attempts(nonzero!(3u32));
+                .max_attempts(nonzero!(3u32))
         })
 }
 // --8<-- [end:routes]

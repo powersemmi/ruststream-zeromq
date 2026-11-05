@@ -1,6 +1,9 @@
 //! End-to-end checks over real sockets on the loopback, including the wire-layout contract a
 //! non-Rust peer relies on.
 
+// A test drives the app on its own task; the app's cold path carries no Send.
+#![allow(clippy::future_not_send)]
+
 use std::io;
 use std::path::PathBuf;
 use std::pin::pin;
@@ -12,7 +15,7 @@ use futures::StreamExt;
 use ruststream::runtime::{AppInfo, HandlerOutcome, PublishExt, RustStream, SubscriberSettings};
 use ruststream::{
     AckError, Broker, ConnectedBroker, HeaderMap, IncomingMessage, Outgoing, OutgoingMessage,
-    Publisher, RequestReply, Serialized, Subscribe, Subscriber, nonzero, subscriber,
+    Publisher, RequestReply, Serialized, Settle, Subscribe, Subscriber, nonzero, subscriber,
 };
 use ruststream_zeromq::{ZmqEndpoint, ZmqFanout, ZmqQueue, ZmqQueuePublish, ZmqRpc};
 use serde::{Deserialize, Serialize};
@@ -174,7 +177,6 @@ async fn a_batch_mount_caps_the_batches_a_body_sees() {
     let app = RustStream::new(AppInfo::new("batcher", "0.1.0")).with_broker(
         ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")),
         |b| {
-            b.include(record_batches.batch(nonzero!(3)));
             // `start()` resolves only after subscriptions are open, and this hook runs there, so
             // the publisher has a bound address to dial and nothing is published into the void.
             b.after_startup(ZmqQueuePublish, async move |publisher| -> io::Result<()> {
@@ -186,7 +188,8 @@ async fn a_batch_mount_caps_the_batches_a_body_sees() {
                         .map_err(io::Error::other)?;
                 }
                 Ok(())
-            });
+            })
+            .include(record_batches.batch(nonzero!(3)))
         },
     );
     let running = app.start().await.expect("startup succeeds");

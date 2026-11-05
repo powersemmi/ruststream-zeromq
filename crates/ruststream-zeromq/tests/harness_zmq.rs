@@ -67,11 +67,9 @@ fn worker() -> RustStream {
     let to_results = results.bind(ZmqQueuePublish);
     RustStream::new(AppInfo::new("worker", "0.1.0"))
         .with_broker_labeled("jobs", ZmqQueue::new(ZmqEndpoint::bind(LOOPBACK)), |b| {
-            b.include(work).out_reply(to_results);
+            b.include(work).out_reply(to_results)
         })
-        .with_broker_labeled("results", results, |b| {
-            b.include(first_worker);
-        })
+        .with_broker_labeled("results", results, |b| b.include(first_worker))
 }
 
 /// The result reaches the subscription that binds the results queue, once.
@@ -107,13 +105,13 @@ fn two_dialing_workers() -> RustStream {
             |b| {
                 b.include(first_worker)
                     .out_retry(first_copies)
-                    .to("results");
-                b.include(second_worker)
+                    .to("results")
+                    .include(second_worker)
                     .out_retry(second_copies)
-                    .to("results");
+                    .to("results")
             },
         )
-        .with_broker(retries, |_b| {})
+        .with_broker(retries, |b| b)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -153,12 +151,10 @@ async fn auditor(note: &Note) -> HandlerOutcome {
 /// not hold.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_fan_out_mount_that_names_no_reply_policy_still_fans_out() {
-    let app = RustStream::new(AppInfo::new("watcher", "0.1.0")).with_broker(
-        ZmqFanout::new(ZmqEndpoint::bind(LOOPBACK)),
-        |b| {
-            b.include(watch);
-        },
-    );
+    let app = RustStream::new(AppInfo::new("watcher", "0.1.0"))
+        .with_broker(ZmqFanout::new(ZmqEndpoint::bind(LOOPBACK)), |b| {
+            b.include(watch)
+        });
     let tb = TestApp::start(app).await.expect("the app starts");
 
     tb.broker::<ZmqFanout>()
@@ -185,11 +181,9 @@ async fn the_prefix_subscription_receives_what_the_fan_out_publishes() {
     let to_audit = audit.bind(ZmqFanoutPublish);
     let app = RustStream::new(AppInfo::new("watcher", "0.1.0"))
         .with_broker_labeled("events", ZmqFanout::new(ZmqEndpoint::bind(LOOPBACK)), |b| {
-            b.include(watch).out_reply(to_audit);
+            b.include(watch).out_reply(to_audit)
         })
-        .with_broker_labeled("audit", audit, |b| {
-            b.include(auditor);
-        });
+        .with_broker_labeled("audit", audit, |b| b.include(auditor));
     let tb = TestApp::start(app).await.expect("the app starts");
 
     tb.broker_named("events")
@@ -215,13 +209,10 @@ async fn file_report(done: &Done) -> HandlerOutcome {
 
 /// Two subscriptions on the endpoint one broker binds.
 fn two_on_one_endpoint() -> RustStream {
-    RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
-        ZmqQueue::new(ZmqEndpoint::bind(LOOPBACK)),
-        |b| {
-            b.include(first_worker);
-            b.include(file_report);
-        },
-    )
+    RustStream::new(AppInfo::new("worker", "0.1.0"))
+        .with_broker(ZmqQueue::new(ZmqEndpoint::bind(LOOPBACK)), |b| {
+            b.include(first_worker).include(file_report)
+        })
 }
 
 /// A bound endpoint belongs to the subscription that bound it, so a second registration on the
@@ -269,6 +260,7 @@ struct Heard {
 /// The example's transform, verbatim: the reply goes to the address the request carried, under
 /// the id it was asked with. It writes no per-message setting, so it is generic over the options
 /// type.
+#[derive(Clone)]
 struct ReplyToRequester;
 
 impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
@@ -340,15 +332,14 @@ async fn a_request_reply_pair_runs_under_the_harness() {
                 .out_reply(ZmqRpcPublish)
                 .transform(ReplyToRequester)
                 .out_retry(ZmqRpcPublish)
-                .to("greeter.retry");
+                .to("greeter.retry")
         })
         .with_broker_labeled("asks", ZmqQueue::new(ZmqEndpoint::bind(LOOPBACK)), |b| {
             b.include(ask)
                 .out_reply(to_heard)
                 .out(DefaultSlot, requests)
-                .build();
         })
-        .with_broker_labeled("heard", heard, |_b| {});
+        .with_broker_labeled("heard", heard, |b| b);
     let tb = TestApp::start(app).await.expect("the app starts");
 
     tb.broker_named("asks")

@@ -115,6 +115,7 @@ impl Handle<Greeting, Answer> for Greet {
 
 /// Answers at the `reply-to` address the ROUTER stamped on the request, under the request's
 /// `correlation-id`.
+#[derive(Clone)]
 struct ReplyToRequester;
 
 // The transform reads the delivery being answered, so it names `ForReply`, and it names the
@@ -154,14 +155,13 @@ fn app() -> impl App {
                 .out_reply(ZmqRpcPublish)
                 .transform(ReplyToRequester)
                 .out_retry(ZmqRpcPublish)
-                .to("greeter.retry");
+                .to("greeter.retry")
         })
         .with_broker(
             ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
             |b| {
                 b.include(subscriber("names", Ask).build())
                     .out(DefaultSlot, to_greeter)
-                    .build();
             },
         )
 }

@@ -24,7 +24,7 @@ fn app() -> impl App {
     // This process listens, on a socket file the producers of this host dial.
     RustStream::new(AppInfo::new("worker", "0.1.0"))
         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("ipc:///tmp/jobs")), |b| {
-            b.include(work).out_reply(results);
+            b.include(work).out_reply(results)
         })
         .register_broker(collector)
 }
@@ -72,9 +72,7 @@ mod tests {
     async fn another_scheme_is_refused_naming_the_address() {
         let app = RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
             ZmqQueue::new(ZmqEndpoint::bind("udp://0.0.0.0:5555")),
-            |b| {
-                b.include(work);
-            },
+            |b| b.include(work),
         );
 
         let Err(refused) = TestApp::start(app).await else {

@@ -38,11 +38,9 @@ fn app() -> impl App {
     RustStream::new(AppInfo::new("worker", "0.1.0"))
         .with_broker(
             ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
-            |b| {
-                b.include(work).out_reply(announce);
-            },
+            |b| b.include(work).out_reply(announce),
         )
-        .with_broker(events, |_b| {})
+        .with_broker(events, |b| b)
 }
 // --8<-- [end:announcer]
 

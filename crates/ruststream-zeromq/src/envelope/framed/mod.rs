@@ -76,9 +76,9 @@ use crate::error::ZmqError;
 ///     let to_events = events.bind(ZmqFanoutPublish);
 ///     RustStream::new(AppInfo::new("orders", "0.1.0"))
 ///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
-///             b.include(place).out_reply(to_events);
+///             b.include(place).out_reply(to_events)
 ///         })
-///         .with_broker(events, |_b| {})
+///         .with_broker(events, |b| b)
 /// }
 /// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -114,9 +114,7 @@ impl<DocumentCodec: FramedCodec> Framed<DocumentCodec> {
     /// fn app() -> impl App {
     ///     let jobs = ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555"))
     ///         .envelope(Framed::new(JsonCodec));
-    ///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(jobs, |b| {
-    ///         b.include(work);
-    ///     })
+    ///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(jobs, |b| b.include(work))
     /// }
     /// ```
     pub const fn new(codec: DocumentCodec) -> Self {
@@ -155,9 +153,7 @@ impl<DocumentCodec: FramedCodec> Framed<DocumentCodec> {
 /// fn app() -> impl App {
 ///     let jobs = ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555"))
 ///         .envelope(Framed::new(JsonCodec));
-///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(jobs, |b| {
-///         b.include(work);
-///     })
+///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(jobs, |b| b.include(work))
 /// }
 /// ```
 pub trait FramedCodec: Codec + Clone + 'static + sealed::Sealed {

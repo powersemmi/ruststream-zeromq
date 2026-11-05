@@ -86,7 +86,6 @@ fn app() -> impl App {
             |b| {
                 b.include(subscriber("orders", Price).build())
                     .out(DefaultSlot, quotes)
-                    .build();
             },
         )
         .register_broker(pricing)

@@ -5,6 +5,9 @@
 //! cargo test --example zmq_wire --features testing
 //! ```
 
+// A test drives the app on its own task; the app's cold path carries no Send.
+#![allow(clippy::future_not_send)]
+
 use serde::{Deserialize, Serialize};
 
 use ruststream_zeromq::Connect;
@@ -37,7 +40,7 @@ fn service(jobs: ZmqEndpoint, sink: ZmqEndpoint<Connect>) -> impl App {
     let to_results = results.bind(Publish);
     RustStream::new(AppInfo::new("worker", "0.1.0"))
         .with_broker(ZmqQueue::new(jobs), |b| {
-            b.include(work).out_reply(to_results);
+            b.include(work).out_reply(to_results)
         })
         .register_broker(results)
 }

@@ -116,18 +116,14 @@ fn app() -> impl App {
     let sink = ZmqQueue::new(ZmqEndpoint::connect("tcp://sink:5558")).bindable();
     let to_sink = sink.bind(ZmqQueuePublish.envelope(NoOp));
     RustStream::new(AppInfo::new("bridge", "0.1.0"))
-        .with_broker(feed, |b| {
-            b.include(relay).out_reply(to_prices);
-        })
-        .with_broker(prices, |_b| {})
+        .with_broker(feed, |b| b.include(relay).out_reply(to_prices))
+        .with_broker(prices, |b| b)
         // The orders arrive in the default three frames.
         .with_broker(
             ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
-            |b| {
-                b.include(audit).out_reply(to_sink);
-            },
+            |b| b.include(audit).out_reply(to_sink),
         )
-        .with_broker(sink, |_b| {})
+        .with_broker(sink, |b| b)
 }
 // --8<-- [end:app]
 

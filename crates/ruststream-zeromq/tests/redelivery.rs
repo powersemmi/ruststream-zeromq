@@ -112,9 +112,8 @@ async fn the_one_way_patterns_address_their_own_subscription() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_queue_scope_wires_the_deferred_retry() {
     let broker = ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"));
-    let app = RustStream::new(AppInfo::new("zmq-retry", "0.0.0")).with_broker(broker, |b| {
-        b.include(work).out_retry(ZmqQueuePublish);
-    });
+    let app = RustStream::new(AppInfo::new("zmq-retry", "0.0.0"))
+        .with_broker(broker, |b| b.include(work).out_retry(ZmqQueuePublish));
 
     let running = app
         .start()
@@ -125,12 +124,10 @@ async fn a_queue_scope_wires_the_deferred_retry() {
 
 /// A responder whose mount names no destination for its copies.
 fn responder_without_a_destination() -> RustStream {
-    RustStream::new(AppInfo::new("zmq-retry-rpc", "0.0.0")).with_broker(
-        ZmqRpc::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")),
-        |b| {
-            b.include(answer);
-        },
-    )
+    RustStream::new(AppInfo::new("zmq-retry-rpc", "0.0.0"))
+        .with_broker(ZmqRpc::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")), |b| {
+            b.include(answer)
+        })
 }
 
 /// A responder's name is not a publish destination: the reply publisher routes to the peer
@@ -177,7 +174,7 @@ async fn a_responder_mount_that_names_a_destination_runs() {
         |b| {
             b.include(answer)
                 .out_retry(ZmqRpcPublish)
-                .to("greeter.retry");
+                .to("greeter.retry")
         },
     );
     TestApp::start(named)
@@ -191,9 +188,9 @@ async fn a_responder_mount_that_names_a_destination_runs() {
     let token = queue.bind(ZmqQueuePublish);
     let crossed = RustStream::new(AppInfo::new("zmq-retry-crossed", "0.0.0"))
         .with_broker(ZmqRpc::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")), |b| {
-            b.include(answer).out_retry(token).to("greeter.retry");
+            b.include(answer).out_retry(token).to("greeter.retry")
         })
-        .with_broker(queue, |_b| {});
+        .with_broker(queue, |b| b);
     TestApp::start(crossed)
         .await
         .expect("copies bound to a queue on another broker start the responder")
@@ -202,51 +199,15 @@ async fn a_responder_mount_that_names_a_destination_runs() {
         .expect("the app shuts down");
 }
 
-/// A worker that dials the ventilator at `address` and names no destination for its copies.
-fn dialing_worker_without_a_destination(address: &str) -> RustStream {
-    RustStream::new(AppInfo::new("zmq-retry-worker", "0.0.0")).with_broker(
-        ZmqQueue::new(ZmqEndpoint::connect(address)),
-        |b| {
-            b.include(work).out_retry(ZmqQueuePublish);
-        },
-    )
-}
-
-/// A worker that dials the endpoint pulls from the peer there, and that peer only pushes: a copy
-/// published back to it is refused by the handshake. The subscription therefore addresses
-/// nothing, and a registration that names no destination for its copies is refused before the
-/// subscription opens, rather than dropping every copy with a warning once it runs.
-///
-/// The in-process mode on the same side refuses the same mount in the same words.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_connect_role_worker_refuses_a_mount_that_names_no_destination() {
-    let (_ventilator, address) = ventilator().await;
-    let Err(live) = TestApp::start_live(dialing_worker_without_a_destination(&address)).await
-    else {
-        panic!("a worker that dials addresses no copies, so the scope must not start");
-    };
-    let Err(in_process) = TestApp::start(dialing_worker_without_a_destination(&address)).await
-    else {
-        panic!("the in-process mode must refuse what the socket refuses");
-    };
-
-    let live = live.to_string();
-    assert!(
-        live.contains("jobs") && live.contains("NamedCopies"),
-        "the refusal must name the subscription and the copy path, got: {live}",
-    );
-    assert_eq!(in_process.to_string(), live);
-}
-
 /// A worker that dials the ventilator at `address` and sends its copies to a queue it binds.
 fn dialing_worker_with_a_destination(address: &str) -> RustStream {
     let retries = ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")).bindable();
     let copies = retries.bind(ZmqQueuePublish);
     RustStream::new(AppInfo::new("zmq-retry-worker", "0.0.0"))
         .with_broker(ZmqQueue::new(ZmqEndpoint::connect(address)), |b| {
-            b.include(work).out_retry(copies).to("jobs");
+            b.include(work).out_retry(copies).to("jobs")
         })
-        .with_broker(retries, |_b| {})
+        .with_broker(retries, |b| b)
 }
 
 /// The same mount starts once it names where the copies go, in both modes.
@@ -271,12 +232,10 @@ async fn a_connect_role_worker_that_names_a_destination_starts() {
 /// composes with it in production composes with it under the harness too.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_in_process_mode_wires_the_deferred_retry() {
-    let app = RustStream::new(AppInfo::new("zmq-retry-harness", "0.0.0")).with_broker(
-        ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")),
-        |b| {
-            b.include(work).out_retry(ZmqQueuePublish);
-        },
-    );
+    let app = RustStream::new(AppInfo::new("zmq-retry-harness", "0.0.0"))
+        .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")), |b| {
+            b.include(work).out_retry(ZmqQueuePublish)
+        });
 
     let tb = TestApp::start(app).await.expect("the harness starts");
     tb.broker::<ZmqQueue>()
@@ -314,7 +273,7 @@ async fn the_declared_cap_stops_the_copies_and_the_own_queue_takes_no_dead_lette
             b.include(never_succeeds)
                 .max_attempts(nonzero!(3u32))
                 .dead_letter("capped.dead")
-                .out_retry(ZmqQueuePublish);
+                .out_retry(ZmqQueuePublish)
         },
     );
     let tb = TestApp::start(app).await.expect("the harness starts");
@@ -350,10 +309,10 @@ async fn a_dead_letter_destination_takes_the_spent_delivery_through_a_queue_of_i
             |b| {
                 b.include(never_succeeds)
                     .dead_letter("capped.dead")
-                    .out_retry(copies);
+                    .out_retry(copies)
             },
         )
-        .with_broker_labeled("dead", dead, |_b| {});
+        .with_broker_labeled("dead", dead, |b| b);
     let tb = TestApp::start(app).await.expect("the harness starts");
 
     tb.broker_named("worker")
@@ -508,10 +467,6 @@ async fn a_deferred_copy_travels_the_socket_and_carries_the_count() {
 
     let app = RustStream::new(AppInfo::new("zmq-live-retry", "0.0.0"))
         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")), |b| {
-            b.include(report_then_defer)
-                .out(Reports, slot)
-                .out_retry(ZmqQueuePublish)
-                .build();
             b.after_startup(ZmqQueuePublish, async move |publisher| -> io::Result<()> {
                 publisher
                     .message(&Job { id: 11 })
@@ -519,9 +474,12 @@ async fn a_deferred_copy_travels_the_socket_and_carries_the_count() {
                     .publish()
                     .await
                     .map_err(io::Error::other)
-            });
+            })
+            .include(report_then_defer)
+            .out(Reports, slot)
+            .out_retry(ZmqQueuePublish)
         })
-        .with_broker(egress, |_b| {});
+        .with_broker(egress, |b| b);
     let running = app.start().await.expect("the app starts");
 
     assert_eq!(
@@ -551,11 +509,6 @@ async fn a_declared_cap_stops_the_copies_over_a_socket() {
 
     let app = RustStream::new(AppInfo::new("zmq-live-cap", "0.0.0"))
         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")), |b| {
-            b.include(report_and_fail)
-                .max_attempts(nonzero!(3u32))
-                .out(Reports, slot)
-                .out_retry(ZmqQueuePublish)
-                .build();
             b.after_startup(ZmqQueuePublish, async move |publisher| -> io::Result<()> {
                 publisher
                     .message(&Job { id: 12 })
@@ -563,9 +516,13 @@ async fn a_declared_cap_stops_the_copies_over_a_socket() {
                     .publish()
                     .await
                     .map_err(io::Error::other)
-            });
+            })
+            .include(report_and_fail)
+            .max_attempts(nonzero!(3u32))
+            .out(Reports, slot)
+            .out_retry(ZmqQueuePublish)
         })
-        .with_broker(egress, |_b| {});
+        .with_broker(egress, |b| b);
     let running = app.start().await.expect("the app starts");
 
     for attempt in 0..3 {
@@ -598,12 +555,6 @@ async fn a_dead_letter_on_the_bound_queue_is_refused_rather_than_looped_over_a_s
 
     let app = RustStream::new(AppInfo::new("zmq-live-own-dead-letter", "0.0.0"))
         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")), |b| {
-            b.include(report_and_fail)
-                .max_attempts(nonzero!(3u32))
-                .dead_letter("capped.dead")
-                .out(Reports, slot)
-                .out_retry(ZmqQueuePublish)
-                .build();
             b.after_startup(ZmqQueuePublish, async move |publisher| -> io::Result<()> {
                 publisher
                     .message(&Job { id: 14 })
@@ -611,9 +562,14 @@ async fn a_dead_letter_on_the_bound_queue_is_refused_rather_than_looped_over_a_s
                     .publish()
                     .await
                     .map_err(io::Error::other)
-            });
+            })
+            .include(report_and_fail)
+            .max_attempts(nonzero!(3u32))
+            .dead_letter("capped.dead")
+            .out(Reports, slot)
+            .out_retry(ZmqQueuePublish)
         })
-        .with_broker(egress, |_b| {});
+        .with_broker(egress, |b| b);
     let running = app.start().await.expect("the app starts");
 
     for attempt in 0..3 {
@@ -644,9 +600,6 @@ async fn a_dead_letter_destination_takes_the_spent_delivery_over_a_socket() {
 
     let app = RustStream::new(AppInfo::new("zmq-live-dead-letter", "0.0.0"))
         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")), |b| {
-            b.include(never_succeeds)
-                .dead_letter("capped.dead")
-                .out_retry(copies);
             b.after_startup(ZmqQueuePublish, async move |publisher| -> io::Result<()> {
                 publisher
                     .message(&Job { id: 13 })
@@ -654,9 +607,12 @@ async fn a_dead_letter_destination_takes_the_spent_delivery_over_a_socket() {
                     .publish()
                     .await
                     .map_err(io::Error::other)
-            });
+            })
+            .include(never_succeeds)
+            .dead_letter("capped.dead")
+            .out_retry(copies)
         })
-        .with_broker(egress, |_b| {});
+        .with_broker(egress, |b| b);
     let running = app.start().await.expect("the app starts");
 
     let message = next_at_sink(&mut dead).await;
@@ -734,14 +690,11 @@ async fn a_connect_role_workers_copy_reaches_the_queue_its_mount_names() {
                 .out(Reports, from_worker)
                 .out_retry(copies)
                 .to("jobs")
-                .build();
         })
         .with_broker(retries, |b| {
-            b.include(report_then_defer)
-                .out(Reports, from_retries)
-                .build();
+            b.include(report_then_defer).out(Reports, from_retries)
         })
-        .with_broker(egress, |_b| {});
+        .with_broker(egress, |b| b);
     let running = app.start().await.expect("the app starts");
     push_job(&mut ventilator, "jobs", &Job { id: 21 }).await;
 

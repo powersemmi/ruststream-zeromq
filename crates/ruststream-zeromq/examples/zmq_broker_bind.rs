@@ -5,6 +5,9 @@
 //! cargo test --example zmq_broker_bind --features testing
 //! ```
 
+// A test drives the app on its own task; the app's cold path carries no Send.
+#![allow(clippy::future_not_send)]
+
 use serde::{Deserialize, Serialize};
 
 use ruststream_zeromq::queue::prelude::*;
@@ -26,10 +29,10 @@ async fn file_report(report: &Report) -> HandlerOutcome {
 fn service(jobs: &str, reports: &str) -> RustStream {
     RustStream::new(AppInfo::new("worker", "0.1.0"))
         .with_broker_labeled("jobs", ZmqQueue::new(ZmqEndpoint::bind(jobs)), |b| {
-            b.include(work);
+            b.include(work)
         })
         .with_broker_labeled("reports", ZmqQueue::new(ZmqEndpoint::bind(reports)), |b| {
-            b.include(file_report);
+            b.include(file_report)
         })
 }
 
@@ -101,10 +104,7 @@ mod tests {
     async fn a_second_subscription_on_one_bound_endpoint_is_refused() {
         let app = RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
             ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
-            |b| {
-                b.include(work);
-                b.include(file_report);
-            },
+            |b| b.include(work).include(file_report),
         );
 
         let Err(refused) = TestApp::start(app).await else {

@@ -83,8 +83,9 @@ arrives there as the next attempt. The mount site names nothing.
 A subscription that dials reads from a peer that only sends. A
 [`ZmqRpc`](../components/broker/zmq-rpc.md) responder's name is not a destination: its publisher
 sends only to the identities requests carry. Neither has an address for a copy, so the mount site
-names where the copies go, usually a queue the service binds for itself. A router chain that names no destination does not compile, and a
-registration that names none is refused at startup.
+names where the copies go, usually a queue the service binds for itself. A retry slot bound
+without a destination does not compile, and a registration that binds no retry slot is refused at
+startup.
 
 At the cap, the delivery goes to the dead-letter destination through the same publisher, so the
 destination belongs to a publisher on another endpoint. On the endpoint a queue subscription binds,
