@@ -25,7 +25,7 @@ A handler body therefore imports `ruststream::prelude::*` alone and bounds its p
 
 A publisher on the bind side attaches its socket when the service starts, so a peer that dials it connects before the first message.
 A publisher that dials attaches on its first publish and waits for a peer.
-When no peer has completed the handshake within five seconds, the publish fails with [`ZmqError::Send`](../broker/errors.md), "no connected peer".
+When no peer has completed the handshake within five seconds, the publish fails with [`ZmqError::Send`](../broker/errors.md), "no connected peer", and the error carries the message back whole.
 The window is a constant of the crate.
 
 Who receives the message is the pattern's rule.

@@ -12,7 +12,7 @@ ZeroMQ settles nothing: `ack` and `nack` report `Unsupported`, a plain retry del
 
 ZMTP has no frame that settles a delivery.
 A message reaches the subscription once, and the socket keeps no copy of it.
-So [`ack`](api:ruststream::IncomingMessage::ack) and `nack` on a delivery report [`AckError::Unsupported`](api:ruststream::AckError::Unsupported), and the runtime logs a warning naming the subscription.
+So [`ack`](api:ruststream::Settle::ack) and `nack` on a delivery report [`AckError::Unsupported`](api:ruststream::AckError::Unsupported), and the runtime logs a warning naming the subscription.
 An [`ack`](api:ruststream::runtime::HandlerOutcome::ack) and a [`drop`](api:ruststream::runtime::HandlerOutcome::drop) both end the delivery, and nothing comes back after either.
 
 A [`retry`](api:ruststream::runtime::HandlerOutcome::retry) asks the transport to deliver the message again, and the transport has nothing to deliver: the handler is not called again.

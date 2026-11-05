@@ -101,7 +101,7 @@ A mount that wants both keeps its retries on its own queue and leaves dead-lette
 
 A worker that dials a ventilator cannot send a copy back: the ventilator only sends.
 Its mount names where the copies go, with `.out_retry(policy).to("jobs")` over a queue the worker binds for itself, and mounts the same handler on that queue.
-A mount that names no destination is refused at startup, and a [`Router`](api:ruststream::runtime::Router) chain that names none does not compile.
+A mount that binds `.out_retry(policy)` and names no destination does not compile. A mount that binds no retry slot is refused at startup.
 [`out_retry`](../components/settlement/out-retry.md) shows this mount, and [Pipelines with PUSH/PULL](pipelines.md) uses it.
 
 ## Testing the delays
