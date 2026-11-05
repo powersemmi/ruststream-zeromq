@@ -102,7 +102,7 @@ ZMTP 没有投递计数器，因此框架通过 `x-ruststream-retry-count` 消�
 
 拨号连接分发器的工作者无法把副本送回去：分发器只发送。
 它的挂载用 `.out_retry(policy).to("jobs")` 指定副本的去向，即工作者为自己绑定的一个队列，并把同一个处理器挂载到这个队列上。
-没有指定目的地的挂载会在启动时被拒绝，没有指定目的地的 [`Router`](api:ruststream::runtime::Router) 链无法编译。
+绑定了 `.out_retry(policy)` 却没有指定目的地的挂载无法编译。没有绑定重试槽的挂载会在启动时被拒绝。
 [`out_retry`](../components/settlement/out-retry.md) 一页展示了这种挂载，[基于 PUSH/PULL 的流水线](pipelines.md)用到了它。
 
 ## 测试延迟 {/* #testing-the-delays */}
