@@ -680,12 +680,16 @@ impl<Env: Envelope> Publisher for ZmqFanoutPublisher<Env> {
         match guard.as_mut().expect("the loop leaves an attached socket") {
             // PUB never reports "no peers": an unmatched message is dropped by design, so the
             // retry helper only smooths transport-level failures.
-            Sender::Socket(PubSide::Remote(socket)) => {
-                Ok(send_with_retry(socket, name, frames).await?)
-            }
-            Sender::Socket(PubSide::Loopback(socket)) => {
-                Ok(send_with_retry(socket, name, frames).await?)
-            }
+            Sender::Socket(PubSide::Remote(socket)) => send_with_retry(socket, name, frames)
+                .await
+                .map_err(|unsent| {
+                    envelope::hand_back(&self.envelope, Pattern::PubSub, name, headers, unsent)
+                }),
+            Sender::Socket(PubSide::Loopback(socket)) => send_with_retry(socket, name, frames)
+                .await
+                .map_err(|unsent| {
+                    envelope::hand_back(&self.envelope, Pattern::PubSub, name, headers, unsent)
+                }),
             #[cfg(feature = "testing")]
             Sender::InProcess { bus, local } => {
                 let pick = if *local {

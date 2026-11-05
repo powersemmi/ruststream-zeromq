@@ -16,10 +16,11 @@ mod noop;
 use std::collections::VecDeque;
 
 use bytes::Bytes;
-use ruststream::HeaderMap;
+use ruststream::{BytesMut, HeaderMap, OutgoingMessage, PublishMessageError};
 
 use zeromq::ZmqMessage as WireMessage;
 
+use crate::common::Unsent;
 use crate::error::ZmqError;
 use crate::message::ZmqMessage;
 
@@ -641,6 +642,29 @@ pub(crate) fn write<Env: Envelope>(
 
 /// The frames of [`Frames`], the largest built-in layout.
 const LARGEST_LAYOUT: usize = 3;
+
+/// The refusal of a send the socket did not take, with the message it was written from when the
+/// client handed the frames back: they open through the envelope that sealed them, and the
+/// payload is copied out of them, on this failure path only.
+pub(crate) fn hand_back<'msg, Env: Envelope>(
+    envelope: &Env,
+    pattern: Pattern,
+    name: &'msg str,
+    headers: HeaderMap,
+    unsent: Unsent,
+) -> PublishMessageError<ZmqError, OutgoingMessage<'msg, BytesMut>> {
+    let opened = unsent
+        .frames
+        .and_then(|frames| envelope.open(pattern, frames.into_vecdeque()).ok());
+    match opened {
+        Some(opened) => {
+            let payload = BytesMut::from(&opened.payload[..]);
+            let message = OutgoingMessage::produced(name, payload).with_headers(headers);
+            PublishMessageError::with_message(unsent.error, message)
+        }
+        None => PublishMessageError::new(unsent.error),
+    }
+}
 
 /// A publish policy that writes through the envelope `Env` rather than its broker's: what
 /// `.envelope(..)` on [`ZmqQueuePublish`](crate::ZmqQueuePublish),

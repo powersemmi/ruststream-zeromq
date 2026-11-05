@@ -552,10 +552,10 @@ pub(crate) async fn send_with_retry<S: SocketSend>(
     socket: &mut S,
     name: &str,
     message: zeromq::ZmqMessage,
-) -> Result<(), ZmqError> {
+) -> Result<(), Unsent> {
     retry(Plain(socket), message)
         .await
-        .map_err(|failure| failure.into_error(name))
+        .map_err(|failure| failure.into_unsent(name))
 }
 
 /// One attempt at handing a message to a socket, which [`retry`] repeats while the handshake
@@ -576,21 +576,43 @@ impl<S: SocketSend> Offer for Plain<'_, S> {
 /// Why a send did not leave, before it is reported against the name it carried.
 #[derive(Debug)]
 pub(crate) enum SendFailure {
-    /// No peer attached within the retry window.
-    NoPeer,
+    /// No peer attached within the retry window. The client handed the frames back.
+    NoPeer(zeromq::ZmqMessage),
     /// The socket refused the message for another reason.
     Wire(WireError),
 }
 
 impl SendFailure {
     pub(crate) fn into_error(self, name: &str) -> ZmqError {
-        ZmqError::Send {
-            name: name.to_owned(),
-            reason: match self {
-                Self::NoPeer => "no connected peer".to_owned(),
-                Self::Wire(err) => err.to_string(),
+        self.into_unsent(name).error
+    }
+
+    pub(crate) fn into_unsent(self, name: &str) -> Unsent {
+        let (reason, frames) = match self {
+            Self::NoPeer(frames) => ("no connected peer".to_owned(), Some(frames)),
+            Self::Wire(err) => (err.to_string(), None),
+        };
+        Unsent {
+            error: ZmqError::Send {
+                name: name.to_owned(),
+                reason,
             },
+            frames,
         }
+    }
+}
+
+/// A send that did not leave: the error it is reported with, and the frames when the client
+/// handed them back, for the publisher to return the message they were written from.
+#[derive(Debug)]
+pub(crate) struct Unsent {
+    pub(crate) error: ZmqError,
+    pub(crate) frames: Option<zeromq::ZmqMessage>,
+}
+
+impl From<Unsent> for ZmqError {
+    fn from(unsent: Unsent) -> Self {
+        unsent.error
     }
 }
 
@@ -611,7 +633,7 @@ async fn retry<Attempt: Offer>(
                 match deadline {
                     None => deadline = Some(tokio::time::Instant::now() + SEND_RETRY_WINDOW),
                     Some(at) if tokio::time::Instant::now() >= at => {
-                        return Err(SendFailure::NoPeer);
+                        return Err(SendFailure::NoPeer(message));
                     }
                     Some(_) => {}
                 }
@@ -689,13 +711,13 @@ where
         &mut self,
         name: &str,
         message: zeromq::ZmqMessage,
-    ) -> Result<(), ZmqError> {
+    ) -> Result<(), Unsent> {
         if self.send.is_some() {
             self.complete_dropped().await;
         }
         retry(Parked { outbox: self, name }, message)
             .await
-            .map_err(|failure| failure.into_error(name))
+            .map_err(|failure| failure.into_unsent(name))
     }
 
     /// Completes the send a dropped publish left parked and puts the socket back. Its outcome
