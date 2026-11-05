@@ -11,7 +11,7 @@ import TabItem from '@theme/TabItem';
 
 Where copies go follows the side: a bound subscription takes its own, and one that dials and every responder name a destination.
 
-[`out_retry(policy)`](api:ruststream::runtime::Mounting::out_retry) sets the publisher the [retry](./retries.md) copies leave through.
+[`out_retry(policy)`](api:ruststream::runtime::RouterWith::out_retry) sets the publisher the [retry](./retries.md) copies leave through.
 A [`ZmqQueue`](../broker/zmq-queue.md) or [`ZmqFanout`](../broker/zmq-fanout.md) subscription that [binds](../broker/endpoint/bind.md) its endpoint is an address of its own.
 Its copies go back to that endpoint, so the mount names no destination, and `.out_retry(Publish)` states the default.
 

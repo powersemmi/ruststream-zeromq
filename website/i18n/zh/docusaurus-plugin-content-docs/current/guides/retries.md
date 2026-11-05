@@ -85,7 +85,7 @@ ZeroMQ 对一条消息至多投递一次，并且不存储任何东西。
 </TabItem>
 </Tabs>
 
-[`max_attempts`](api:ruststream::runtime::Mounting::max_attempts) 统计一个任务的每次投递，第一次也算在内。
+[`max_attempts`](api:ruststream::runtime::RouterWith::max_attempts) 统计一个任务的每次投递，第一次也算在内。
 ZMTP 没有投递计数器，因此框架通过 `x-ruststream-retry-count` 消息头计数，无论副本经由何处传递，上限都成立。
 失败任务的第五次投递不再重试；没有死信目的地时，它被丢弃，并记录一条写明订阅的警告。
 

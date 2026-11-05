@@ -84,7 +84,7 @@ An invoice without an amount cannot be sent, and sending it again changes nothin
 </TabItem>
 </Tabs>
 
-[`max_attempts`](api:ruststream::runtime::Mounting::max_attempts) counts every delivery of one job, the first included.
+[`max_attempts`](api:ruststream::runtime::RouterWith::max_attempts) counts every delivery of one job, the first included.
 ZMTP has no delivery counter, so the framework counts through its `x-ruststream-retry-count` header, and the cap holds wherever the copies travel.
 The fifth delivery of a failing job is not retried; with no dead-letter destination it is dropped with a warning that names the subscription.
 

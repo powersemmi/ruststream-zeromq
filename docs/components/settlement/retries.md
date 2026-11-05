@@ -9,7 +9,7 @@ import TabItem from '@theme/TabItem';
 
 # Retries
 
-[`retry_after(delay)`](api:ruststream::runtime::HandlerOutcome::retry_after) publishes a copy after the delay, and [`max_attempts`](api:ruststream::runtime::Mounting::max_attempts) caps the copies through the framework's `x-ruststream-retry-count` header.
+[`retry_after(delay)`](api:ruststream::runtime::HandlerOutcome::retry_after) publishes a copy after the delay, and [`max_attempts`](api:ruststream::runtime::RouterWith::max_attempts) caps the copies through the framework's `x-ruststream-retry-count` header.
 
 The runtime waits out the delay and publishes a copy of the delivery, its payload and headers as they arrived.
 The copy carries [`RETRY_COUNT_HEADER`](api:ruststream::runtime::RETRY_COUNT_HEADER) incremented, and a handler reads it like any other header.
