@@ -14,7 +14,7 @@ use std::time::Duration;
 use aliasable::boxed::AliasableBox;
 use futures::Stream;
 use futures::lock::Mutex;
-use ruststream::{IncomingMessage, Subscriber, nonzero};
+use ruststream::{Settle, Subscriber, nonzero};
 use selfie::SelfieMut;
 use selfie::refs::RefType;
 use tokio::runtime::Handle;
@@ -869,7 +869,7 @@ pub(crate) struct WireSubscriber<Message> {
     pub(crate) _driver: DriverHandle,
 }
 
-impl<Message: IncomingMessage> Subscriber for WireSubscriber<Message> {
+impl<Message: Settle> Subscriber for WireSubscriber<Message> {
     type Message = Message;
     type Error = ZmqError;
 
