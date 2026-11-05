@@ -28,9 +28,7 @@ async fn consume(order: &Order, ctx: &mut Context<'_, (), Latch>) -> HandlerOutc
 }
 
 fn app(messages: usize) -> Pending {
-    common::queue(messages, |b| {
-        b.include(consume);
-    })
+    common::queue(messages, |b| b.include(consume))
 }
 
 // Four runs counted 10687 to 10688 blocks over 2000 deliveries, and 5643 to 5644 over 1000: four
