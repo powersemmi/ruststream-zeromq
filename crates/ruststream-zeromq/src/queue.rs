@@ -80,9 +80,9 @@ use futures::lock::Mutex;
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::Bindings;
 use ruststream::{
-    AddressedCopies, BatchSubscriber, Broker, BufferedSubscriber, BytesMut, ConnectedBroker,
-    DefaultPublish, DescribeServer, NamedCopies, OutgoingMessage, PairError, PublishPolicy,
-    Publisher, ServerSpec, Subscribe, Subscriber, Take,
+    AddressedCopies, BatchStream, BatchSubscriber, Broker, BufferedSubscriber, BytesMut,
+    ConnectedBroker, DefaultPublish, DescribeServer, NamedCopies, OutgoingMessage, PairError,
+    PublishPolicy, Publisher, ServerSpec, Subscribe, Subscriber, Take,
 };
 use tokio::sync::OnceCell;
 use zeromq::prelude::*;
@@ -645,7 +645,7 @@ impl<Env: Envelope> BatchSubscriber for ZmqSubscriber<Env> {
     fn batches(
         &mut self,
         size: NonZeroUsize,
-    ) -> impl Stream<Item = Result<Self::Batch, ZmqError>> + Send + '_ {
+    ) -> impl BatchStream<Self::Batch, Error = ZmqError> + Send + '_ {
         self.inner.batches(size)
     }
 }
