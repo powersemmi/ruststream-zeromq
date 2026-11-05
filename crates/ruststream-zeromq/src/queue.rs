@@ -82,7 +82,8 @@ use ruststream::asyncapi::Bindings;
 use ruststream::{
     AddressedCopies, BatchStream, BatchSubscriber, Broker, BufferedSubscriber, BytesMut,
     ConnectedBroker, DefaultPublish, DescribeServer, NamedCopies, OutgoingMessage, PairError,
-    PublishPolicy, Publisher, ServerSpec, Subscribe, Subscriber, Take,
+    PublishMessageError, PublishOutcome, PublishPolicy, Publisher, ServerSpec, Subscribe,
+    Subscriber, Take,
 };
 use tokio::sync::OnceCell;
 use zeromq::prelude::*;
@@ -856,36 +857,37 @@ impl<Env: Envelope> Publisher for ZmqQueuePublisher<Env> {
     // The socket guard intentionally spans the lazy attach and the send: the socket takes
     // &mut for every operation.
     #[allow(clippy::significant_drop_tightening)]
-    async fn publish(
+    async fn publish<'msg>(
         &self,
-        msg: OutgoingMessage<'_, BytesMut>,
+        msg: OutgoingMessage<'msg, BytesMut>,
         _options: Option<&Self::Options>,
-    ) -> Result<(), Self::Error> {
-        let lifecycle = self.cell.get().ok_or(ZmqError::NotConnected)?;
-        lifecycle.ensure_open()?;
-        // Framed before the socket is touched: a message that cannot be written costs no attach.
-        let (name, payload, headers) = msg.into_parts();
-        let frames = envelope::write(
-            &self.envelope,
-            Pattern::PushPull,
-            name,
-            None,
-            (name, &headers, payload.freeze()),
-        )?;
+    ) -> PublishOutcome<'msg, ZmqError, Take> {
+        let Some(lifecycle) = self.cell.get() else {
+            return Err(PublishMessageError::with_message(
+                ZmqError::NotConnected,
+                msg,
+            ));
+        };
+        if let Err(closed) = lifecycle.ensure_open() {
+            return Err(PublishMessageError::with_message(closed, msg));
+        }
         // Checked here rather than by the type: whether one broker both subscribes and publishes is
         // decided by the scopes a service mounts, and the peer at the far end is the deployment's,
         // so the refusal comes before the handshake would give it. Checked on every publish, not
         // only on the attach: a subscription that dials after the socket attached turns the
         // publisher's peer into its own. One load of a set-once cell.
         if let Some(subscription) = lifecycle.dialer() {
-            return Err(dials_the_sender(name, subscription, "PUSH", "queue"));
+            let refused = dials_the_sender(msg.name(), subscription, "PUSH", "queue");
+            return Err(PublishMessageError::with_message(refused, msg));
         }
         let mut push = self.push.lock().await;
         // A loop, because a subscription of this service that binds the endpoint may take back a
         // socket that listened there between the attach and this lock; the next attach dials it.
         while push.is_none() {
             drop(push);
-            self.attach(lifecycle).await?;
+            if let Err(refused) = self.attach(lifecycle).await {
+                return Err(PublishMessageError::with_message(refused, msg));
+            }
             push = self.push.lock().await;
         }
         let attached = push.as_mut().expect("the loop leaves an attached socket");
@@ -895,10 +897,21 @@ impl<Env: Envelope> Publisher for ZmqQueuePublisher<Env> {
         // before the first publish sees both. A socket that dials out or listens carries no name
         // and skips it.
         if let Some(subscription) = attached.local.as_deref()
-            && subscription != name
+            && subscription != msg.name()
         {
-            return Err(returns_to_subscription(name, subscription));
+            let refused = returns_to_subscription(msg.name(), subscription);
+            return Err(PublishMessageError::with_message(refused, msg));
         }
+        // Framed only once every refusal is behind it: the frames take the payload, and a refusal
+        // before them hands the message back whole.
+        let (name, payload, headers) = msg.into_parts();
+        let frames = envelope::write(
+            &self.envelope,
+            Pattern::PushPull,
+            name,
+            None,
+            (name, &headers, payload.freeze()),
+        )?;
         let dials = attached.dials;
         let sent = attached.send(&self.envelope, name, frames).await;
         // A send fails on a dialed socket when its peer is gone: the connection broke, or no
@@ -908,7 +921,7 @@ impl<Env: Envelope> Publisher for ZmqQueuePublisher<Env> {
         if sent.is_err() && dials {
             *push = None;
         }
-        sent
+        Ok(sent?)
     }
 }
 

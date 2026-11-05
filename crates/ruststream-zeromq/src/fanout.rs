@@ -75,7 +75,8 @@ use futures::lock::Mutex;
 use ruststream::asyncapi::Bindings;
 use ruststream::{
     AddressedCopies, Broker, BytesMut, ConnectedBroker, DefaultPublish, DescribeServer,
-    NamedCopies, OutgoingMessage, PairError, PublishPolicy, Publisher, ServerSpec, Subscribe, Take,
+    NamedCopies, OutgoingMessage, PairError, PublishMessageError, PublishOutcome, PublishPolicy,
+    Publisher, ServerSpec, Subscribe, Take,
 };
 use tokio::sync::OnceCell;
 use tokio::time::timeout;
@@ -633,14 +634,41 @@ impl<Env: Envelope> Publisher for ZmqFanoutPublisher<Env> {
     // The socket guard intentionally spans the lazy attach and the send: the socket takes
     // &mut for every operation.
     #[allow(clippy::significant_drop_tightening)]
-    async fn publish(
+    async fn publish<'msg>(
         &self,
-        msg: OutgoingMessage<'_, BytesMut>,
+        msg: OutgoingMessage<'msg, BytesMut>,
         _options: Option<&Self::Options>,
-    ) -> Result<(), Self::Error> {
-        let lifecycle = self.cell.get().ok_or(ZmqError::NotConnected)?;
-        lifecycle.ensure_open()?;
-        // Framed before the socket is touched: a message that cannot be written costs no attach.
+    ) -> PublishOutcome<'msg, ZmqError, Take> {
+        let Some(lifecycle) = self.cell.get() else {
+            return Err(PublishMessageError::with_message(
+                ZmqError::NotConnected,
+                msg,
+            ));
+        };
+        if let Err(closed) = lifecycle.ensure_open() {
+            return Err(PublishMessageError::with_message(closed, msg));
+        }
+        // Checked here rather than by the type: whether one broker both subscribes and publishes is
+        // decided by the scopes a service mounts, and the peer at the far end is the deployment's,
+        // so the refusal comes before the handshake would give it. Checked on every publish, not
+        // only on the attach: a subscription that dials after the socket attached turns the
+        // publisher's peer into its own. One load of a set-once cell.
+        if let Some(subscription) = lifecycle.dialer() {
+            let refused = dials_the_sender(msg.name(), subscription, "PUB", "fan-out");
+            return Err(PublishMessageError::with_message(refused, msg));
+        }
+        let mut guard = self.socket.lock().await;
+        // A loop, because a subscription of this service that binds the endpoint may take back a
+        // socket that listened there between the attach and this lock; the next attach dials it.
+        while guard.is_none() {
+            drop(guard);
+            if let Err(refused) = self.attach(lifecycle).await {
+                return Err(PublishMessageError::with_message(refused, msg));
+            }
+            guard = self.socket.lock().await;
+        }
+        // Framed only once every refusal is behind it: the frames take the payload, and a refusal
+        // before them hands the message back whole.
         let (name, payload, headers) = msg.into_parts();
         let frames = envelope::write(
             &self.envelope,
@@ -649,28 +677,14 @@ impl<Env: Envelope> Publisher for ZmqFanoutPublisher<Env> {
             None,
             (name, &headers, payload.freeze()),
         )?;
-        // Checked here rather than by the type: whether one broker both subscribes and publishes is
-        // decided by the scopes a service mounts, and the peer at the far end is the deployment's,
-        // so the refusal comes before the handshake would give it. Checked on every publish, not
-        // only on the attach: a subscription that dials after the socket attached turns the
-        // publisher's peer into its own. One load of a set-once cell.
-        if let Some(subscription) = lifecycle.dialer() {
-            return Err(dials_the_sender(name, subscription, "PUB", "fan-out"));
-        }
-        let mut guard = self.socket.lock().await;
-        // A loop, because a subscription of this service that binds the endpoint may take back a
-        // socket that listened there between the attach and this lock; the next attach dials it.
-        while guard.is_none() {
-            drop(guard);
-            self.attach(lifecycle).await?;
-            guard = self.socket.lock().await;
-        }
         match guard.as_mut().expect("the loop leaves an attached socket") {
             // PUB never reports "no peers": an unmatched message is dropped by design, so the
             // retry helper only smooths transport-level failures.
-            Sender::Socket(PubSide::Remote(socket)) => send_with_retry(socket, name, frames).await,
+            Sender::Socket(PubSide::Remote(socket)) => {
+                Ok(send_with_retry(socket, name, frames).await?)
+            }
             Sender::Socket(PubSide::Loopback(socket)) => {
-                send_with_retry(socket, name, frames).await
+                Ok(send_with_retry(socket, name, frames).await?)
             }
             #[cfg(feature = "testing")]
             Sender::InProcess { bus, local } => {
