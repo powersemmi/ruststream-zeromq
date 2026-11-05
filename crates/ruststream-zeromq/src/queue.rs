@@ -547,8 +547,9 @@ impl<Env: Envelope> Subscribe for ConnectedZmqQueue<Connect, Env> {
     /// sends and takes nothing, so a copy published back to it is refused by the handshake. The
     /// subscription therefore addresses no copy, and every registration names where its copies
     /// go: `.out_retry(policy).to("name")` over a broker that reaches a consumer, or a transform
-    /// that names one per delivery. A registration that names neither does not compile, on a
-    /// `with_broker` scope and on a router alike.
+    /// that names one per delivery. A mount that binds `.out_retry(policy)` and names no
+    /// destination does not compile; one that binds no retry slot is refused before the
+    /// subscription opens.
     type Copies = NamedCopies;
 
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
