@@ -4,6 +4,8 @@
 //! with different headers.
 
 #![cfg(feature = "testing")]
+// A test drives the app on its own task; the app's cold path carries no Send.
+#![allow(clippy::future_not_send)]
 
 use ruststream::HeaderMap;
 use ruststream::prelude::*;

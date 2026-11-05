@@ -1,6 +1,9 @@
 //! End-to-end checks over real sockets on the loopback, including the wire-layout contract a
 //! non-Rust peer relies on.
 
+// A test drives the app on its own task; the app's cold path carries no Send.
+#![allow(clippy::future_not_send)]
+
 use std::io;
 use std::path::PathBuf;
 use std::pin::pin;

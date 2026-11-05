@@ -2,6 +2,8 @@
 //! with its payload and, where the layout carries them, its headers, and what the handler sends on
 //! leaves through it and reads back the same, in process and over loopback sockets.
 #![cfg(feature = "testing")]
+// A test drives the app on its own task; the app's cold path carries no Send.
+#![allow(clippy::future_not_send)]
 
 use std::pin::pin;
 use std::time::Duration;

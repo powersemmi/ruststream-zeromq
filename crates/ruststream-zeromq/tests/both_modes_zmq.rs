@@ -7,6 +7,8 @@
 //! the in-process leg shows the same copy on the transport the harness connects instead.
 
 #![cfg(feature = "testing")]
+// A test drives the app on its own task; the app's cold path carries no Send.
+#![allow(clippy::future_not_send)]
 
 use std::time::Duration;
 
