@@ -17,6 +17,7 @@ use std::time::Duration;
 use ruststream::Name;
 use ruststream::conformance::harness::InProcessBroker;
 use ruststream::conformance::in_process::{self, Refusal};
+use ruststream::conformance::lifecycle::{self, Unsent};
 use ruststream::conformance::{capabilities, harness, message_shape, retry, settlement};
 use ruststream_zeromq::{
     ConnectedZmqFanout, ConnectedZmqQueue, ConnectedZmqRpc, ZmqEndpoint, ZmqFanout,
@@ -281,6 +282,63 @@ async fn zmq_rpc_passes_request_reply_suite_in_process() {
         || InProcessBroker::new(ZmqRpc::new(ZmqEndpoint::bind(LOOPBACK))),
         |name| Name::new(name.to_owned()),
         |connected| connected.publisher(),
+        |connected| connected.publisher(),
+    )
+    .await;
+}
+
+/// A publisher paired before the shutdown refuses afterwards and hands the unsent message back, on
+/// each of the three publishers: over sockets and in process.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refused_publish_returns_the_message() {
+    lifecycle::refused_publish_returns_message(
+        || ZmqQueue::new(ZmqEndpoint::bind(LOOPBACK)),
+        |connected| connected.publisher(),
+        Unsent::Returned,
+    )
+    .await;
+    lifecycle::refused_publish_returns_message(
+        || ZmqFanout::new(ZmqEndpoint::bind(LOOPBACK)),
+        |connected| connected.publisher(),
+        Unsent::Returned,
+    )
+    .await;
+    lifecycle::refused_publish_returns_message(
+        || ZmqRpc::new(ZmqEndpoint::bind(LOOPBACK)),
+        |connected| connected.publisher(),
+        Unsent::Returned,
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refused_publish_returns_the_message_in_process() {
+    lifecycle::refused_publish_returns_message(
+        || InProcessBroker::new(ZmqQueue::new(ZmqEndpoint::bind(LOOPBACK))),
+        |connected| connected.publisher(),
+        Unsent::Returned,
+    )
+    .await;
+    lifecycle::refused_publish_returns_message(
+        || InProcessBroker::new(ZmqFanout::new(ZmqEndpoint::bind(LOOPBACK))),
+        |connected| connected.publisher(),
+        Unsent::Returned,
+    )
+    .await;
+    lifecycle::refused_publish_returns_message(
+        || InProcessBroker::new(ZmqRpc::new(ZmqEndpoint::bind(LOOPBACK))),
+        |connected| connected.publisher(),
+        Unsent::Returned,
+    )
+    .await;
+}
+
+/// What the in-process fan-out declares about a message published before a subscription opens is
+/// what the sockets do with it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_fan_out_declares_the_backlog_the_sockets_keep() {
+    in_process::backlog_matches_server(
+        || ZmqFanout::new(ZmqEndpoint::bind(LOOPBACK)),
         |connected| connected.publisher(),
     )
     .await;
