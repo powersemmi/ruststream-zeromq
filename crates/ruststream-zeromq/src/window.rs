@@ -1,15 +1,19 @@
 //! The window that holds a sending socket back when its peer does not keep up.
 //!
 //! The client accepts a send as soon as the message is in a queue of 100,000 messages per peer,
-//! and that queue is not configurable, so on its own it bounds a sender by a count that no payload
-//! size makes sensible. [`SendWindow`] bounds it by what the publisher sent instead: it marks one
-//! message per window, and a publisher that has filled a second window waits until the mark of the
-//! first has left the client. The messages leave in order, so by then every message before the
-//! mark has left too.
+//! and that queue is not configurable. A PUSH socket waits once a peer's queue is full, so on its
+//! own it bounds a sender by a count that no payload size makes sensible. A PUB socket drops what a
+//! subscriber's full queue cannot take, so a subscriber that does not keep up loses messages
+//! instead of holding the publisher back. [`SendWindow`] bounds a sender by what it sent instead:
+//! it marks one message per window, and a publisher that has filled a second window waits until
+//! the mark of the first has left the client. The messages leave in order, so by then every
+//! message before the mark has left too.
 //!
 //! A mark is a frame of the message that the publisher keeps a handle to, the anchor. The client
 //! drops the message once it has written it or lost its peer, which leaves the anchor the only
-//! holder of its buffer, and the publisher reads that off the buffer's reference count. The
+//! holder of its buffer, and the publisher reads that off the buffer's reference count. A PUB
+//! socket hands each subscriber a copy that shares the frames, so the anchor is released once the
+//! last subscriber's copy has left. The
 //! anchor is the first small frame of the message (the name, in the default layout) and is kept
 //! from window to window while that frame stays the same, so a mark allocates and copies nothing.
 //! A message without a small frame is marked by its last frame, which costs the one allocation

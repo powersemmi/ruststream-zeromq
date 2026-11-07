@@ -95,6 +95,7 @@ use crate::error::{ZmqError, box_err};
 #[cfg(feature = "testing")]
 use crate::in_process::Pick;
 use crate::queue::ZmqSubscriber;
+use crate::window::SendWindow;
 
 // A production publisher holds the socket it attached and nothing beside it.
 #[cfg(not(feature = "testing"))]
@@ -554,11 +555,26 @@ pub struct ZmqFanoutPublisher<Env = Frames> {
 /// The sending socket of a fan-out publisher, by the place it attached to.
 pub(crate) enum PubSide {
     /// A peer outside this service: the socket learns its filters as they arrive, and what it
-    /// sends before one arrives is dropped, as the pattern drops it.
-    Remote(PubSocket),
+    /// sends before one arrives is dropped, as the pattern drops it. The client queues each
+    /// subscriber's messages instead of writing them through, and drops what a full queue cannot
+    /// take, so the window holds the publisher back from a subscriber that does not keep up.
+    Remote {
+        socket: PubSocket,
+        window: SendWindow,
+    },
     /// The listener a subscription of this service bound. The socket read that subscription's
     /// filter before its first send, so nothing it sends is dropped for want of one.
     Loopback(XPubSocket),
+}
+
+impl PubSide {
+    /// A socket that reaches peers outside this service, with nothing sent yet.
+    fn remote(socket: PubSocket) -> Self {
+        Self::Remote {
+            socket,
+            window: SendWindow::default(),
+        }
+    }
 }
 
 impl<Env: Envelope> ZmqFanoutPublisher<Env> {
@@ -598,7 +614,7 @@ impl<Env: Envelope> ZmqFanoutPublisher<Env> {
 const fn dials_a_subscription(sender: &Sender<PubSide>) -> bool {
     match sender {
         Sender::Socket(PubSide::Loopback(_)) => true,
-        Sender::Socket(PubSide::Remote(_)) => false,
+        Sender::Socket(PubSide::Remote { .. }) => false,
         #[cfg(feature = "testing")]
         Sender::InProcess { local, .. } => *local,
     }
@@ -667,6 +683,7 @@ impl<Env: Envelope> Publisher for ZmqFanoutPublisher<Env> {
         // Framed only once every refusal is behind it: the frames take the payload, and a refusal
         // before them hands the message back whole.
         let (name, payload, headers) = msg.into_parts();
+        let size = payload.len();
         let frames = envelope::write(
             &self.envelope,
             Pattern::PubSub,
@@ -677,11 +694,14 @@ impl<Env: Envelope> Publisher for ZmqFanoutPublisher<Env> {
         match guard.as_mut().expect("the loop leaves an attached socket") {
             // PUB never reports "no peers": an unmatched message is dropped by design, so the
             // retry helper only smooths transport-level failures.
-            Sender::Socket(PubSide::Remote(socket)) => send_with_retry(socket, name, frames)
-                .await
-                .map_err(|unsent| {
-                    envelope::hand_back(&self.envelope, Pattern::PubSub, name, headers, unsent)
-                }),
+            Sender::Socket(PubSide::Remote { socket, window }) => {
+                let frames = window.admit(frames, size).await;
+                send_with_retry(socket, name, frames)
+                    .await
+                    .map_err(|unsent| {
+                        envelope::hand_back(&self.envelope, Pattern::PubSub, name, headers, unsent)
+                    })
+            }
             Sender::Socket(PubSide::Loopback(socket)) => send_with_retry(socket, name, frames)
                 .await
                 .map_err(|unsent| {
@@ -739,12 +759,12 @@ async fn attach(
                     // Taken before the dial, so a peer that goes at once is not missed.
                     let events = socket.monitor();
                     attach_to(&mut socket, target).await?;
-                    Ok((PubSide::Remote(socket), Some(events)))
+                    Ok((PubSide::remote(socket), Some(events)))
                 }
                 target => {
                     let mut socket = PubSocket::new();
                     attach_to(&mut socket, target).await?;
-                    Ok((PubSide::Remote(socket), None))
+                    Ok((PubSide::remote(socket), None))
                 }
             }
         })

@@ -463,7 +463,7 @@ impl OwnListener {
             Self::Fanout(slot) => {
                 if let Some(slot) = slot.upgrade() {
                     let sender = slot.lock().await.take();
-                    if let Some(Sender::Socket(PubSide::Remote(mut socket))) = sender {
+                    if let Some(Sender::Socket(PubSide::Remote { mut socket, .. })) = sender {
                         release(&mut socket).await;
                     }
                 }

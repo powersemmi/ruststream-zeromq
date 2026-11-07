@@ -4,6 +4,7 @@
 //! subscription is opened and left unpolled, and a publisher sends until a send stops completing.
 
 use std::collections::VecDeque;
+use std::net::TcpListener;
 use std::pin::pin;
 use std::time::Duration;
 
@@ -131,6 +132,44 @@ async fn an_unread_fanout_subscription_holds_its_publisher_back() {
     );
 
     connected.shutdown().await.expect("shutdown succeeds");
+}
+
+/// A loopback address with a port the operating system just handed out and took back.
+fn fixed_port() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a free loopback port");
+    let port = listener.local_addr().expect("the port").port();
+    format!("tcp://127.0.0.1:{port}")
+}
+
+/// A fan-out subscription of another service holds the publisher back the same way when it is not
+/// read: the publisher reaches it through a PUB socket, whose client queues each subscriber's
+/// messages instead of writing them through.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unread_fanout_subscription_of_another_service_holds_its_publisher_back() {
+    let address = fixed_port();
+    let subscribing = ZmqFanout::new(ZmqEndpoint::bind(address.clone()))
+        .read_ahead(nonzero!(8_usize))
+        .connect()
+        .await
+        .expect("the subscribing service connects");
+    let subscriber = subscribing
+        .subscribe("events")
+        .await
+        .expect("subscription opens");
+    let publishing = ZmqFanout::new(ZmqEndpoint::connect(address))
+        .connect()
+        .await
+        .expect("the publishing service connects");
+    let publisher = publishing.publisher();
+
+    let accepted = stalls_then_resumes(&publisher, "events", subscriber).await;
+    assert!(
+        accepted < CEILING,
+        "the publisher ran {accepted} messages ahead of a subscription nobody read"
+    );
+
+    publishing.shutdown().await.expect("shutdown succeeds");
+    subscribing.shutdown().await.expect("shutdown succeeds");
 }
 
 /// A layout that puts a fixed tag frame in front of the payload. The tag is a static frame, which
