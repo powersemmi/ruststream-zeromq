@@ -33,9 +33,7 @@ fn app() -> impl App {
     RustStream::new(AppInfo::new("worker", "0.1.0"))
         .with_broker(
             ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
-            |b| {
-                b.include(work).out(Results, results).build();
-            },
+            |b| b.include(work).out(Results, results),
         )
         .register_broker(sink)
 }
@@ -89,9 +87,7 @@ mod tests {
         // to `work` as its next job: the publisher refuses them.
         let app = RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
             ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
-            |b| {
-                b.include(work).out(Results, Publish).build();
-            },
+            |b| b.include(work).out(Results, Publish),
         );
 
         let tb = TestApp::start(app).await?;
@@ -115,9 +111,7 @@ mod tests {
     async fn a_failed_start_carries_the_zmq_error() {
         let app = RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
             ZmqQueue::new(ZmqEndpoint::bind("udp://0.0.0.0:5555")),
-            |b| {
-                b.include(work).out(Results, Publish).build();
-            },
+            |b| b.include(work).out(Results, Publish),
         );
 
         let failed = TestApp::start(app).await.err();

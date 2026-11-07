@@ -85,7 +85,7 @@ ZeroMQ 对一条消息至多投递一次，并且不存储任何东西。
 </TabItem>
 </Tabs>
 
-[`max_attempts`](api:ruststream::runtime::Mounting::max_attempts) 统计一个任务的每次投递，第一次也算在内。
+[`max_attempts`](api:ruststream::runtime::RouterWith::max_attempts) 统计一个任务的每次投递，第一次也算在内。
 ZMTP 没有投递计数器，因此框架通过 `x-ruststream-retry-count` 消息头计数，无论副本经由何处传递，上限都成立。
 失败任务的第五次投递不再重试；没有死信目的地时，它被丢弃，并记录一条写明订阅的警告。
 
@@ -102,7 +102,7 @@ ZMTP 没有投递计数器，因此框架通过 `x-ruststream-retry-count` 消�
 
 拨号连接分发器的工作者无法把副本送回去：分发器只发送。
 它的挂载用 `.out_retry(policy).to("jobs")` 指定副本的去向，即工作者为自己绑定的一个队列，并把同一个处理器挂载到这个队列上。
-没有指定目的地的挂载会在启动时被拒绝，没有指定目的地的 [`Router`](api:ruststream::runtime::Router) 链无法编译。
+绑定了 `.out_retry(policy)` 却没有指定目的地的挂载无法编译。没有绑定重试槽的挂载会在启动时被拒绝。
 [`out_retry`](../components/settlement/out-retry.md) 一页展示了这种挂载，[基于 PUSH/PULL 的流水线](pipelines.md)用到了它。
 
 ## 测试延迟 {/* #testing-the-delays */}

@@ -1,0 +1,25 @@
+error[E0277]: this registration does not say where its retry copies go
+  --> tests/ui/retry_on_a_dialing_scope_without_destination.rs:21:62
+   |
+21 |     let _ = RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
+   |                                                              ^^^^^^^^^^^ the subscription descriptor of `ruststream_runtime::router::routes::RetriedRoute<ruststream_runtime::router::routes::SubscribeRoute<Name, Typed<ZmqMessage, ruststream_runtime::input::Decoded<Job>, JsonCodec, ruststream_runtime::handle::eager::SoloBody<Solo<Job>, (), FnBody<work, for<'a, 'b, 'c, 'd> fn(BodyTag<work>, &'a Job, &'b (), &'c mut ruststream::prelude::Context<'d>) -> impl Future<Output = Result<(), ruststream::prelude::HandlerOutcome>> {work::<()>}>>>>, ruststream_zeromq::ZmqQueue<ruststream_zeromq::Connect>, (), ruststream_runtime::redelivery::RetryParts<ZmqQueuePublish, PublishTransformIdentity, PublishIdentity>, ruststream::runtime::DestinationUndeclared>` addresses none, and nothing here names a destination
+   |
+   = help: the trait `ruststream::runtime::RetryDestinationsDeclared` is not implemented for `ruststream_runtime::router::routes::RetriedRoute<ruststream_runtime::router::routes::SubscribeRoute<Name, Typed<ZmqMessage, ruststream_runtime::input::Decoded<Job>, JsonCodec, ruststream_runtime::handle::eager::SoloBody<Solo<Job>, (), FnBody<work, for<'a, 'b, 'c, 'd> fn(BodyTag<work>, &'a Job, &'b (), &'c mut ruststream::prelude::Context<'d>) -> impl Future<Output = Result<(), ruststream::prelude::HandlerOutcome>> {work::<()>}>>>>, ruststream_zeromq::ZmqQueue<ruststream_zeromq::Connect>, (), ruststream_runtime::redelivery::RetryParts<ZmqQueuePublish, PublishTransformIdentity, PublishIdentity>, ruststream::runtime::DestinationUndeclared>`
+   = note: one such subscription reads many destinations (a wildcard subject, an MQTT filter, a Pulsar pattern, a list of topics), so the descriptor names none of them
+   = note: name one with `.out_retry(policy).to("orders")`, or compose a publish transform declaring `Destination = Names`, which reads the delivery being retried and names one per delivery
+help: the trait `ruststream::runtime::RetryDestinationsDeclared` is implemented for `ruststream_runtime::router::routes::RetriedRoute<Route, B, Cx, Parts>`
+  --> $CARGO/ruststream-runtime-$VERSION/src/router/routes.rs
+   |
+   | / impl<Route, B: Broker, Cx, Parts> RetryDestinationsDeclared
+   | |     for RetriedRoute<Route, B, Cx, Parts, DestinationDeclared>
+   | |______________________________________________________________^
+   = note: required for `(ruststream_runtime::router::routes::RetriedRoute<ruststream_runtime::router::routes::SubscribeRoute<Name, Typed<ZmqMessage, ruststream_runtime::input::Decoded<Job>, JsonCodec, ruststream_runtime::handle::eager::SoloBody<Solo<Job>, (), FnBody<work, for<'a, 'b, 'c, 'd> fn(BodyTag<work>, &'a Job, &'b (), &'c mut ruststream::prelude::Context<'d>) -> impl Future<Output = Result<(), ruststream::prelude::HandlerOutcome>> {work::<()>}>>>>, ruststream_zeromq::ZmqQueue<ruststream_zeromq::Connect>, (), ruststream_runtime::redelivery::RetryParts<ZmqQueuePublish, PublishTransformIdentity, PublishIdentity>, ruststream::runtime::DestinationUndeclared>, ())` to implement `RouterDef<ruststream_zeromq::ZmqQueue<ruststream_zeromq::Connect>>`
+   = note: required for `Router<ruststream_zeromq::ZmqQueue<ruststream_zeromq::Connect>, (ruststream_runtime::router::routes::RetriedRoute<ruststream_runtime::router::routes::SubscribeRoute<Name, Typed<ZmqMessage, ruststream_runtime::input::Decoded<Job>, JsonCodec, ruststream_runtime::handle::eager::SoloBody<Solo<Job>, (), FnBody<work, for<'a, 'b, 'c, 'd> fn(BodyTag<work>, &'a Job, &'b (), &'c mut ruststream::prelude::Context<'d>) -> impl Future<Output = Result<(), ruststream::prelude::HandlerOutcome>> {work::<()>}>>>>, ruststream_zeromq::ZmqQueue<ruststream_zeromq::Connect>, (), ruststream_runtime::redelivery::RetryParts<ZmqQueuePublish, PublishTransformIdentity, PublishIdentity>, ruststream::runtime::DestinationUndeclared>, ruststream::runtime::ChainHead<()>)>` to implement `ruststream::runtime::MountRoutes<ruststream_zeromq::ZmqQueue<ruststream_zeromq::Connect>>`
+note: required by a bound in `RustStream::<Layers, State, Pipeline, Phase>::with_broker`
+  --> $CARGO/ruststream-runtime-tokio-$VERSION/src/app/service.rs
+   |
+   |     pub fn with_broker<R, F, Chain, Routes>(
+   |            ----------- required by a bound in this associated function
+...
+   |         Routes: MountRoutes<R::Broker, Layers, State, Pipeline>,
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `RustStream::<Layers, State, Pipeline, Phase>::with_broker`

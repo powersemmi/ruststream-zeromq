@@ -105,7 +105,6 @@ fn app() -> impl App {
             |b| {
                 b.include(subscriber("jobs", Work).build())
                     .out(Results, results)
-                    .build();
             },
         )
         .register_broker(sink)

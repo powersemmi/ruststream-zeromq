@@ -39,7 +39,7 @@ The dependency line:
 
 ```toml
 [dev-dependencies]
-ruststream-zeromq = { version = "0.7", features = ["testing"] }
+ruststream-zeromq = { version = "0.8", features = ["testing"] }
 ```
 
 The worker binds its queue and sends each result to a sink it dials.

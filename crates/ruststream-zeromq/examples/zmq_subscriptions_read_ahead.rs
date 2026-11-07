@@ -21,9 +21,7 @@ fn app() -> impl App {
     // Each frame takes seconds to render, so a short read-ahead holds the rest at the sender.
     let frames =
         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")).read_ahead(nonzero!(4_usize));
-    RustStream::new(AppInfo::new("renderer", "0.1.0")).with_broker(frames, |b| {
-        b.include(render);
-    })
+    RustStream::new(AppInfo::new("renderer", "0.1.0")).with_broker(frames, |b| b.include(render))
 }
 // --8<-- [end:app]
 

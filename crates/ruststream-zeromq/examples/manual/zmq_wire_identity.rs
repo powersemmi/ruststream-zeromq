@@ -71,7 +71,7 @@ fn service(endpoint: ZmqEndpoint) -> impl App {
             .out_reply(Publish)
             .transform(ReplyToRequester)
             .out_retry(Publish)
-            .to("greeter.retry");
+            .to("greeter.retry")
     })
 }
 
@@ -87,6 +87,7 @@ fn main() -> ExitCode {
 
 /// Answers at the `reply-to` address the ROUTER stamped on the request, under the request's
 /// `correlation-id`.
+#[derive(Clone)]
 struct ReplyToRequester;
 
 impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {

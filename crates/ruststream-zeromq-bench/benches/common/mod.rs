@@ -57,7 +57,10 @@ use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
 use gungraun::{Callgrind, Dhat, DhatMetric, EntryPoint, LibraryBenchmarkConfig};
-use ruststream::runtime::{AppInfo, BrokerScope, Identity, RunningApp, RustStream};
+use ruststream::runtime::{
+    AppInfo, BrokerScope, Identity, MountChain, MountRoutes, PublishIdentity, RunningApp,
+    RustStream,
+};
 use ruststream::{Broker, ConnectedBroker, OutgoingMessage, Publisher};
 use ruststream_zeromq::{Connect, ConnectedZmqQueue};
 use ruststream_zeromq::{ZmqEndpoint, ZmqQueue, ZmqQueuePublisher, ZmqRpc};
@@ -446,14 +449,18 @@ pub struct Pending {
 /// Starts the service, tells the peer where it is bound, and waits for the peer to connect.
 type Start = Box<dyn FnOnce(&Runtime, oneshot::Sender<()>, oneshot::Receiver<()>) -> RunningApp>;
 
-/// The mount a PUSH/PULL scenario passes in: what `with_broker` does with the scope.
-pub type QueueMount<'a> = &'a mut BrokerScope<ZmqQueue, Identity, (), Latch>;
+/// The scope a PUSH/PULL scenario's mount receives: what `with_broker` hands its closure.
+pub type QueueMount = BrokerScope<ZmqQueue, Identity, (), Latch>;
 
-/// The mount a DEALER/ROUTER scenario passes in.
-pub type RpcMount<'a> = &'a mut BrokerScope<ZmqRpc, Identity, (), Latch>;
+/// The scope a DEALER/ROUTER scenario's mount receives.
+pub type RpcMount = BrokerScope<ZmqRpc, Identity, (), Latch>;
 
 /// A one-handler PUSH/PULL service bound on the loopback, and a PUSH peer that feeds it.
-pub fn queue(messages: usize, mount: impl FnOnce(QueueMount<'_>)) -> Pending {
+pub fn queue<Chain, Routes>(messages: usize, mount: impl FnOnce(QueueMount) -> Chain) -> Pending
+where
+    Chain: MountChain<Routes = Routes>,
+    Routes: MountRoutes<ZmqQueue, Identity, Latch, PublishIdentity>,
+{
     let address = loopback();
     let latch = Latch::default();
     let state = latch.clone();
@@ -466,7 +473,11 @@ pub fn queue(messages: usize, mount: impl FnOnce(QueueMount<'_>)) -> Pending {
 
 /// A one-handler DEALER/ROUTER responder bound on the loopback, and a DEALER peer that sends it
 /// requests and reads every answer.
-pub fn rpc(messages: usize, mount: impl FnOnce(RpcMount<'_>)) -> Pending {
+pub fn rpc<Chain, Routes>(messages: usize, mount: impl FnOnce(RpcMount) -> Chain) -> Pending
+where
+    Chain: MountChain<Routes = Routes>,
+    Routes: MountRoutes<ZmqRpc, Identity, Latch, PublishIdentity>,
+{
     let address = loopback();
     let latch = Latch::default();
     let state = latch.clone();

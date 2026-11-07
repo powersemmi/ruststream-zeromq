@@ -87,7 +87,7 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use futures::StreamExt;
-use ruststream::{AckError, ConnectedBroker, OutgoingMessage, Subscribe, Subscriber};
+use ruststream::{AckError, ConnectedBroker, OutgoingMessage, Settle, Subscribe, Subscriber};
 use ruststream_zeromq::queue::prelude::*;
 use serde::Deserialize;
 use tokio::runtime::{Builder, Runtime};
@@ -577,6 +577,9 @@ async fn consume(order: &Order, ctx: &mut Context<'_, (), Run>) -> HandlerOutcom
     HandlerOutcome::ack()
 }
 
+// Driven by `block_on` on the thread that built it; the app's start future is not `Send` and
+// never has to cross threads.
+#[allow(clippy::future_not_send)]
 async fn framework(address: &Address, messages: usize) -> Duration {
     let broker = ZmqQueue::new(ZmqEndpoint::bind(address.as_str()));
     // The same live publisher the adapter loop gets from the policy: `pair` hands out exactly
@@ -588,9 +591,7 @@ async fn framework(address: &Address, messages: usize) -> Duration {
     let state = run.clone();
     let app = RustStream::new(AppInfo::new("zeromq-bench", "0.0.0"))
         .on_startup(async move |()| Ok::<_, Infallible>(state.clone()))
-        .with_broker(broker, |b| {
-            b.include(consume);
-        })
+        .with_broker(broker, |b| b.include(consume))
         .start()
         .await
         .expect("the service starts");
@@ -696,6 +697,9 @@ struct Measured {
     round_trip: Duration,
 }
 
+// Driven by `block_on` on the thread that built it; the app's start future is not `Send` and
+// never has to cross threads.
+#[allow(clippy::future_not_send)]
 async fn measure(scenario: Scenario, rounds: usize, seconds: f64) -> Measured {
     let round_trip = round_trip(&scenario.address()).await;
     println!(

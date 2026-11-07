@@ -49,12 +49,10 @@ fn app() -> impl App {
             ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
             |b| {
                 // Every failed job leaves for the second queue, under the name it is read by.
-                b.include(work).dead_letter("jobs.dead").out_retry(parked);
+                b.include(work).dead_letter("jobs.dead").out_retry(parked)
             },
         )
-        .with_broker_labeled("dead", dead, |b| {
-            b.include(park);
-        })
+        .with_broker_labeled("dead", dead, |b| b.include(park))
 }
 // --8<-- [end:app]
 

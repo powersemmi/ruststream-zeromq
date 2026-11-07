@@ -50,9 +50,7 @@ impl Handle<Payment> for Charge {
 fn app() -> impl App {
     RustStream::new(AppInfo::new("payments", "0.1.0")).with_broker(
         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
-        |b| {
-            b.include(subscriber("payments", Charge).build());
-        },
+        |b| b.include(subscriber("payments", Charge).build()),
     )
 }
 // --8<-- [end:settle]

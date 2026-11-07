@@ -56,6 +56,7 @@ async fn greet(request: &Greeting) -> Answer {
 
 /// Answers at the `reply-to` address the ROUTER stamped on the request, under the request's
 /// `correlation-id`.
+#[derive(Clone)]
 struct ReplyToRequester;
 
 impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
@@ -98,14 +99,14 @@ fn app() -> impl App {
     // Each label is the key of the broker's server in the document.
     RustStream::new(AppInfo::new("worker", "0.1.0"))
         .with_broker_labeled("jobs", jobs(), |b| {
-            b.include(work).out_reply(ZmqQueuePublish);
+            b.include(work).out_reply(ZmqQueuePublish)
         })
         .with_broker_labeled("rpc", greeter(), |b| {
             b.include(greet)
                 .out_reply(ZmqRpcPublish)
                 .transform(ReplyToRequester)
                 .out_retry(ZmqRpcPublish)
-                .to("greeter.retry");
+                .to("greeter.retry")
         })
 }
 // --8<-- [end:app]

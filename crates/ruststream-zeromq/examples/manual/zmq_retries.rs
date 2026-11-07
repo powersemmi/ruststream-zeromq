@@ -50,7 +50,7 @@ fn app() -> impl App {
             // Five deliveries at most, the first one included; the copies return to this queue.
             b.include(subscriber("jobs", Work).build())
                 .max_attempts(nonzero!(5u32))
-                .out_retry(Publish);
+                .out_retry(Publish)
         },
     )
 }

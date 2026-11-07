@@ -16,7 +16,7 @@ The runtime first stops the subscriptions and lets the handlers in flight finish
 Then it shuts each broker down, and a subscription's socket closes as the runtime drops it.
 
 A publisher can outlive the broker: one a startup hook kept, one a sibling task took from [`RunningApp::publisher`](api:ruststream::runtime::RunningApp::publisher), or a clone of either.
-After shutdown, a publish through it returns `ZmqError::NotConnected` and sends nothing.
+After shutdown, a publish through it returns `ZmqError::NotConnected` with the message it did not send.
 An answer and a request after shutdown fail the same way.
 
 [Running in production](../../guides/production.md) covers what a service does at shutdown.

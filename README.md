@@ -59,12 +59,12 @@ with `ZmqError::Wire`. A broker or a publish policy names another layout with `.
 
 ```toml
 [dependencies]
-ruststream = { version = "0.7", features = ["macros", "json"] }
-ruststream-zeromq = "0.7"
+ruststream = { version = "0.8", features = ["macros", "json"] }
+ruststream-zeromq = "0.8"
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
-ruststream-zeromq = { version = "0.7", features = ["testing"] }
+ruststream-zeromq = { version = "0.8", features = ["testing"] }
 ```
 
 ## Write a service
@@ -95,9 +95,9 @@ fn app() -> impl App {
     let to_results = results.bind(Publish);
     RustStream::new(AppInfo::new("worker", "0.1.0"))
         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
-            b.include(handle).out_reply(to_results);
+            b.include(handle).out_reply(to_results)
         })
-        .with_broker(results, |_b| {})
+        .with_broker(results, |b| b)
 }
 ```
 

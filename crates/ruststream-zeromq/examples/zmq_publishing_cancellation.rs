@@ -63,9 +63,7 @@ fn app() -> impl App {
     RustStream::new(AppInfo::new("orders", "0.1.0"))
         .with_broker(
             ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
-            |b| {
-                b.include(price).out(DefaultSlot, quotes).build();
-            },
+            |b| b.include(price).out(DefaultSlot, quotes),
         )
         .register_broker(pricing)
 }

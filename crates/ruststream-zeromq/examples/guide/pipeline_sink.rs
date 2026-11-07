@@ -29,7 +29,7 @@ fn app() -> impl App {
         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5558")),
         |b| {
             // At most 32 results per call.
-            b.include(collect.batch(nonzero!(32)));
+            b.include(collect.batch(nonzero!(32)))
         },
     )
 }

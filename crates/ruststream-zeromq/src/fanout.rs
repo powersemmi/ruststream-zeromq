@@ -44,9 +44,7 @@ pub use self::ZmqFanoutPublish as Publish;
 ///     // The watcher binds and the publishers dial it, so a retry copy returns to its listener.
 ///     RustStream::new(AppInfo::new("watcher", "0.1.0")).with_broker(
 ///         ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")),
-///         |b| {
-///             b.include(handle);
-///         },
+///         |b| b.include(handle),
 ///     )
 /// }
 /// ```
@@ -75,7 +73,8 @@ use futures::lock::Mutex;
 use ruststream::asyncapi::Bindings;
 use ruststream::{
     AddressedCopies, Broker, BytesMut, ConnectedBroker, DefaultPublish, DescribeServer,
-    NamedCopies, OutgoingMessage, PairError, PublishPolicy, Publisher, ServerSpec, Subscribe, Take,
+    NamedCopies, OutgoingMessage, PairError, PublishMessageError, PublishOutcome, PublishPolicy,
+    Publisher, ServerSpec, Subscribe, Take,
 };
 use tokio::sync::OnceCell;
 use tokio::time::timeout;
@@ -133,9 +132,7 @@ const _: () = assert!(size_of::<Sender<PubSide>>() == size_of::<PubSide>());
 /// fn app() -> impl App {
 ///     RustStream::new(AppInfo::new("watcher", "0.1.0")).with_broker(
 ///         ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")),
-///         |b| {
-///             b.include(watch);
-///         },
+///         |b| b.include(watch),
 ///     )
 /// }
 /// ```
@@ -181,7 +178,7 @@ impl<Role: EndpointRole> ZmqFanout<Role> {
     ///     let to_prices = prices.bind(ZmqFanoutPublish);
     ///     RustStream::new(AppInfo::new("prices", "0.1.0"))
     ///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
-    ///             b.include(tick).out_reply(to_prices);
+    ///             b.include(tick).out_reply(to_prices)
     ///         })
     ///         .register_broker(prices)
     /// }
@@ -226,7 +223,7 @@ impl<Role, Env: Envelope> ZmqFanout<Role, Env> {
     /// fn app() -> impl App {
     ///     let ticks = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")).envelope(NoOp);
     ///     RustStream::new(AppInfo::new("recorder", "0.1.0")).with_broker(ticks, |b| {
-    ///         b.include(record);
+    ///         b.include(record)
     ///     })
     /// }
     /// ```
@@ -276,7 +273,7 @@ impl<Role, Env: Envelope> ZmqFanout<Role, Env> {
     ///     let events = ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556"))
     ///         .read_ahead(nonzero!(64_usize));
     ///     RustStream::new(AppInfo::new("archiver", "0.1.0")).with_broker(events, |b| {
-    ///         b.include(archive);
+    ///         b.include(archive)
     ///     })
     /// }
     /// ```
@@ -519,8 +516,9 @@ impl<Env: Envelope> Subscribe for ConnectedZmqFanout<Connect, Env> {
     /// takes nothing, so a copy published back to it is refused by the handshake. The
     /// subscription therefore addresses no copy, and every registration names where its copies
     /// go: `.out_retry(policy).to("name")` over a broker that reaches a consumer, or a transform
-    /// that names one per delivery. A registration that names neither is refused before the
-    /// subscription opens, and a `.build()` chain that names neither does not compile.
+    /// that names one per delivery. A mount that binds `.out_retry(policy)` and names no
+    /// destination does not compile; one that binds no retry slot is refused before the
+    /// subscription opens.
     type Copies = NamedCopies;
 
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
@@ -633,14 +631,41 @@ impl<Env: Envelope> Publisher for ZmqFanoutPublisher<Env> {
     // The socket guard intentionally spans the lazy attach and the send: the socket takes
     // &mut for every operation.
     #[allow(clippy::significant_drop_tightening)]
-    async fn publish(
+    async fn publish<'msg>(
         &self,
-        msg: OutgoingMessage<'_, BytesMut>,
+        msg: OutgoingMessage<'msg, BytesMut>,
         _options: Option<&Self::Options>,
-    ) -> Result<(), Self::Error> {
-        let lifecycle = self.cell.get().ok_or(ZmqError::NotConnected)?;
-        lifecycle.ensure_open()?;
-        // Framed before the socket is touched: a message that cannot be written costs no attach.
+    ) -> PublishOutcome<'msg, ZmqError, Take> {
+        let Some(lifecycle) = self.cell.get() else {
+            return Err(PublishMessageError::with_message(
+                ZmqError::NotConnected,
+                msg,
+            ));
+        };
+        if let Err(closed) = lifecycle.ensure_open() {
+            return Err(PublishMessageError::with_message(closed, msg));
+        }
+        // Checked here rather than by the type: whether one broker both subscribes and publishes is
+        // decided by the scopes a service mounts, and the peer at the far end is the deployment's,
+        // so the refusal comes before the handshake would give it. Checked on every publish, not
+        // only on the attach: a subscription that dials after the socket attached turns the
+        // publisher's peer into its own. One load of a set-once cell.
+        if let Some(subscription) = lifecycle.dialer() {
+            let refused = dials_the_sender(msg.name(), subscription, "PUB", "fan-out");
+            return Err(PublishMessageError::with_message(refused, msg));
+        }
+        let mut guard = self.socket.lock().await;
+        // A loop, because a subscription of this service that binds the endpoint may take back a
+        // socket that listened there between the attach and this lock; the next attach dials it.
+        while guard.is_none() {
+            drop(guard);
+            if let Err(refused) = self.attach(lifecycle).await {
+                return Err(PublishMessageError::with_message(refused, msg));
+            }
+            guard = self.socket.lock().await;
+        }
+        // Framed only once every refusal is behind it: the frames take the payload, and a refusal
+        // before them hands the message back whole.
         let (name, payload, headers) = msg.into_parts();
         let frames = envelope::write(
             &self.envelope,
@@ -649,29 +674,19 @@ impl<Env: Envelope> Publisher for ZmqFanoutPublisher<Env> {
             None,
             (name, &headers, payload.freeze()),
         )?;
-        // Checked here rather than by the type: whether one broker both subscribes and publishes is
-        // decided by the scopes a service mounts, and the peer at the far end is the deployment's,
-        // so the refusal comes before the handshake would give it. Checked on every publish, not
-        // only on the attach: a subscription that dials after the socket attached turns the
-        // publisher's peer into its own. One load of a set-once cell.
-        if let Some(subscription) = lifecycle.dialer() {
-            return Err(dials_the_sender(name, subscription, "PUB", "fan-out"));
-        }
-        let mut guard = self.socket.lock().await;
-        // A loop, because a subscription of this service that binds the endpoint may take back a
-        // socket that listened there between the attach and this lock; the next attach dials it.
-        while guard.is_none() {
-            drop(guard);
-            self.attach(lifecycle).await?;
-            guard = self.socket.lock().await;
-        }
         match guard.as_mut().expect("the loop leaves an attached socket") {
             // PUB never reports "no peers": an unmatched message is dropped by design, so the
             // retry helper only smooths transport-level failures.
-            Sender::Socket(PubSide::Remote(socket)) => send_with_retry(socket, name, frames).await,
-            Sender::Socket(PubSide::Loopback(socket)) => {
-                send_with_retry(socket, name, frames).await
-            }
+            Sender::Socket(PubSide::Remote(socket)) => send_with_retry(socket, name, frames)
+                .await
+                .map_err(|unsent| {
+                    envelope::hand_back(&self.envelope, Pattern::PubSub, name, headers, unsent)
+                }),
+            Sender::Socket(PubSide::Loopback(socket)) => send_with_retry(socket, name, frames)
+                .await
+                .map_err(|unsent| {
+                    envelope::hand_back(&self.envelope, Pattern::PubSub, name, headers, unsent)
+                }),
             #[cfg(feature = "testing")]
             Sender::InProcess { bus, local } => {
                 let pick = if *local {
@@ -811,7 +826,7 @@ async fn await_filter(socket: &mut XPubSocket, address: &str) -> Result<(), ZmqE
 ///     let to_records = records.bind(ZmqFanoutPublish);
 ///     RustStream::new(AppInfo::new("auditor", "0.1.0"))
 ///         .with_broker(ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")), |b| {
-///             b.include(audit).out_reply(to_records);
+///             b.include(audit).out_reply(to_records)
 ///         })
 ///         .register_broker(records)
 /// }
@@ -856,9 +871,9 @@ impl ZmqFanoutPublish {
     ///     let to_events = events.bind(ZmqFanoutPublish.envelope(Framed::new(JsonCodec)));
     ///     RustStream::new(AppInfo::new("orders", "0.1.0"))
     ///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
-    ///             b.include(place).out_reply(to_events);
+    ///             b.include(place).out_reply(to_events)
     ///         })
-    ///         .with_broker(events, |_b| {})
+    ///         .with_broker(events, |b| b)
     /// }
     /// ```
     pub const fn envelope<Env: Envelope>(self, envelope: Env) -> Enveloped<Self, Env> {

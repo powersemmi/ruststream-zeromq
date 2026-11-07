@@ -51,13 +51,13 @@ fn app() -> impl App {
                 b.include(work)
                     .out_reply(results)
                     .out_retry(copies)
-                    .to("jobs");
+                    .to("jobs")
             },
         )
         .with_broker_labeled("retries", retries, |b| {
-            b.include(work).out_reply(retried_results);
+            b.include(work).out_reply(retried_results)
         })
-        .with_broker_labeled("sink", sink, |_b| {})
+        .with_broker_labeled("sink", sink, |b| b)
 }
 // --8<-- [end:app]
 

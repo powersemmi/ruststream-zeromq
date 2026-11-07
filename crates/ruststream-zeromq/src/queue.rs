@@ -52,9 +52,9 @@ pub use self::ZmqQueuePublish as Publish;
 ///     let to_results = results.bind(Publish);
 ///     RustStream::new(AppInfo::new("worker", "0.1.0"))
 ///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
-///             b.include(handle).out_reply(to_results);
+///             b.include(handle).out_reply(to_results)
 ///         })
-///         .with_broker(results, |_b| {})
+///         .with_broker(results, |b| b)
 /// }
 /// ```
 pub mod prelude {
@@ -80,9 +80,10 @@ use futures::lock::Mutex;
 #[cfg(feature = "asyncapi")]
 use ruststream::asyncapi::Bindings;
 use ruststream::{
-    AddressedCopies, BatchSubscriber, Broker, BufferedSubscriber, BytesMut, ConnectedBroker,
-    DefaultPublish, DescribeServer, NamedCopies, OutgoingMessage, PairError, PublishPolicy,
-    Publisher, ServerSpec, Subscribe, Subscriber, Take,
+    AddressedCopies, BatchStream, BatchSubscriber, Broker, BufferedSubscriber, BytesMut,
+    ConnectedBroker, DefaultPublish, DescribeServer, NamedCopies, OutgoingMessage, PairError,
+    PublishMessageError, PublishOutcome, PublishPolicy, Publisher, ServerSpec, Subscribe,
+    Subscriber, Take,
 };
 use tokio::sync::OnceCell;
 use zeromq::prelude::*;
@@ -92,8 +93,8 @@ use zeromq::{PullSocket, PushSocket};
 use crate::bindings::{self, SocketPair};
 use crate::common::{
     BATCH_MAX_WAIT, DEFAULT_READ_AHEAD, DeliveryReceiver, DriverHandle, Lifecycle, Outbox,
-    OwnListener, Sender, SharedLifecycle, WireSubscriber, delivery_channel, dials_the_sender,
-    release, returns_to_subscription,
+    OwnListener, Sender, SharedLifecycle, Unsent, WireSubscriber, delivery_channel,
+    dials_the_sender, release, returns_to_subscription,
 };
 use crate::endpoint::{Bind, Connect, Endpoint, EndpointRole, ZmqEndpoint};
 use crate::envelope::{self, Envelope, Enveloped, Frames, Pattern};
@@ -146,7 +147,7 @@ const _: () = assert!(size_of::<Sender<Outbox<PushSocket>>>() == size_of::<Outbo
 ///         |b| {
 ///             b.include(handle)
 ///                 .max_attempts(nonzero!(5u32))
-///                 .out_retry(Publish);
+///                 .out_retry(Publish)
 ///         },
 ///     )
 /// }
@@ -185,11 +186,9 @@ const _: () = assert!(size_of::<Sender<Outbox<PushSocket>>>() == size_of::<Outbo
 ///             b.include(work)
 ///                 .max_attempts(nonzero!(5u32))
 ///                 .out_retry(copies)
-///                 .to("jobs");
+///                 .to("jobs")
 ///         })
-///         .with_broker(retries, |b| {
-///             b.include(work).max_attempts(nonzero!(5u32));
-///         })
+///         .with_broker(retries, |b| b.include(work).max_attempts(nonzero!(5u32)))
 /// }
 /// ```
 #[must_use]
@@ -227,9 +226,7 @@ impl<Role: EndpointRole> ZmqQueue<Role> {
     /// fn app() -> impl App {
     ///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
     ///         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
-    ///         |b| {
-    ///             b.include(work);
-    ///         },
+    ///         |b| b.include(work),
     ///     )
     /// }
     /// ```
@@ -271,9 +268,7 @@ impl<Role, Env: Envelope> ZmqQueue<Role, Env> {
     /// #[ruststream::app]
     /// fn app() -> impl App {
     ///     let jobs = ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")).envelope(NoOp);
-    ///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(jobs, |b| {
-    ///         b.include(work);
-    ///     })
+    ///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(jobs, |b| b.include(work))
     /// }
     /// ```
     pub fn envelope<Other: Envelope>(self, envelope: Other) -> ZmqQueue<Role, Other> {
@@ -318,7 +313,7 @@ impl<Role, Env: Envelope> ZmqQueue<Role, Env> {
     ///     let renders = ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555"))
     ///         .read_ahead(nonzero!(64_usize));
     ///     RustStream::new(AppInfo::new("renderer", "0.1.0")).with_broker(renders, |b| {
-    ///         b.include(render);
+    ///         b.include(render)
     ///     })
     /// }
     /// ```
@@ -553,8 +548,9 @@ impl<Env: Envelope> Subscribe for ConnectedZmqQueue<Connect, Env> {
     /// sends and takes nothing, so a copy published back to it is refused by the handshake. The
     /// subscription therefore addresses no copy, and every registration names where its copies
     /// go: `.out_retry(policy).to("name")` over a broker that reaches a consumer, or a transform
-    /// that names one per delivery. A registration that names neither is refused before the
-    /// subscription opens, and a `.build()` chain that names neither does not compile.
+    /// that names one per delivery. A mount that binds `.out_retry(policy)` and names no
+    /// destination does not compile; one that binds no retry slot is refused before the
+    /// subscription opens.
     type Copies = NamedCopies;
 
     async fn subscribe(&self, name: &str) -> Result<Self::Subscriber, Self::Error> {
@@ -592,9 +588,7 @@ impl<Env: Envelope> Subscribe for ConnectedZmqQueue<Connect, Env> {
 /// fn app() -> impl App {
 ///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
 ///         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
-///         |b| {
-///             b.include(drain.batch(nonzero!(32)));
-///         },
+///         |b| b.include(drain.batch(nonzero!(32))),
 ///     )
 /// }
 /// ```
@@ -646,7 +640,7 @@ impl<Env: Envelope> BatchSubscriber for ZmqSubscriber<Env> {
     fn batches(
         &mut self,
         size: NonZeroUsize,
-    ) -> impl Stream<Item = Result<Self::Batch, ZmqError>> + Send + '_ {
+    ) -> impl BatchStream<Self::Batch, Error = ZmqError> + Send + '_ {
         self.inner.batches(size)
     }
 }
@@ -702,9 +696,9 @@ impl<Env: Envelope> BatchSubscriber for ZmqSubscriber<Env> {
 ///     let to_results = results.bind(Publish);
 ///     RustStream::new(AppInfo::new("worker", "0.1.0"))
 ///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
-///             b.include(work).out_reply(to_results);
+///             b.include(work).out_reply(to_results)
 ///         })
-///         .with_broker(results, |_b| {})
+///         .with_broker(results, |b| b)
 /// }
 /// ```
 #[derive(Clone)]
@@ -793,7 +787,7 @@ impl Attached {
         name: &str,
         frames: zeromq::ZmqMessage,
         size: usize,
-    ) -> Result<(), ZmqError> {
+    ) -> Result<(), Unsent> {
         match &mut self.socket {
             Sender::Socket(outbox) => {
                 let frames = self.window.admit(frames, size).await;
@@ -867,37 +861,37 @@ impl<Env: Envelope> Publisher for ZmqQueuePublisher<Env> {
     // The socket guard intentionally spans the lazy attach and the send: the socket takes
     // &mut for every operation.
     #[allow(clippy::significant_drop_tightening)]
-    async fn publish(
+    async fn publish<'msg>(
         &self,
-        msg: OutgoingMessage<'_, BytesMut>,
+        msg: OutgoingMessage<'msg, BytesMut>,
         _options: Option<&Self::Options>,
-    ) -> Result<(), Self::Error> {
-        let lifecycle = self.cell.get().ok_or(ZmqError::NotConnected)?;
-        lifecycle.ensure_open()?;
-        // Framed before the socket is touched: a message that cannot be written costs no attach.
-        let (name, payload, headers) = msg.into_parts();
-        let size = payload.len();
-        let frames = envelope::write(
-            &self.envelope,
-            Pattern::PushPull,
-            name,
-            None,
-            (name, &headers, payload.freeze()),
-        )?;
+    ) -> PublishOutcome<'msg, ZmqError, Take> {
+        let Some(lifecycle) = self.cell.get() else {
+            return Err(PublishMessageError::with_message(
+                ZmqError::NotConnected,
+                msg,
+            ));
+        };
+        if let Err(closed) = lifecycle.ensure_open() {
+            return Err(PublishMessageError::with_message(closed, msg));
+        }
         // Checked here rather than by the type: whether one broker both subscribes and publishes is
         // decided by the scopes a service mounts, and the peer at the far end is the deployment's,
         // so the refusal comes before the handshake would give it. Checked on every publish, not
         // only on the attach: a subscription that dials after the socket attached turns the
         // publisher's peer into its own. One load of a set-once cell.
         if let Some(subscription) = lifecycle.dialer() {
-            return Err(dials_the_sender(name, subscription, "PUSH", "queue"));
+            let refused = dials_the_sender(msg.name(), subscription, "PUSH", "queue");
+            return Err(PublishMessageError::with_message(refused, msg));
         }
         let mut push = self.push.lock().await;
         // A loop, because a subscription of this service that binds the endpoint may take back a
         // socket that listened there between the attach and this lock; the next attach dials it.
         while push.is_none() {
             drop(push);
-            self.attach(lifecycle).await?;
+            if let Err(refused) = self.attach(lifecycle).await {
+                return Err(PublishMessageError::with_message(refused, msg));
+            }
             push = self.push.lock().await;
         }
         let attached = push.as_mut().expect("the loop leaves an attached socket");
@@ -907,10 +901,22 @@ impl<Env: Envelope> Publisher for ZmqQueuePublisher<Env> {
         // before the first publish sees both. A socket that dials out or listens carries no name
         // and skips it.
         if let Some(subscription) = attached.local.as_deref()
-            && subscription != name
+            && subscription != msg.name()
         {
-            return Err(returns_to_subscription(name, subscription));
+            let refused = returns_to_subscription(msg.name(), subscription);
+            return Err(PublishMessageError::with_message(refused, msg));
         }
+        // Framed only once every refusal is behind it: the frames take the payload, and a refusal
+        // before them hands the message back whole.
+        let (name, payload, headers) = msg.into_parts();
+        let size = payload.len();
+        let frames = envelope::write(
+            &self.envelope,
+            Pattern::PushPull,
+            name,
+            None,
+            (name, &headers, payload.freeze()),
+        )?;
         let dials = attached.dials;
         let sent = attached.send(&self.envelope, name, frames, size).await;
         // A send fails on a dialed socket when its peer is gone: the connection broke, or no
@@ -920,7 +926,9 @@ impl<Env: Envelope> Publisher for ZmqQueuePublisher<Env> {
         if sent.is_err() && dials {
             *push = None;
         }
-        sent
+        sent.map_err(|unsent| {
+            envelope::hand_back(&self.envelope, Pattern::PushPull, name, headers, unsent)
+        })
     }
 }
 
@@ -967,7 +975,7 @@ impl<Env: Envelope> Publisher for ZmqQueuePublisher<Env> {
 ///     let to_pickers = pickers.bind(ZmqQueuePublish);
 ///     RustStream::new(AppInfo::new("splitter", "0.1.0"))
 ///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
-///             b.include(split).out(DefaultSlot, to_pickers).build();
+///             b.include(split).out(DefaultSlot, to_pickers)
 ///         })
 ///         .register_broker(pickers)
 /// }
@@ -1011,9 +1019,9 @@ impl ZmqQueuePublish {
     ///     let to_results = results.bind(Publish.envelope(NoOp));
     ///     RustStream::new(AppInfo::new("worker", "0.1.0"))
     ///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
-    ///             b.include(work).out_reply(to_results);
+    ///             b.include(work).out_reply(to_results)
     ///         })
-    ///         .with_broker(results, |_b| {})
+    ///         .with_broker(results, |b| b)
     /// }
     /// ```
     pub const fn envelope<Env: Envelope>(self, envelope: Env) -> Enveloped<Self, Env> {
@@ -1092,9 +1100,42 @@ impl<Role: EndpointRole, Env: Envelope> DefaultPublish for ConnectedZmqQueue<Rol
 
 #[cfg(test)]
 mod tests {
-    use ruststream::nonzero;
+    use ruststream::{HeaderMap, nonzero};
 
     use super::*;
+
+    /// A PUSH socket with no peer hands the message back, and once the retry window is spent the
+    /// refusal hands it on to the caller whole: the destination, the payload and the headers it
+    /// was published with.
+    #[tokio::test(start_paused = true)]
+    async fn a_publish_no_peer_took_comes_back_whole() {
+        let connected = ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"))
+            .connect()
+            .await
+            .expect("connects");
+        let mut headers = HeaderMap::new();
+        headers.insert("trace", "7");
+
+        let refused = connected
+            .publisher()
+            .publish(
+                OutgoingMessage::produced("jobs", BytesMut::from(&b"{\"id\":7}"[..]))
+                    .with_headers(headers.clone()),
+                None,
+            )
+            .await
+            .expect_err("no peer ever attaches");
+
+        assert!(
+            refused.error().to_string().contains("no connected peer"),
+            "{}",
+            refused.error()
+        );
+        let unsent = refused.into_message().expect("the message comes back");
+        assert_eq!(unsent.name(), "jobs");
+        assert_eq!(*unsent.payload(), b"{\"id\":7}"[..]);
+        assert_eq!(unsent.headers(), &headers);
+    }
 
     #[tokio::test]
     async fn clones_sharing_a_lifecycle_keep_their_own_read_ahead() {

@@ -64,10 +64,10 @@ fn app() -> impl App {
             ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
             |b| {
                 b.include(subscriber("jobs", Work).reply().build())
-                    .out_reply(announce);
+                    .out_reply(announce)
             },
         )
-        .with_broker(events, |_b| {})
+        .with_broker(events, |b| b)
 }
 
 fn main() -> ExitCode {

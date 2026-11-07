@@ -9,9 +9,9 @@ import TabItem from '@theme/TabItem';
 
 # Dead letters
 
-[`dead_letter(name)`](api:ruststream::runtime::Mounting::dead_letter) names where a spent delivery goes; on ZeroMQ that is a publisher on another endpoint, because a name on the own one stays home.
+[`dead_letter(name)`](api:ruststream::runtime::RouterWith::dead_letter) names where a spent delivery goes; on ZeroMQ that is a publisher on another endpoint, because a name on the own one stays home.
 
-When a [retry](./retries.md) would go past the cap of [`max_attempts`](api:ruststream::runtime::Mounting::max_attempts), the runtime publishes the delivery under the dead-letter name instead, payload and headers as they arrived.
+When a [retry](./retries.md) would go past the cap of [`max_attempts`](api:ruststream::runtime::RouterWith::max_attempts), the runtime publishes the delivery under the dead-letter name instead, payload and headers as they arrived.
 A mount with a dead-letter name and no cap sends every failed delivery there at once.
 A cap with no dead-letter name drops the spent delivery with a warning naming the subscription.
 

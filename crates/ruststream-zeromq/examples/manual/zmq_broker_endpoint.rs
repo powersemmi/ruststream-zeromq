@@ -37,7 +37,7 @@ fn app() -> impl App {
     RustStream::new(AppInfo::new("worker", "0.1.0"))
         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("ipc:///tmp/jobs")), |b| {
             b.include(subscriber("jobs", Work).reply().build())
-                .out_reply(results);
+                .out_reply(results)
         })
         .register_broker(collector)
 }
@@ -110,9 +110,7 @@ mod tests {
     async fn another_scheme_is_refused_naming_the_address() {
         let app = RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
             ZmqQueue::new(ZmqEndpoint::bind("udp://0.0.0.0:5555")),
-            |b| {
-                b.include(subscriber("jobs", Work).reply().build());
-            },
+            |b| b.include(subscriber("jobs", Work).reply().build()),
         );
 
         let Err(refused) = TestApp::start(app).await else {
