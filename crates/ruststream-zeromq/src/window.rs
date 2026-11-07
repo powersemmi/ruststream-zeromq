@@ -13,7 +13,10 @@
 //! drops the message once it has written it or lost its peer, which leaves the anchor the only
 //! holder of its buffer, and the publisher reads that off the buffer's reference count. A PUB
 //! socket hands each subscriber a copy that shares the frames, so the anchor is released once the
-//! last subscriber's copy has left. The
+//! last subscriber's copy has left. A mark reaches only the peers that receive its message: a
+//! PUSH socket deals messages to its peers in turn and a PUB socket sends each to the subscribers
+//! whose filters match, so with several peers a slow one that the marks miss is held only by the
+//! client's own queue. The
 //! anchor is the first small frame of the message (the name, in the default layout) and is kept
 //! from window to window while that frame stays the same, so a mark allocates and copies nothing.
 //! A message without a small frame is marked by its last frame, which costs the one allocation

@@ -11,7 +11,8 @@ import TabItem from '@theme/TabItem';
 
 `shutdown` closes the connected form at once; a publisher handed out earlier reports [`ZmqError::NotConnected`](./errors.md) and never sends.
 
-The crate keeps no queue of its own, so the broker has nothing to flush and its shutdown returns at once.
+The crate keeps no queue of its own, and the broker's shutdown returns at once.
+The client keeps what a publisher sent in a queue per peer until its task writes it out, so a message still there when the process exits is lost: what a slow peer had not yet taken.
 The runtime first stops the subscriptions and lets the handlers in flight finish.
 Then it shuts each broker down, and a subscription's socket closes as the runtime drops it.
 

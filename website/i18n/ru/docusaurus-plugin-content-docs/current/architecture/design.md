@@ -36,7 +36,7 @@ export const words = {
 
 <Diagram name="design" words={words} />
 
-Крейт реализует трейты брокера из ядра поверх [`zeromq`](https://docs.rs/zeromq/0.6.0/zeromq/),
+Крейт реализует трейты брокера из ядра поверх [`zeromq`](https://docs.rs/zeromq/0.7.0/zeromq/),
 клиента ZeroMQ, написанного на Rust. Рантайм над ним один для всех брокеров. Всё, что относится к
 ZeroMQ, лежит в этом крейте: [три брокера](../components/broker/index.md), по одному на паттерн
 сокетов, [раскладка кадров](zeromq/frames.md), [смысл ack](../components/settlement/index.md) и

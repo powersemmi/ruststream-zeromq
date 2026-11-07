@@ -36,7 +36,7 @@ socket per subscription and per publisher, and no server.
 
 <Diagram name="design" words={words} />
 
-The crate implements the core's broker traits over [`zeromq`](https://docs.rs/zeromq/0.6.0/zeromq/),
+The crate implements the core's broker traits over [`zeromq`](https://docs.rs/zeromq/0.7.0/zeromq/),
 a ZeroMQ client written in Rust. The runtime above it is the same for every broker. Everything
 ZeroMQ-specific is in this crate: [three brokers](../components/broker/index.md), one per socket
 pattern, [the frame layout](zeromq/frames.md), [what an ack means](../components/settlement/index.md)
