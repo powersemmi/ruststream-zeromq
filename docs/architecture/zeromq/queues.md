@@ -1,7 +1,7 @@
 ---
 title: Queues
 sidebar_position: 2
-description: "The zeromq client queues up to 100,000 messages per peer, and a send ends once its message is queued; the crate's publishers hold themselves back long before that."
+description: "The zeromq client queues up to 100,000 messages per peer, and a send ends once its message is queued; the crate's publishers wait long before that."
 ---
 
 import {Diagram} from '@site/src/components/Diagrams';
