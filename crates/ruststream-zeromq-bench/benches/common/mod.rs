@@ -62,15 +62,19 @@ use ruststream::runtime::{
     RustStream,
 };
 use ruststream::{Broker, ConnectedBroker, OutgoingMessage, Publisher};
-use ruststream_zeromq::{Connect, ConnectedZmqQueue};
-use ruststream_zeromq::{ZmqEndpoint, ZmqQueue, ZmqQueuePublisher, ZmqRpc};
+use ruststream_zeromq::{Connect, ConnectedZmqFanout, ConnectedZmqQueue};
+use ruststream_zeromq::{
+    ZmqEndpoint, ZmqFanout, ZmqFanoutPublisher, ZmqQueue, ZmqQueuePublisher, ZmqRpc,
+};
 use serde::Deserialize;
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::{Notify, oneshot};
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 use zeromq::prelude::*;
 use zeromq::util::PeerIdentity;
-use zeromq::{DealerSocket, PullSocket, PushSocket, SocketOptions, ZmqMessage as WireMessage};
+use zeromq::{
+    DealerSocket, PullSocket, PushSocket, SocketOptions, SubSocket, ZmqMessage as WireMessage,
+};
 
 // A benchmark measures what ships. The framework's harness feature compiles test hooks into the
 // dispatch path, so a number taken with it on is not the service a user deploys.
@@ -642,4 +646,117 @@ pub fn publish_and_drain(run: Publishing) {
     runtime
         .block_on(connected.shutdown())
         .expect("the queue shuts down");
+}
+
+/// The name the setup's publishes carry, which the fan-out peer reads past.
+const PROBE: &str = "probe";
+
+/// A fan-out publisher that dials a SUB peer on the loopback, and the peer's thread reading what it
+/// publishes.
+pub struct FanningOut {
+    runtime: Runtime,
+    connected: ConnectedZmqFanout<Connect>,
+    publisher: ZmqFanoutPublisher,
+    peer: JoinHandle<()>,
+    read: oneshot::Receiver<()>,
+    messages: usize,
+}
+
+/// A publisher attached to a subscribed peer, which reads `messages` publishes after the setup's.
+/// A PUB socket drops what it sends before the peer's filter has arrived, so the setup publishes
+/// probes until the peer has read one; the region is the publish path alone.
+pub fn fanning_out(messages: usize) -> FanningOut {
+    let address = loopback();
+    let (bound_tx, bound) = sync_channel(1);
+    let (subscribed_tx, subscribed) = sync_channel(1);
+    let (read_tx, read) = oneshot::channel();
+    let bind = address.clone();
+    let peer = thread::spawn(move || {
+        runtime().block_on(async move {
+            let mut socket = SubSocket::new();
+            socket.subscribe("").await.expect("the peer subscribes");
+            socket.bind(&bind).await.expect("the peer binds");
+            bound_tx.send(()).expect("the benchmark waits for the bind");
+            let mut orders = 0;
+            while orders < messages {
+                let message = timeout(PEER_WAIT, socket.recv())
+                    .await
+                    .expect("the publisher sends every message")
+                    .expect("a message arrives whole");
+                if message.get(0).is_some_and(|name| name == PROBE) {
+                    let _ = subscribed_tx.try_send(());
+                } else {
+                    orders += 1;
+                }
+            }
+            let _ = read_tx.send(());
+        });
+    });
+    bound
+        .recv_timeout(PEER_WAIT)
+        .expect("the peer binds its endpoint");
+    let runtime = runtime();
+    let body = json_body();
+    let (connected, publisher) = runtime.block_on(async {
+        let connected = ZmqFanout::new(ZmqEndpoint::connect(address))
+            .connect()
+            .await
+            .expect("the fan-out connects");
+        let publisher = connected.publisher();
+        // The socket's own tasks run only while this runtime is driven, so the setup waits for the
+        // peer's filter by sleeping on the runtime rather than by blocking the thread.
+        loop {
+            publisher
+                .publish(
+                    OutgoingMessage::produced(PROBE, BytesMut::from(&body[..])),
+                    None,
+                )
+                .await
+                .expect("a probe leaves");
+            sleep(PROBE_EVERY).await;
+            if subscribed.try_recv().is_ok() {
+                break;
+            }
+        }
+        (connected, publisher)
+    });
+    FanningOut {
+        runtime,
+        connected,
+        publisher,
+        peer,
+        read,
+        messages,
+    }
+}
+
+/// How long the setup waits for the peer to read a probe before it sends the next one.
+const PROBE_EVERY: Duration = Duration::from_millis(10);
+
+/// Publishes every message to the subscribed peer, and waits for the peer to read them all.
+pub fn fan_out_and_drain(run: FanningOut) {
+    let FanningOut {
+        runtime,
+        connected,
+        publisher,
+        peer,
+        read,
+        messages,
+    } = run;
+    let body = json_body();
+    measure(|| {
+        runtime.block_on(async {
+            for _ in 0..messages {
+                publisher
+                    .publish(order(&body), None)
+                    .await
+                    .expect("the socket takes the message");
+            }
+            read.await.expect("the peer reads every message");
+        });
+    });
+    peer.join().expect("the peer reads every message");
+    runtime
+        .block_on(connected.shutdown())
+        .expect("the fan-out shuts down");
 }

@@ -6,7 +6,7 @@ export PATH := env("HOME") + "/.cargo/bin:" + env("HOME") + "/.local/bin:" + env
 # The scenarios that count instructions and allocations, one benchmark file each. Every run holds
 # them to the allocation floor each declares, and a run against a baseline to the instruction
 # limit too.
-code_benches := "--bench consume --bench reply --bench batch --bench publish"
+code_benches := "--bench consume --bench reply --bench batch --bench publish --bench fanout"
 
 default: check
 

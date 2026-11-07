@@ -59,3 +59,7 @@ harness = false
 [[bench]]
 name = "publish"
 harness = false
+
+[[bench]]
+name = "fanout"
+harness = false
