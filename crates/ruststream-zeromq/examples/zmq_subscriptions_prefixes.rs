@@ -21,9 +21,7 @@ async fn audit(event: &OrderEvent) -> HandlerOutcome {
 fn app() -> impl App {
     RustStream::new(AppInfo::new("auditor", "0.1.0")).with_broker(
         ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")),
-        |b| {
-            b.include(audit);
-        },
+        |b| b.include(audit),
     )
 }
 // --8<-- [end:prefixes]

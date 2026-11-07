@@ -89,7 +89,7 @@ mod sealed {
 ///     let to_results = results.bind(Publish);
 ///     RustStream::new(AppInfo::new("worker", "0.1.0"))
 ///         .with_broker(queue(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
-///             b.include(work).out_reply(to_results);
+///             b.include(work).out_reply(to_results)
 ///         })
 ///         .register_broker(results)
 /// }
@@ -135,9 +135,7 @@ pub trait EndpointRole: sealed::Sealed + Send + Sync + 'static {}
 /// fn app() -> impl App {
 ///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
 ///         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
-///         |b| {
-///             b.include_router(routes());
-///         },
+///         |b| b.include_router(routes()),
 ///     )
 /// }
 /// ```
@@ -182,7 +180,7 @@ pub struct Bind;
 ///     let results = collector.bind(Publish);
 ///     RustStream::new(AppInfo::new("worker", "0.1.0"))
 ///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
-///             b.include(work).out_reply(results);
+///             b.include(work).out_reply(results)
 ///         })
 ///         .register_broker(collector)
 /// }
@@ -270,7 +268,7 @@ impl EndpointRole for Connect {}
 ///     let results = collector.bind(Publish);
 ///     RustStream::new(AppInfo::new("worker", "0.1.0"))
 ///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("ipc:///tmp/jobs")), |b| {
-///             b.include(work).out_reply(results);
+///             b.include(work).out_reply(results)
 ///         })
 ///         .register_broker(collector)
 /// }
@@ -308,9 +306,7 @@ impl ZmqEndpoint<Bind> {
     /// fn app() -> impl App {
     ///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
     ///         ZmqQueue::new(ZmqEndpoint::bind("ipc:///tmp/jobs")),
-    ///         |b| {
-    ///             b.include(work);
-    ///         },
+    ///         |b| b.include(work),
     ///     )
     /// }
     /// ```
@@ -352,7 +348,7 @@ impl ZmqEndpoint<Connect> {
     ///     let results = collector.bind(Publish);
     ///     RustStream::new(AppInfo::new("worker", "0.1.0"))
     ///         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")), |b| {
-    ///             b.include(work).out_reply(results);
+    ///             b.include(work).out_reply(results)
     ///         })
     ///         .register_broker(collector)
     /// }
@@ -401,9 +397,7 @@ impl<Role> ZmqEndpoint<Role> {
     ///     let endpoint = ZmqEndpoint::bind("tcp://0.0.0.0:5555");
     ///     tracing::info!(address = endpoint.address(), "worker listening");
     ///     RustStream::new(AppInfo::new("worker", "0.1.0"))
-    ///         .with_broker(ZmqQueue::new(endpoint), |b| {
-    ///             b.include(work);
-    ///         })
+    ///         .with_broker(ZmqQueue::new(endpoint), |b| b.include(work))
     /// }
     /// ```
     #[must_use]

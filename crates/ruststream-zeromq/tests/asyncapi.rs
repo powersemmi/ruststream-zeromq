@@ -41,6 +41,7 @@ async fn greet(job: &Job) -> Done {
 }
 
 /// Answers the peer that asked, which is what puts a reply address on the operation.
+#[derive(Clone)]
 struct ReplyToRequester;
 
 impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
@@ -104,9 +105,7 @@ fn a_queue_service_reports_its_endpoint_and_its_socket_pair() {
     let app = RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker_labeled(
         "jobs",
         ZmqQueue::new(ZmqEndpoint::connect("tcp://worker:5555")),
-        |b| {
-            b.include(work).out_reply(ZmqQueuePublish);
-        },
+        |b| b.include(work).out_reply(ZmqQueuePublish),
     );
 
     assert_excerpt(&app, QUEUE_DOCUMENT);
@@ -118,9 +117,7 @@ fn a_fan_out_service_reports_its_own_socket_pair() {
     let app = RustStream::new(AppInfo::new("watcher", "0.1.0")).with_broker_labeled(
         "events",
         ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")),
-        |b| {
-            b.include(watch).out_reply(ZmqFanoutPublish);
-        },
+        |b| b.include(watch).out_reply(ZmqFanoutPublish),
     );
 
     assert_excerpt(
@@ -162,7 +159,7 @@ fn a_responder_reports_where_a_client_reads_the_reply_address() {
         |b| {
             b.include(greet)
                 .out_reply(ZmqRpcPublish)
-                .transform(ReplyToRequester);
+                .transform(ReplyToRequester)
         },
     );
 
@@ -179,7 +176,7 @@ fn a_responder_channel_reports_no_name_frame() {
         |b| {
             b.include(greet)
                 .out_reply(ZmqRpcPublish)
-                .transform(ReplyToRequester);
+                .transform(ReplyToRequester)
         },
     );
 
@@ -199,9 +196,7 @@ fn an_ipc_endpoint_is_reported_as_a_socket_path() {
     let app = RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker_labeled(
         "jobs",
         ZmqQueue::new(ZmqEndpoint::bind("ipc:///tmp/orders")),
-        |b| {
-            b.include(work).out_reply(ZmqQueuePublish);
-        },
+        |b| b.include(work).out_reply(ZmqQueuePublish),
     );
 
     assert_excerpt(

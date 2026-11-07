@@ -45,12 +45,12 @@ fn app() -> impl App {
                 b.include(handle)
                     .max_attempts(nonzero!(3u32))
                     .out_retry(copies)
-                    .to("jobs");
+                    .to("jobs")
             },
         )
         .with_broker(retries, |b| {
             // A bound queue takes its own copies back, so this mount names no destination.
-            b.include(handle).max_attempts(nonzero!(3u32));
+            b.include(handle).max_attempts(nonzero!(3u32))
         })
 }
 // --8<-- [end:app]

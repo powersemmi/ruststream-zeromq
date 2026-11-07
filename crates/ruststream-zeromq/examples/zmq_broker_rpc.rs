@@ -32,7 +32,7 @@ fn app() -> impl App {
                 .out_reply(Publish)
                 .transform(ReplyToRequester)
                 .out_retry(Publish)
-                .to("greeter.retry");
+                .to("greeter.retry")
         },
     )
 }
@@ -40,6 +40,7 @@ fn app() -> impl App {
 
 /// Answers at the `reply-to` address the ROUTER stamped on the request, under the request's
 /// `correlation-id`.
+#[derive(Clone)]
 struct ReplyToRequester;
 
 impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
@@ -112,7 +113,7 @@ mod tests {
             |b| {
                 b.include(greet)
                     .out_reply(Publish)
-                    .transform(ReplyToRequester);
+                    .transform(ReplyToRequester)
             },
         );
 

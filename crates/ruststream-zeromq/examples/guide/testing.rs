@@ -6,6 +6,9 @@
 //! cargo test --example guide_testing --features testing
 //! ```
 
+// A test drives the app on its own task; the app's cold path carries no Send.
+#![allow(clippy::future_not_send)]
+
 use std::time::Duration;
 
 use ruststream_zeromq::prelude::*;
@@ -45,9 +48,9 @@ fn service(jobs: &str, events: &str) -> RustStream {
         .with_broker(ZmqQueue::new(ZmqEndpoint::bind(jobs)), |b| {
             b.include(work)
                 .max_attempts(nonzero!(3u32))
-                .out_reply(announce);
+                .out_reply(announce)
         })
-        .with_broker(events, |_b| {})
+        .with_broker(events, |b| b)
 }
 
 #[ruststream::app]

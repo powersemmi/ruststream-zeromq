@@ -33,9 +33,7 @@ fn app() -> impl App {
     // The order services dial this endpoint and publish `orders.created`, `orders.shipped`, ...
     RustStream::new(AppInfo::new("auditor", "0.1.0")).with_broker(
         ZmqFanout::new(ZmqEndpoint::bind("tcp://0.0.0.0:5556")),
-        |b| {
-            b.include(subscriber("orders", Audit).build());
-        },
+        |b| b.include(subscriber("orders", Audit).build()),
     )
 }
 // --8<-- [end:app]

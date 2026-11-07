@@ -34,6 +34,7 @@ struct Confirmation {
 /// Addresses an answer to the peer that asked, as the crate's request-reply example does: the
 /// responder stamps a `reply-to` address on every request, and the transform names it as the
 /// destination.
+#[derive(Clone)]
 struct ReplyToRequester;
 
 impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {
@@ -70,7 +71,7 @@ fn app(messages: usize) -> Pending {
             .out_reply(ZmqRpcPublish)
             .transform(ReplyToRequester)
             .out_retry(ZmqRpcPublish)
-            .to("orders.retry");
+            .to("orders.retry")
     })
 }
 

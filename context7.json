@@ -16,6 +16,7 @@
   ],
   "rules": [
     "Import the pattern's prelude in a routes file (`ruststream_zeromq::queue::prelude::*`, `fanout::prelude::*` or `rpc::prelude::*`) for its policy as `Publish`, and `ruststream_zeromq::prelude::*` to mount several patterns (Prelude page).",
+    "Return the mount chain from the `with_broker` closure, `|b| b.include(work).out_reply(token)`, with `after_startup(..)` and `include_router(..)` as steps before the `include`s and `|b| b` for a broker that only publishes (Broker page).",
     "Pick the broker by shape (Broker page): `ZmqQueue` (PUSH/PULL) for competing consumers, `ZmqFanout` (PUB/SUB) for broadcast filtered by name prefix, `ZmqRpc` (DEALER/ROUTER) for request and reply.",
     "Declare a subscription by its name, `#[subscriber(\"jobs\")]`, which is frame 0 of every message, and set `read_ahead` on the broker (Subscriptions page).",
     "State the side on the endpoint with `ZmqEndpoint::bind(addr)` or `ZmqEndpoint::connect(addr)` on `tcp://` or `ipc://`, and write it as a type, `ZmqQueue<Connect>`, only where a mount site names one (ZmqEndpoint page).",
@@ -24,7 +25,7 @@
     "Bind the retry publisher with `.out_retry(Publish)` on a `ZmqQueue` or `ZmqFanout` this service binds, and with `.out_retry(token).to(\"name\")` on one it dials and on every `ZmqRpc` responder (out_retry page).",
     "Park spent deliveries with `.dead_letter(name)` through a retry publisher on another endpoint, because a name on the subscription's own endpoint comes back to it (Dead letters page).",
     "Send a `ZmqQueue` worker's replies through a queue on an endpoint of its own with `bindable()`, `.bind(Publish)` and `.out_reply(token)`, because the bound queue's publisher refuses any other name (Replies page).",
-    "Answer on `ZmqRpc` with a reply handler whose type names no destination, a `reply(\"..\")` fallback, and a transform of your own declaring `Destination = Names` that reads `reply-to` (Responders page).",
+    "Answer on `ZmqRpc` with a reply handler whose type names no destination, a `reply(\"..\")` fallback, and a `Clone` transform of your own declaring `Destination = Names` that reads `reply-to` (Responders page).",
     "Ask a `ZmqRpc` service from a handler bounded `Out<impl RequestReply>`, and give up through the request's timeout rather than a `select!` arm (Request-reply page).",
     "Batch a `ZmqQueue` or `ZmqFanout` subscription with `.batch(n)`, which closes a batch at `n` deliveries or 20 ms after its first, and answer `ZmqRpc` requests one at a time (Batches page).",
     "Name the frame layout with `.envelope(..)` on the broker, or on a publish policy for its own publishes: `Frames` (the default three frames), `Framed::new(codec)` for one codec document, `NoOp` for the payload alone, which refuses a publish that carries a header (Envelopes page).",

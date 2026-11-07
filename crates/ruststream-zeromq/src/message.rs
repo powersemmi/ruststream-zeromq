@@ -5,7 +5,7 @@ use std::future::{Future, ready};
 use std::sync::OnceLock;
 
 use bytes::Bytes;
-use ruststream::{AckError, HeaderMap, IncomingMessage, Str};
+use ruststream::{AckError, HeaderMap, IncomingMessage, Settle, Str};
 
 use crate::envelope::{Envelope, Frames, Opened};
 #[cfg(feature = "testing")]
@@ -109,7 +109,9 @@ impl<Env: Envelope> IncomingMessage for ZmqMessage<Env> {
     fn headers(&self) -> &HeaderMap {
         self.headers.get_or_init(|| self.read_headers())
     }
+}
 
+impl<Env: Envelope> Settle for ZmqMessage<Env> {
     fn ack(self) -> impl Future<Output = Result<(), AckError>> {
         ready(Err(AckError::Unsupported))
     }
@@ -153,9 +155,7 @@ impl<Env: Envelope> IncomingMessage for ZmqMessage<Env> {
 /// fn app() -> impl App {
 ///     RustStream::new(AppInfo::new("greeter", "0.1.0")).with_broker(
 ///         ZmqRpc::new(ZmqEndpoint::bind("tcp://0.0.0.0:5557")),
-///         |b| {
-///             b.include(listen).out_retry(Publish).to("greeter.retry");
-///         },
+///         |b| b.include(listen).out_retry(Publish).to("greeter.retry"),
 ///     )
 /// }
 /// ```
@@ -205,7 +205,9 @@ impl<Env: Envelope> IncomingMessage for ZmqRequest<Env> {
             headers.insert(Str::from_static(REPLY_TO_HEADER), reply_address(&self.peer));
         })
     }
+}
 
+impl<Env: Envelope> Settle for ZmqRequest<Env> {
     fn ack(self) -> impl Future<Output = Result<(), AckError>> {
         ready(Err(AckError::Unsupported))
     }

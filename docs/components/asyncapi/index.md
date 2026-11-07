@@ -27,7 +27,7 @@ The binary `#[ruststream::app]` writes prints the document with `asyncapi gen`.
 The dependency line:
 
 ```toml
-ruststream-zeromq = { version = "0.7", features = ["asyncapi"] }
+ruststream-zeromq = { version = "0.8", features = ["asyncapi"] }
 ```
 
 The service registers each broker under a label, the key of its server in the document.

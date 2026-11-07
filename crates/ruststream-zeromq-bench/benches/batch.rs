@@ -30,9 +30,7 @@ async fn consume(orders: &[Order], ctx: &mut Context<'_, (), Latch>) -> HandlerO
 }
 
 fn app(messages: usize) -> Pending {
-    common::queue(messages, |b| {
-        b.include(consume.batch(nonzero!(64)));
-    })
+    common::queue(messages, |b| b.include(consume.batch(nonzero!(64))))
 }
 
 // Three runs counted 10722 blocks over 2000 deliveries every time, and 5662 to 5663 over 1000:

@@ -15,7 +15,7 @@ use futures::StreamExt;
 use ruststream::prelude::*;
 // The two `Outgoing` names live in different namespaces: the prelude's is the derive on a reply
 // type, and the value a publish transform rewrites is the type `ruststream::runtime::Outgoing`.
-use ruststream::runtime::{Bound, BrokerScope, Outgoing, PublishContext};
+use ruststream::runtime::{Bindable, Bound, Outgoing, PublishContext};
 use ruststream::testing::{InProcess, TestApp};
 use ruststream::{
     Broker, ConnectedBroker, IncomingMessage, OutgoingMessage, Subscribe, Subscriber,
@@ -65,24 +65,22 @@ fn bound_queue() -> ZmqQueue {
     ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"))
 }
 
-/// The worker and the queue its results leave through: two endpoints, because on PUSH/PULL a
-/// second kind of message needs an endpoint of its own.
-fn worker_and_results<Def>(def: Def) -> RustStream
-where
-    Def: FnOnce(&mut BrokerScope<ZmqQueue>, Bound<ZmqQueue, ZmqQueuePublish>),
-{
+/// The queue the results leave through, and the publisher bound to it: on PUSH/PULL a second kind
+/// of message needs an endpoint of its own.
+fn results_queue() -> (Bindable<ZmqQueue>, Bound<ZmqQueue, ZmqQueuePublish>) {
     let results = bound_queue().bindable();
     let to_results = results.bind(ZmqQueuePublish);
-    RustStream::new(AppInfo::new("zmq-reply", "0.0.0"))
-        .with_broker_labeled("worker", bound_queue(), |b| def(b, to_results))
-        .with_broker_labeled("results", results, |_b| {})
+    (results, to_results)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reply_type_that_names_its_queue_publishes_there() {
-    let app = worker_and_results(|b, to_results| {
-        b.include(work).out_reply(to_results);
-    });
+    let (results, to_results) = results_queue();
+    let app = RustStream::new(AppInfo::new("zmq-reply", "0.0.0"))
+        .with_broker_labeled("worker", bound_queue(), |b| {
+            b.include(work).out_reply(to_results)
+        })
+        .with_broker_labeled("results", results, |b| b);
 
     let tb = TestApp::start(app).await.expect("the harness starts");
     tb.broker_named("worker")
@@ -106,9 +104,12 @@ async fn a_reply_type_that_names_its_queue_publishes_there() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reply_type_without_a_name_publishes_where_the_mount_site_says() {
-    let app = worker_and_results(|b, to_results| {
-        b.include(greet).out_reply(to_results);
-    });
+    let (results, to_results) = results_queue();
+    let app = RustStream::new(AppInfo::new("zmq-reply", "0.0.0"))
+        .with_broker_labeled("worker", bound_queue(), |b| {
+            b.include(greet).out_reply(to_results)
+        })
+        .with_broker_labeled("results", results, |b| b);
 
     let tb = TestApp::start(app).await.expect("the harness starts");
     tb.broker_named("worker")
@@ -142,12 +143,10 @@ async fn a_reply_type_without_a_name_publishes_where_the_mount_site_says() {
 /// catching the same mount before it ships.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_reply_on_the_queue_its_subscription_holds_is_refused_under_the_harness() {
-    let app = RustStream::new(AppInfo::new("zmq-looping-reply", "0.0.0")).with_broker(
-        bound_queue(),
-        |b| {
-            b.include(work).out_reply(ZmqQueuePublish);
-        },
-    );
+    let app = RustStream::new(AppInfo::new("zmq-looping-reply", "0.0.0"))
+        .with_broker(bound_queue(), |b| {
+            b.include(work).out_reply(ZmqQueuePublish)
+        });
 
     let tb = TestApp::start(app).await.expect("the harness starts");
     tb.broker::<ZmqQueue>()
@@ -300,7 +299,7 @@ async fn an_answer_reaches_the_peer_the_router_stamped_on_the_request() {
             .out_reply(ZmqRpcPublish)
             .transform(ReplyToRequester)
             .out_retry(ZmqRpcPublish)
-            .to("greeter.retry");
+            .to("greeter.retry")
     });
     let running = app.start().await.expect("the responder starts");
 
@@ -474,10 +473,6 @@ async fn a_reply_on_the_queue_its_subscription_binds_does_not_come_back_to_it() 
 
     let app = RustStream::new(AppInfo::new("zmq-live-queue-reply", "0.0.0"))
         .with_broker(ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0")), |b| {
-            b.include(work_and_report)
-                .out_reply(ZmqQueuePublish)
-                .out(Sightings, slot)
-                .build();
             b.after_startup(ZmqQueuePublish, async move |publisher| -> io::Result<()> {
                 publisher
                     .message(&Job { id: 21 })
@@ -485,9 +480,12 @@ async fn a_reply_on_the_queue_its_subscription_binds_does_not_come_back_to_it() 
                     .publish()
                     .await
                     .map_err(io::Error::other)
-            });
+            })
+            .include(work_and_report)
+            .out_reply(ZmqQueuePublish)
+            .out(Sightings, slot)
         })
-        .with_broker(egress, |_b| {});
+        .with_broker(egress, |b| b);
     let running = app.start().await.expect("the worker starts");
 
     let mut stream = pin!(sightings.stream());

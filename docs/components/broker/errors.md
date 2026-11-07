@@ -26,7 +26,8 @@ The ZeroMQ client's own error is the `source` of `Endpoint`, so the client's typ
 
 A service meets the error in two places.
 A failed startup carries it as the source of the runtime's error, and the service exits before it reads anything.
-A publish from a handler returns it inside the core's `PublishError`, and the handler decides how the delivery settles.
+A publish from a handler returns it inside the core's `PublishError`, with the unsent message whenever the socket never took it, and the handler decides how the delivery settles.
+A publish the runtime makes for a handler (a reply, a retry copy, a dead letter) that fails reaches the handler's `.error(..)` continuation instead.
 The enum is `#[non_exhaustive]`, so a `match` on it ends with a wildcard arm.
 
 ## Example

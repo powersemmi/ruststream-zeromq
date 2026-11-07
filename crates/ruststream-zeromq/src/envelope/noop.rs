@@ -39,9 +39,7 @@ use crate::error::ZmqError;
 /// #[ruststream::app]
 /// fn app() -> impl App {
 ///     let jobs = ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")).envelope(NoOp);
-///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(jobs, |b| {
-///         b.include(work);
-///     })
+///     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(jobs, |b| b.include(work))
 /// }
 /// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]

@@ -41,7 +41,7 @@ So `Score` declares no destination of its own, and `reply("reply")` names only a
 The transform below replaces it for each request.
 
 A responder names where its [retry copies](../components/settlement/out-retry.md) go: `.out_retry(Publish).to("score.retry")`.
-A copy of a request has no address of its own, so a mount without it is refused at startup.
+A copy of a request has no address of its own, so `.out_retry(..)` without `.to(..)` does not compile, and a mount with no retry slot is refused at startup.
 A responder also takes no [batches](../components/subscriptions/batches.md): `.batch(..)` on it does not compile, because each answer goes to its own peer.
 
 ## The transform

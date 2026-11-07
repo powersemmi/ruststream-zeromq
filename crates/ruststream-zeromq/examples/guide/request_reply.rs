@@ -52,7 +52,7 @@ fn app() -> impl App {
                 .out_reply(Publish)
                 .transform(ReplyToRequester)
                 .out_retry(Publish)
-                .to("score.retry");
+                .to("score.retry")
         },
     )
 }
@@ -61,6 +61,7 @@ fn app() -> impl App {
 // --8<-- [start:transform]
 /// Answers at the `reply-to` address the ROUTER stamped on the request, under the request's
 /// `correlation-id`.
+#[derive(Clone)]
 struct ReplyToRequester;
 
 impl<C, Options> PublishTransform<ForReply<C>, Options> for ReplyToRequester {

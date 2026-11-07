@@ -65,7 +65,7 @@ A change in the core is tested here before it is released, with the `ruststream`
 patched to the checkout next to this one:
 
 ```bash
-cargo test --workspace --all-features --config "patch.crates-io.ruststream.path='../ruststream'"
+cargo test --workspace --all-features --config "patch.crates-io.ruststream.path='../ruststream/crates/ruststream'"
 ```
 
 From the core, `just brokers zeromq` runs the same command against the core's working tree.

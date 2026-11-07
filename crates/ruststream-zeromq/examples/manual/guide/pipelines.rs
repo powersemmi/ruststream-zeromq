@@ -75,14 +75,14 @@ fn app() -> impl App {
                 b.include(subscriber("jobs", Work).reply().build())
                     .out_reply(results)
                     .out_retry(copies)
-                    .to("jobs");
+                    .to("jobs")
             },
         )
         .with_broker_labeled("retries", retries, |b| {
             b.include(subscriber("jobs", Work).reply().build())
-                .out_reply(retried_results);
+                .out_reply(retried_results)
         })
-        .with_broker_labeled("sink", sink, |_b| {})
+        .with_broker_labeled("sink", sink, |b| b)
 }
 
 fn main() -> ExitCode {

@@ -25,9 +25,7 @@ async fn handle(job: &Job) -> HandlerOutcome {
 fn app() -> impl App {
     RustStream::new(AppInfo::new("worker", "0.1.0")).with_broker(
         ZmqQueue::new(ZmqEndpoint::bind("tcp://0.0.0.0:5555")),
-        |b| {
-            b.include(handle);
-        },
+        |b| b.include(handle),
     )
 }
 // --8<-- [end:app]

@@ -68,10 +68,8 @@ fn service(settings: Settings) -> RustStream {
     let results = sink.bind(Publish);
     let jobs = ZmqQueue::new(ZmqEndpoint::bind(settings.jobs)).read_ahead(settings.read_ahead);
     RustStream::new(AppInfo::new("worker", "0.1.0"))
-        .with_broker(jobs, |b| {
-            b.include(work).out_reply(results);
-        })
-        .with_broker(sink, |_b| {})
+        .with_broker(jobs, |b| b.include(work).out_reply(results))
+        .with_broker(sink, |b| b)
 }
 
 #[ruststream::app]
