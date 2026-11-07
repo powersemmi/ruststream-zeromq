@@ -33,11 +33,11 @@ fn app(messages: usize) -> Pending {
     common::queue(messages, |b| b.include(consume.batch(nonzero!(64))))
 }
 
-// Three runs counted 10722 blocks over 2000 deliveries every time, and 5662 to 5663 over 1000:
-// five allocations a delivery, and a few a batch. The floor is the highest count plus 0.1
-// percent, 10733, stated as 5.06 blocks per delivery; one more allocation per delivery would
+// Three runs counted 10488 blocks over 2000 deliveries and 5478 over 1000 every time: five
+// allocations a delivery, and a few a batch. The floor is the highest count plus 0.1 percent,
+// 10499, stated as 5.010 blocks per delivery and 479 cold; one more allocation per delivery would
 // exceed it by 2000.
-#[library_benchmark(config = common::config_every(5_060, 1_000, 613))]
+#[library_benchmark(config = common::config_every(5_010, 1_000, 479))]
 #[bench::first(app(1))]
 #[bench::base(app(MESSAGES))]
 #[bench::twice(app(2 * MESSAGES))]

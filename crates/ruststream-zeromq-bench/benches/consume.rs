@@ -31,11 +31,11 @@ fn app(messages: usize) -> Pending {
     common::queue(messages, |b| b.include(consume))
 }
 
-// Four runs counted 10687 to 10688 blocks over 2000 deliveries, and 5643 to 5644 over 1000: four
-// of the five allocations a delivery makes are the `zeromq` client's, one is the crate's name
-// frame. The floor is the highest count plus 0.1 percent, 10699, stated as 5.044 blocks per
-// delivery; one more allocation per delivery would exceed it by 2000.
-#[library_benchmark(config = common::config_every(5_044, 1_000, 611))]
+// Three runs counted 10483 blocks over 2000 deliveries and 5473 over 1000 every time: four of the
+// five allocations a delivery makes are the `zeromq` client's, one is the crate's name frame. The
+// floor is the highest count plus 0.1 percent, 10494, stated as 5.010 blocks per delivery and 474
+// cold; one more allocation per delivery would exceed it by 2000.
+#[library_benchmark(config = common::config_every(5_010, 1_000, 474))]
 #[bench::first(app(1))]
 #[bench::base(app(MESSAGES))]
 #[bench::twice(app(2 * MESSAGES))]
