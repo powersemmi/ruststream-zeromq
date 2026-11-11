@@ -35,7 +35,7 @@ export const words = {
 
 <Diagram name="design" words={words} />
 
-本 crate 在 [`zeromq`](https://docs.rs/zeromq/0.6.0/zeromq/) 之上实现核心的 Broker trait，`zeromq` 是用 Rust 编写的 ZeroMQ 客户端。它上面的运行时对每个 Broker 都相同。ZeroMQ 特有的一切都在本 crate 里：[三个 Broker](../components/broker/index.md)（每种套接字模式一个）、[帧布局](zeromq/frames.md)、[ack 的含义](../components/settlement/index.md)，以及[重试副本发往何处](../components/settlement/out-retry.md)。
+本 crate 在 [`zeromq`](https://docs.rs/zeromq/0.7.0/zeromq/) 之上实现核心的 Broker trait，`zeromq` 是用 Rust 编写的 ZeroMQ 客户端。它上面的运行时对每个 Broker 都相同。ZeroMQ 特有的一切都在本 crate 里：[三个 Broker](../components/broker/index.md)（每种套接字模式一个）、[帧布局](zeromq/frames.md)、[ack 的含义](../components/settlement/index.md)，以及[重试副本发往何处](../components/settlement/out-retry.md)。
 
 每个 Broker 以类型携带其端点所在的一端：`Bind` 或 `Connect`。这一端决定订阅能否为自己的重试副本寻址，而类型让这成为编译期的事实。[`ZmqRpc`](../components/broker/zmq-rpc.md) 没有这个类型参数：它的副本总是发往挂载点指定的地方。
 

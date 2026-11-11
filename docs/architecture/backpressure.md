@@ -38,9 +38,9 @@ reads nothing, so the frames stay in the kernel's buffers until they fill. Then 
 sender, and the peer's send waits until the handler catches up. A slow handler slows the sender
 down, and this process's memory stays bounded.
 
-On PUB/SUB the waiting sender is the PUB socket. It writes to every matching subscriber in turn,
-so one slow subscriber holds back the messages for all of them. A message no subscriber's filter
-matches is still dropped, as [Queues](zeromq/queues.md) explains.
+On PUB/SUB the waiting sender is the fan-out publisher. It waits for its slowest matching
+subscriber, so one slow subscriber holds back the messages for all of them. A message no
+subscriber's filter matches is still dropped, as [Queues](zeromq/queues.md) explains.
 
 The handler takes one message at a time unless the mount site asks for more. `workers(n)` runs
 `n` handlers side by side, and a free worker takes the next message from the channel. ZeroMQ
@@ -48,6 +48,12 @@ messages carry no key, so `workers(n, by_key)` has nothing to hash, and the mess
 the lanes. A [batch](../components/subscriptions/batches.md) closes at the size the mount site
 names, or 20 milliseconds after its first message.
 
-A publish waits the same way when the peer reads slowly. A queue publish can be cancelled while
-it waits, and the next publish completes its send. A fan-out publish, a reply and a request
-cannot, so [give them up through a timeout](../components/publishing/cancellation.md).
+A publish waits the same way when the peer reads slowly. The client takes a message as soon as it
+is queued for the peer, so a queue publisher and a fan-out publisher count what they have sent.
+After 256 messages or 1 MiB of payload, whichever comes first, a publisher waits until the last
+message of the window before has left the client, and a slow peer therefore holds about two
+windows in the sender. Each window's mark reaches only the peers that receive that message, so
+with several peers a slow one that the marks miss can fall as far behind as the client's queue
+allows, 100,000 messages. A queue publish can be cancelled while it waits, and it sends nothing. A
+fan-out publish, a reply and a request cannot, so
+[give them up through a timeout](../components/publishing/cancellation.md).

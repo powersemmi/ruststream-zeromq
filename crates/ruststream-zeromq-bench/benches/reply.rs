@@ -75,10 +75,11 @@ fn app(messages: usize) -> Pending {
     })
 }
 
-// Three runs counted 36694 blocks over 2000 requests every time. The floor is that count plus 0.1
-// percent, 36731, stated as 18.043 blocks per request; one more allocation per request would
-// exceed it by 2000.
-#[library_benchmark(config = common::config_every(18_043, 1_000, 645))]
+// Three runs counted 38479 blocks over 2000 requests every time. One of the nineteen allocations a
+// request makes is the node of the queue the `zeromq` client keeps for each peer of the ROUTER,
+// which the answer passes through. The floor is that count plus 0.1 percent, 38518, stated as
+// 19.036 blocks per request and 446 cold; one more allocation per request would exceed it by 2000.
+#[library_benchmark(config = common::config_every(19_036, 1_000, 446))]
 #[bench::first(app(1))]
 #[bench::base(app(MESSAGES))]
 #[bench::twice(app(2 * MESSAGES))]

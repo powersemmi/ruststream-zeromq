@@ -1,16 +1,17 @@
 import type {Box, Link} from './flow';
 import {lines, word, type Words} from './words';
 
-// The way of one message down each column: the sending socket, the connection it writes, the
-// kernel's buffers, the receiving socket.
+// The way of one message down each column: the sending socket, the queue the client writes out,
+// the kernel's buffers, the receiving socket.
 const STEPS = ['send', 'write', 'kernel', 'recv'] as const;
 const COLUMNS = {push: 12, pub: 188} as const;
 
 /*
- * Where a message waits between two zeromq sockets. The client keeps no queue of messages: a
- * PUSH writes into the connection of the peer whose turn it is, a PUB into the connection of
- * every subscriber whose filter matches, one after the other, and a send ends when the frames
- * are written. What holds messages is the kernel's socket buffers at both ends.
+ * Where a message waits between two zeromq sockets. The client queues up to 100,000 messages per
+ * peer: a PUSH queues the message for the peer whose turn it is, a PUB a copy for every
+ * subscriber whose filter matches, and a send ends once the message is queued. A task per peer
+ * writes its queue into the connection, and the kernel's socket buffers at both ends hold what
+ * is in flight.
  */
 export function queues(words: Words): {boxes: Box[]; links: Link[]} {
   const boxes: Box[] = [

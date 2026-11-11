@@ -3,13 +3,18 @@
 //! The subject is the transport itself, so these run over real sockets on the loopback: a
 //! subscription is opened and left unpolled, and a publisher sends until a send stops completing.
 
+use std::collections::VecDeque;
+use std::net::TcpListener;
 use std::pin::pin;
 use std::time::Duration;
 
 use futures::StreamExt;
 use ruststream::{
-    Broker, ConnectedBroker, OutgoingMessage, Publisher, Subscribe, Subscriber, nonzero,
+    Broker, Bytes, ConnectedBroker, HeaderMap, OutgoingMessage, Publisher, Subscribe, Subscriber,
+    nonzero,
 };
+use ruststream_zeromq::ZmqError;
+use ruststream_zeromq::envelope::{Envelope, Opened, Pattern, SealError};
 use ruststream_zeromq::{ZmqEndpoint, ZmqFanout, ZmqQueue};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -121,6 +126,107 @@ async fn an_unread_fanout_subscription_holds_its_publisher_back() {
     let publisher = connected.publisher();
 
     let accepted = stalls_then_resumes(&publisher, "events", subscriber).await;
+    assert!(
+        accepted < CEILING,
+        "the publisher ran {accepted} messages ahead of a subscription nobody read"
+    );
+
+    connected.shutdown().await.expect("shutdown succeeds");
+}
+
+/// A loopback address with a port the operating system just handed out and took back.
+fn fixed_port() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a free loopback port");
+    let port = listener.local_addr().expect("the port").port();
+    format!("tcp://127.0.0.1:{port}")
+}
+
+/// A fan-out subscription of another service holds the publisher back the same way when it is not
+/// read: the publisher reaches it through a PUB socket, whose client queues each subscriber's
+/// messages instead of writing them through.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unread_fanout_subscription_of_another_service_holds_its_publisher_back() {
+    let address = fixed_port();
+    let subscribing = ZmqFanout::new(ZmqEndpoint::bind(address.clone()))
+        .read_ahead(nonzero!(8_usize))
+        .connect()
+        .await
+        .expect("the subscribing service connects");
+    let subscriber = subscribing
+        .subscribe("events")
+        .await
+        .expect("subscription opens");
+    let publishing = ZmqFanout::new(ZmqEndpoint::connect(address))
+        .connect()
+        .await
+        .expect("the publishing service connects");
+    let publisher = publishing.publisher();
+
+    let accepted = stalls_then_resumes(&publisher, "events", subscriber).await;
+    assert!(
+        accepted < CEILING,
+        "the publisher ran {accepted} messages ahead of a subscription nobody read"
+    );
+
+    publishing.shutdown().await.expect("shutdown succeeds");
+    subscribing.shutdown().await.expect("shutdown succeeds");
+}
+
+/// A layout that puts a fixed tag frame in front of the payload. The tag is a static frame, which
+/// no count of references can tell from a frame the client still holds.
+#[derive(Debug, Clone, Copy)]
+struct Tagged;
+
+impl Envelope for Tagged {
+    type Head = ();
+
+    const NAME: &'static str = "tagged";
+
+    const CARRIES_HEADERS: bool = false;
+
+    fn open(&self, _pattern: Pattern, mut frames: VecDeque<Bytes>) -> Result<Opened<()>, ZmqError> {
+        match (frames.pop_front(), frames.pop_front(), frames.is_empty()) {
+            (Some(_), Some(payload), true) => Ok(Opened::new(String::new(), (), payload)),
+            _ => Err(ZmqError::Wire(
+                "a tagged message is a tag and a payload".into(),
+            )),
+        }
+    }
+
+    fn headers((): &()) -> Result<HeaderMap, ZmqError> {
+        Ok(HeaderMap::new())
+    }
+
+    fn seal(
+        &self,
+        _pattern: Pattern,
+        _name: &str,
+        _headers: &HeaderMap,
+        payload: Bytes,
+        frames: &mut Vec<Bytes>,
+    ) -> Result<(), SealError> {
+        frames.push(Bytes::from_static(b"v1"));
+        frames.push(payload);
+        Ok(())
+    }
+}
+
+/// A layout with a static frame is held back like any other.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unread_queue_subscription_holds_back_a_publisher_whose_layout_has_a_static_frame() {
+    let connected = ZmqQueue::new(ZmqEndpoint::bind("tcp://127.0.0.1:0"))
+        .envelope(Tagged)
+        .read_ahead(nonzero!(8_usize))
+        .connect()
+        .await
+        .expect("queue connects");
+    let subscriber = connected
+        .subscribe("jobs")
+        .await
+        .expect("subscription opens");
+    let publisher = connected.publisher();
+
+    let accepted = stalls_then_resumes(&publisher, "jobs", subscriber).await;
     assert!(
         accepted < CEILING,
         "the publisher ran {accepted} messages ahead of a subscription nobody read"

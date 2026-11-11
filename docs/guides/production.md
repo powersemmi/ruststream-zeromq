@@ -65,8 +65,8 @@ A send with no peer attached retries for five seconds, then fails with [`ZmqErro
 ## Peer restarts
 
 A publisher that dials its peer dials again once that peer has gone, and reaches it when it is back.
-A queue publisher learns of the loss from a failed send: the message sent into the dead connection is lost, the next publish returns [`ZmqError::Send`](../components/broker/errors.md), and the one after it dials anew.
-A fan-out publisher learns of it from its socket and dials on its next publish.
+A queue publisher learns of the loss from a failed send. Every message the client had accepted for the dead connection is lost, which is at most about two windows of the publisher, 512 messages or 2 MiB of payload. Once the client has noticed the loss, the next publish returns [`ZmqError::Send`](../components/broker/errors.md), and the one after it dials anew.
+A fan-out publisher learns of it from its socket and dials on its next publish. The messages the client had accepted for the lost subscriber are lost with it, at most about two windows as well.
 A fan-out subscription that dials is dialed again by the client.
 A subscription that dials a PUSH peer keeps the connection it opened, so after that peer restarts it receives nothing until the service restarts too.
 
@@ -87,6 +87,7 @@ The generated AsyncAPI document reports each endpoint's host and port without cr
 ## Shutdown
 
 On shutdown the service stops its subscriptions and closes its sockets.
+Messages the client still holds for a slow peer when the process exits are lost, as [Shutdown](../components/broker/shutdown.md) explains.
 A publisher handed out earlier then fails with [`ZmqError::NotConnected`](../components/broker/shutdown.md) instead of sending into nothing.
 A queue publish is safe to cancel.
 A fan-out publish, a reply and a request are not, so give up through a timeout, not a `select!` arm ([Cancellation](../components/publishing/cancellation.md)).

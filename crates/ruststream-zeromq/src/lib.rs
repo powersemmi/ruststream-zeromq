@@ -11,6 +11,7 @@ mod error;
 mod in_process;
 mod message;
 pub mod prelude;
+mod window;
 
 // Public, not just re-export sources: each form carries its own prelude.
 pub mod fanout;

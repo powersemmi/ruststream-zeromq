@@ -102,6 +102,7 @@ use crate::error::ZmqError;
 #[cfg(feature = "testing")]
 use crate::in_process::Pick;
 use crate::message::ZmqMessage;
+use crate::window::SendWindow;
 
 // A production publisher holds the outbox of the socket it attached and nothing beside it.
 #[cfg(not(feature = "testing"))]
@@ -717,6 +718,9 @@ pub(crate) struct Attached {
     /// again when that peer goes, so a failed send drops the socket and the next publish dials
     /// anew.
     dials: bool,
+    /// What the socket has sent since its last mark, which holds the sender back from a peer that
+    /// does not keep up.
+    window: SendWindow,
 }
 
 impl Attached {
@@ -734,6 +738,7 @@ impl Attached {
                 },
                 local,
                 dials: false,
+                window: SendWindow::default(),
             });
         }
         let attaching = Arc::clone(lifecycle);
@@ -751,6 +756,7 @@ impl Attached {
             socket: Sender::Socket(Outbox::new(socket)),
             local,
             dials: lifecycle.dials(),
+            window: SendWindow::default(),
         })
     }
 
@@ -780,9 +786,13 @@ impl Attached {
         envelope: &Env,
         name: &str,
         frames: zeromq::ZmqMessage,
+        size: usize,
     ) -> Result<(), Unsent> {
         match &mut self.socket {
-            Sender::Socket(outbox) => outbox.send(name, frames).await,
+            Sender::Socket(outbox) => {
+                let frames = self.window.admit(frames, size).await;
+                outbox.send(name, frames).await
+            }
             // The subscription that bound the endpoint takes whatever is pushed into it.
             #[cfg(feature = "testing")]
             Sender::InProcess { bus, local } => {
@@ -843,10 +853,11 @@ impl<Env: Envelope> Publisher for ZmqQueuePublisher<Env> {
 
     /// # Cancel safety
     ///
-    /// Cancel-safe. A publish dropped before the socket takes its message sends nothing. One
-    /// dropped mid-send, while the peer applies back-pressure, leaves its message with the
-    /// publisher: the next publish through it or a clone completes that send before its own, and
-    /// a failure of it is logged against its name.
+    /// Cancel-safe. A publish dropped before the socket takes its message sends nothing, and
+    /// that includes one waiting for a peer that does not keep up. One dropped mid-send, while
+    /// the client's own queue for the peer is full, leaves its message with the publisher: the
+    /// next publish through it or a clone completes that send before its own, and a failure of it
+    /// is logged against its name.
     // The socket guard intentionally spans the lazy attach and the send: the socket takes
     // &mut for every operation.
     #[allow(clippy::significant_drop_tightening)]
@@ -898,6 +909,7 @@ impl<Env: Envelope> Publisher for ZmqQueuePublisher<Env> {
         // Framed only once every refusal is behind it: the frames take the payload, and a refusal
         // before them hands the message back whole.
         let (name, payload, headers) = msg.into_parts();
+        let size = payload.len();
         let frames = envelope::write(
             &self.envelope,
             Pattern::PushPull,
@@ -906,7 +918,7 @@ impl<Env: Envelope> Publisher for ZmqQueuePublisher<Env> {
             (name, &headers, payload.freeze()),
         )?;
         let dials = attached.dials;
-        let sent = attached.send(&self.envelope, name, frames).await;
+        let sent = attached.send(&self.envelope, name, frames, size).await;
         // A send fails on a dialed socket when its peer is gone: the connection broke, or no
         // peer is left. The client keeps the socket peerless for good, so it goes, and the next
         // publish dials the address again and reaches the peer once it is back. Only the failure

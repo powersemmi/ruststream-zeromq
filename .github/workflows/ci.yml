@@ -174,18 +174,14 @@ jobs:
         if: "!cancelled() && env.RUST_CHANGED == 'true'"
         run: cargo +nightly update -Z minimal-versions
 
-      # `zeromq` declares `async-trait = "0.1"`, `thiserror = "1"` and `log = "0.4"`, and the first
-      # release of each predates what it uses: async-trait 0.1.0 does not build against the `quote`
-      # its own manifest admits, thiserror 1.0.0 has no `#[from]`, and log 0.4.0 has no
-      # path-qualified macros. Too-loose bounds in a third-party manifest; drop each entry when
-      # zeromq's own floor moves past it.
+      # `zeromq` declares `async-trait = "0.1"`, and the first release does not build against the
+      # `quote` its own manifest admits; 0.1.67 is the first one that also accepts the
+      # `impl Trait` arguments zeromq's socket traits use. Too-loose bound in a third-party
+      # manifest; drop the entry when zeromq's own floor moves past it.
       - name: Pin dependencies whose declared bounds are too loose
         id: minimal-pin
         if: "!cancelled() && steps.minimal-resolve.outcome == 'success'"
-        run: |
-          cargo update -p async-trait --precise 0.1.20
-          cargo update -p thiserror@1.0.0 --precise 1.0.2
-          cargo update -p log --precise 0.4.4
+        run: cargo update -p async-trait --precise 0.1.67
 
       # Minimum dependencies on the minimum compiler: the worst case a user can assemble.
       # Resolution above needs nightly, so only this step drops to the floor.
